@@ -11,7 +11,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Loader2, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { MyJKKNStudent, MyJKKNStaff, MyJKKNProgram, MyJKKNDepartment } from '@/types/myjkkn'
-import type { SelectedMember } from './myjkkn-member-search'
+import { extractEmail, extractPhone, extractRollNumber, type SelectedMember } from './myjkkn-member-search'
 
 interface BrowseModalProps {
 	open: boolean
@@ -19,6 +19,8 @@ interface BrowseModalProps {
 	category: 'learner' | 'facilitator'
 	myjkknInstitutionIds: string[]
 	onSelect: (member: SelectedMember) => void
+	/** MyJKKN ids already enrolled — listed but not selectable */
+	existingMemberIds?: Set<string>
 }
 
 function getInitials(name: string): string {
@@ -31,6 +33,7 @@ export function MyJKKNBrowseModal({
 	category,
 	myjkknInstitutionIds,
 	onSelect,
+	existingMemberIds,
 }: BrowseModalProps) {
 	const [search, setSearch] = useState('')
 	const [programFilter, setProgramFilter] = useState<string>('all')
@@ -144,11 +147,12 @@ export function MyJKKNBrowseModal({
 			id: item.id,
 			category,
 			display_name: [item.first_name, item.last_name].filter(Boolean).join(' '),
-			email: item.email || undefined,
-			phone: item.phone || undefined,
+			email: extractEmail(item as Record<string, any>),
+			phone: extractPhone(item as Record<string, any>),
 			identifier: isLearner
 				? student.roll_number || student.register_number || ''
 				: staff.staff_id || staff.staff_code || '',
+			roll_number: isLearner ? extractRollNumber(item as Record<string, any>) : undefined,
 		})
 		onOpenChange(false)
 	}
@@ -254,8 +258,14 @@ export function MyJKKNBrowseModal({
 										? (item as MyJKKNStudent).program_code || ''
 										: (item as MyJKKNStaff).designation || ''
 
+									const alreadyMember = existingMemberIds?.has(item.id) ?? false
+
 									return (
-										<TableRow key={item.id} className="cursor-pointer hover:bg-accent/50" onClick={() => handleSelect(item)}>
+										<TableRow
+											key={item.id}
+											className={alreadyMember ? 'opacity-60' : 'cursor-pointer hover:bg-accent/50'}
+											onClick={() => { if (!alreadyMember) handleSelect(item) }}
+										>
 											<TableCell>
 												<div className="flex items-center gap-2">
 													<Avatar className="h-7 w-7">
@@ -269,7 +279,13 @@ export function MyJKKNBrowseModal({
 											<TableCell className="text-sm">{identifier}</TableCell>
 											<TableCell className="text-sm text-muted-foreground">{detail}</TableCell>
 											<TableCell>
-												<Button variant="ghost" size="sm" className="h-7 text-xs">Select</Button>
+												{alreadyMember ? (
+													<span className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400 whitespace-nowrap">
+														Already a member
+													</span>
+												) : (
+													<Button variant="ghost" size="sm" className="h-7 text-xs">Select</Button>
+												)}
 											</TableCell>
 										</TableRow>
 									)

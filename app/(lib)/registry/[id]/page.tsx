@@ -23,6 +23,8 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibCatalogueRecord, LibItem, LibItemStatus, LibItemCondition } from '@/types/lib'
+import { useInstitution } from '@/context/institution-context'
+import { usesPharmacyRegister } from '@/lib/library/catalogue-options'
 import { fetchCatalogueById } from '@/services/library/lib-catalogue-service'
 import { fetchItems, createItem, updateItem, deleteItem } from '@/services/library/lib-items-service'
 
@@ -58,7 +60,14 @@ const defaultItemForm: ItemFormData = {
 export default function CatalogueDetailPage() {
 	const { id } = useParams<{ id: string }>()
 	const { institutionId, getInstitutionIdForCreate } = useInstitutionFilter()
+	const { currentInstitutionCode } = useInstitution()
 	const { toast } = useToast()
+
+	// Pharmacy accessions a book on the way in — one entry, one accession
+	// number, and the copy count follows from that. Adding a bare copy here
+	// afterwards would let the two drift apart, so this page only shows what
+	// is held. Every other campus keeps the Add Item button.
+	const copiesAreReadOnly = usesPharmacyRegister(currentInstitutionCode)
 
 	const [record, setRecord] = useState<LibCatalogueRecord | null>(null)
 	const [items, setItems] = useState<LibItem[]>([])
@@ -344,11 +353,13 @@ export default function CatalogueDetailPage() {
 									</TooltipTrigger>
 									<TooltipContent>Refresh</TooltipContent>
 								</Tooltip>
-								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
-									<PlusCircle className="h-4 w-4 mr-1.5" />
-									<span className="hidden sm:inline">Add Item</span>
-									<span className="sm:hidden">Add</span>
-								</Button>
+								{!copiesAreReadOnly && (
+									<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
+										<PlusCircle className="h-4 w-4 mr-1.5" />
+										<span className="hidden sm:inline">Add Item</span>
+										<span className="sm:hidden">Add</span>
+									</Button>
+								)}
 							</div>
 						</div>
 					</CardHeader>
@@ -384,7 +395,7 @@ export default function CatalogueDetailPage() {
 													<div className="flex flex-col items-center gap-1 text-muted-foreground">
 														<BookOpen className="h-8 w-8 opacity-20" />
 														<span className="text-sm">No items added yet</span>
-														<span className="text-xs">Click Add Item to accession a copy</span>
+														<span className="text-xs">{copiesAreReadOnly ? 'Copies appear here as books are accessioned' : 'Click Add Item to accession a copy'}</span>
 													</div>
 												</TableCell>
 											</TableRow>
@@ -516,9 +527,11 @@ export default function CatalogueDetailPage() {
 										value={form.accession_number}
 										onChange={e => setForm(f => ({ ...f, accession_number: e.target.value }))}
 										className={errors.accession_number ? 'border-red-500' : ''}
-										placeholder="ACC-2025-001"
+										placeholder="The number written in the book"
 									/>
-									{errors.accession_number && <p className="text-xs text-red-500">{errors.accession_number}</p>}
+									{errors.accession_number
+										? <p className="text-xs text-red-500">{errors.accession_number}</p>
+										: <p className="text-xs text-muted-foreground">Every copy needs its own number — no two can share one</p>}
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Barcode</Label>

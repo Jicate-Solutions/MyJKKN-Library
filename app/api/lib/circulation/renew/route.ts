@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		const { institution_id, transaction_id, item_id, member_id } = body
 

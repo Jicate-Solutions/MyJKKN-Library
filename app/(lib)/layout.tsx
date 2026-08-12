@@ -3,6 +3,8 @@ import { LibSidebar } from '@/components/layout/lib-sidebar'
 import { AppHeader } from '@/components/layout/app-header'
 import { InstitutionProvider } from '@/context/institution-context'
 import { RequireAuth } from '@/components/common/protected-route'
+import { MemberRouteGuard } from '@/components/layout/member-route-guard'
+import { ImpersonationBanner } from '@/components/layout/impersonation-banner'
 
 export default function LibLayout({ children }: { children: React.ReactNode }) {
 	return (
@@ -14,7 +16,8 @@ export default function LibLayout({ children }: { children: React.ReactNode }) {
 						<AppHeader title="JKKN Learning Commons" />
 						<main className="flex flex-1 flex-col overflow-hidden">
 							<div className="flex flex-1 flex-col gap-4 p-4 overflow-hidden">
-								{children}
+								<ImpersonationBanner />
+								<MemberRouteGuard>{children}</MemberRouteGuard>
 							</div>
 						</main>
 					</SidebarInset>

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function POST(
 	request: Request,
@@ -7,8 +8,14 @@ export async function POST(
 ) {
 	try {
 		const { id: orderId } = await params
+		const guard = await guardRecord(request, 'lib_procurement_orders', orderId)
+		if (!guard.ok) return guard.response
+
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		body.institution_id = guard.caller.isSuperAdmin
+			? body.institution_id
+			: guard.caller.institutionId
 
 		// body.received_items = Array<{ procurement_item_id, quantity_received, location_id?, condition?, invoice_number? }>
 		const { institution_id, received_items, received_by, invoice_number, date_received } = body

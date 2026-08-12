@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id') || searchParams.get('institutions_id')
+		const requestedInstitutionId = searchParams.get('institution_id') || searchParams.get('institutions_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const academicYear = searchParams.get('academic_year') // e.g., "2024-25"
 
 		if (!institutionId) {

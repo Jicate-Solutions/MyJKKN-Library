@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id')
+		const requestedInstitutionId = searchParams.get('institution_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const resourceType = searchParams.get('resource_type')
 		const isActive = searchParams.get('is_active')
 		const naacReportable = searchParams.get('naac_reportable')
@@ -43,6 +47,9 @@ export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })

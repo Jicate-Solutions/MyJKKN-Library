@@ -15,6 +15,8 @@ export interface SelectedMember {
 	email?: string
 	phone?: string
 	identifier: string
+	/** Learners only — becomes their library member number */
+	roll_number?: string
 }
 
 interface MyJKKNMemberSearchProps {
@@ -25,10 +27,69 @@ interface MyJKKNMemberSearchProps {
 	onBrowseAll: () => void
 	selectedMember?: SelectedMember | null
 	onClear: () => void
+	/** MyJKKN ids already enrolled — shown but not selectable */
+	existingMemberIds?: Set<string>
 }
 
 function getInitials(name: string): string {
 	return name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+}
+
+// MyJKKN names these columns differently across learner and staff payloads, and
+// sometimes nests them one level down. Reading only `email`/`phone` left the form
+// blank, so try each known spelling in order of preference.
+function pickField(source: Record<string, any> | null | undefined, keys: string[]): string | undefined {
+	if (!source) return undefined
+
+	for (const key of keys) {
+		const value = source[key]
+		if (typeof value === 'string' && value.trim()) return value.trim()
+	}
+
+	// One level down (e.g. contact: { college_email: '...' })
+	for (const value of Object.values(source)) {
+		if (value && typeof value === 'object' && !Array.isArray(value)) {
+			const nested = pickField(value as Record<string, any>, keys)
+			if (nested) return nested
+		}
+	}
+
+	return undefined
+}
+
+// College/institution address first — the form labels this "College Mail ID"
+export const EMAIL_KEYS = [
+	'college_email', 'institution_email', 'official_email', 'student_email',
+	'email', 'personal_email', 'email_id', 'mail_id',
+]
+
+export const PHONE_KEYS = [
+	'student_mobile', 'mobile_number', 'mobile', 'phone_number',
+	'phone', 'contact_number', 'contact_no',
+]
+
+// The learner's roll number becomes their library member number, so the order
+// matters: roll_number is the one printed on the college ID card. Anything that
+// looks like a placeholder ("NOT APPLICABLE", "-") is treated as absent.
+export const ROLL_KEYS = [
+	'roll_number', 'roll_no', 'register_number', 'registration_number',
+	'admission_number', 'student_id',
+]
+
+const PLACEHOLDERS = new Set(['not applicable', 'na', 'n/a', 'nil', 'none', '-', '--'])
+
+export function extractEmail(item: Record<string, any>): string | undefined {
+	return pickField(item, EMAIL_KEYS)
+}
+
+export function extractPhone(item: Record<string, any>): string | undefined {
+	return pickField(item, PHONE_KEYS)
+}
+
+export function extractRollNumber(item: Record<string, any>): string | undefined {
+	const value = pickField(item, ROLL_KEYS)
+	if (!value) return undefined
+	return PLACEHOLDERS.has(value.trim().toLowerCase()) ? undefined : value.trim()
 }
 
 export function MyJKKNMemberSearch({
@@ -38,6 +99,7 @@ export function MyJKKNMemberSearch({
 	onBrowseAll,
 	selectedMember,
 	onClear,
+	existingMemberIds,
 }: MyJKKNMemberSearchProps) {
 	const [query, setQuery] = useState('')
 	const [results, setResults] = useState<(MyJKKNStudent | MyJKKNStaff)[]>([])
@@ -110,11 +172,12 @@ export function MyJKKNMemberSearch({
 			id: item.id,
 			category,
 			display_name: [item.first_name, item.last_name].filter(Boolean).join(' '),
-			email: item.email || undefined,
-			phone: item.phone || undefined,
+			email: extractEmail(item as Record<string, any>),
+			phone: extractPhone(item as Record<string, any>),
 			identifier: isLearner
 				? student.roll_number || student.register_number || ''
 				: staff.staff_id || staff.staff_code || '',
+			roll_number: isLearner ? extractRollNumber(item as Record<string, any>) : undefined,
 		})
 		setQuery('')
 		setShowDropdown(false)
@@ -147,7 +210,7 @@ export function MyJKKNMemberSearch({
 			<div className="relative">
 				<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 				<Input
-					placeholder={`Search ${entityLabel} by name or ${category === 'learner' ? 'roll number' : 'staff code'}...`}
+					placeholder={`Search ${entityLabel} by name, email or ${category === 'learner' ? 'roll number' : 'staff code'}...`}
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					className="pl-9 pr-8"
@@ -165,13 +228,19 @@ export function MyJKKNMemberSearch({
 						const subtitle = category === 'learner'
 							? (item as MyJKKNStudent).program_code || ''
 							: (item as MyJKKNStaff).designation || ''
+						const alreadyMember = existingMemberIds?.has(item.id) ?? false
 
 						return (
 							<button
 								key={item.id}
 								type="button"
-								className="flex items-center gap-2.5 w-full px-3 py-2 text-left hover:bg-accent transition-colors"
-								onClick={() => handleSelect(item)}
+								disabled={alreadyMember}
+								aria-disabled={alreadyMember}
+								title={alreadyMember ? 'Already a member' : undefined}
+								className={`flex items-center gap-2.5 w-full px-3 py-2 text-left transition-colors ${
+									alreadyMember ? 'opacity-60 cursor-not-allowed' : 'hover:bg-accent'
+								}`}
+								onClick={() => { if (!alreadyMember) handleSelect(item) }}
 							>
 								<Avatar className="h-7 w-7 shrink-0">
 									<AvatarFallback className="text-[10px] bg-blue-100 text-blue-700">
@@ -184,6 +253,11 @@ export function MyJKKNMemberSearch({
 										{identifier}{subtitle ? ` · ${subtitle}` : ''}
 									</div>
 								</div>
+								{alreadyMember && (
+									<span className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400">
+										Already a member
+									</span>
+								)}
 							</button>
 						)
 					})}

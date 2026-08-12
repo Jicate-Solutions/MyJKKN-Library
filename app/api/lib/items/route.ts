@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id')
+		const requestedInstitutionId = searchParams.get('institution_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const catalogueRecordId = searchParams.get('catalogue_record_id')
 		const status = searchParams.get('status')
 		const search = searchParams.get('search')
@@ -47,6 +51,9 @@ export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -55,17 +62,34 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'catalogue_record_id is required' }, { status: 400 })
 		}
 
-		// Auto-generate accession_number if not provided
-		let accessionNumber = body.accession_number?.trim()
-		if (!accessionNumber) {
-			const year = new Date().getFullYear()
-			const { count } = await supabase
-				.from('lib_items')
-				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', body.institution_id)
+		// Every copy carries its own number, written inside the book itself — the
+		// library's equivalent of a member number. It is always typed by the
+		// librarian, never invented here: a generated number would not match what
+		// is physically on the shelf, and the mismatch would only surface later
+		// at the desk when a scan found nothing.
+		const accessionNumber: string = (body.accession_number ?? '').toString().trim()
 
-			const seq = String((count ?? 0) + 1).padStart(5, '0')
-			accessionNumber = `ACC/${year}/${seq}`
+		if (!accessionNumber) {
+			return NextResponse.json(
+				{ error: 'Accession number is required — enter the number written in the book' },
+				{ status: 400 }
+			)
+		}
+
+		// Two copies cannot share a number within one library. Checked case
+		// insensitively, so "pd101" cannot slip past an existing "PD101".
+		const { data: clash } = await supabase
+			.from('lib_items')
+			.select('id, accession_number')
+			.eq('institution_id', body.institution_id)
+			.ilike('accession_number', accessionNumber)
+			.maybeSingle()
+
+		if (clash) {
+			return NextResponse.json(
+				{ error: `Accession number ${clash.accession_number} is already used by another copy` },
+				{ status: 409 }
+			)
 		}
 
 		const { data, error } = await supabase

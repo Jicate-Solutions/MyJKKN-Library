@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id')
+		const requestedInstitutionId = searchParams.get('institution_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const memberId = searchParams.get('member_id')
 		const fromDate = searchParams.get('from_date')
 		const toDate = searchParams.get('to_date')
@@ -42,6 +46,9 @@ export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -71,6 +78,40 @@ export async function POST(request: Request) {
 		return NextResponse.json(data, { status: 201 })
 	} catch (error) {
 		console.error('Unexpected error logging visit:', error)
+		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+	}
+}
+
+/** Records the exit on an open visit — the second scan of the same card. */
+export async function PUT(request: Request) {
+	try {
+		const body = await request.json()
+		if (!body.id) {
+			return NextResponse.json({ error: 'id is required' }, { status: 400 })
+		}
+
+		const guard = await guardRecord(request, 'lib_member_visits', body.id)
+		if (!guard.ok) return guard.response
+
+		const supabase = getSupabaseServer()
+		const { data, error } = await supabase
+			.from('lib_member_visits')
+			.update({
+				exit_time: body.exit_time ?? new Date().toISOString(),
+				visit_purpose: body.visit_purpose ?? undefined,
+			})
+			.eq('id', body.id)
+			.select()
+			.single()
+
+		if (error) {
+			console.error('Error recording exit:', error)
+			return NextResponse.json({ error: 'Failed to record exit' }, { status: 500 })
+		}
+
+		return NextResponse.json(data)
+	} catch (error) {
+		console.error('Unexpected error recording exit:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 	}
 }

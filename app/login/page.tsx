@@ -15,7 +15,6 @@ import {
   CardHeader,
   CardTitle
 } from '@/components/ui/card';
-import { AppFooter } from '@/components/layout/app-footer';
 
 function LoginContent() {
   const { loginWithGoogle, isAuthenticated, loading: isLoading, error } = useAuth();
@@ -71,7 +70,9 @@ function LoginContent() {
     const errorDescription = searchParams.get('error_description');
     
     if (errorParam) {
-      if (errorParam === 'oauth_state_invalid') {
+      if (errorParam === 'session_expired') {
+        setFormError('Your session expired. Please sign in again to continue.');
+      } else if (errorParam === 'oauth_state_invalid') {
         setFormError('Authentication session expired. Please try logging in again.');
       } else if (errorParam === 'oauth_code_expired') {
         setFormError('Authentication code expired. Please try logging in again.');
@@ -82,8 +83,13 @@ function LoginContent() {
       } else {
         setFormError('Your account wasn\'t found in our system. Check your login details, or contact support if you need help.');
       }
-      // Clean the URL
-      router.replace('/login', { scroll: false });
+      // Clean the URL, but keep `redirect` so an expired session returns the
+      // user to the page they were on rather than dropping them on /dashboard
+      const redirectParam = searchParams.get('redirect');
+      router.replace(
+        redirectParam ? `/login?redirect=${encodeURIComponent(redirectParam)}` : '/login',
+        { scroll: false }
+      );
     }
   }, [searchParams, router]);
 

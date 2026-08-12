@@ -1,15 +1,40 @@
+/**
+ * Institutions the signed-in user may work in.
+ *
+ * This list drives the sidebar institution switcher, so it is the real limit on
+ * what a librarian can reach: a super admin gets every institution, everyone
+ * else gets exactly their own. Returning all of them here would let any user
+ * switch into another campus, which is why the filter lives server-side.
+ */
+
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { getCaller } from '@/lib/auth/server-access'
 
-export async function GET() {
+export async function GET(request: Request) {
 	try {
+		const { caller, error: callerError, status } = await getCaller(request)
+		if (!caller) {
+			return NextResponse.json({ error: callerError ?? 'Not signed in' }, { status: status ?? 401 })
+		}
+
 		const supabase = getSupabaseServer()
 
-		const { data, error } = await supabase
+		let query = supabase
 			.from('institutions')
 			.select('id, institution_code, name, myjkkn_institution_ids')
 			.eq('is_active', true)
 			.order('name')
+
+		if (!caller.isSuperAdmin) {
+			if (!caller.institutionId) {
+				// Nothing to switch between — better an empty list than everyone's
+				return NextResponse.json([])
+			}
+			query = query.eq('id', caller.institutionId)
+		}
+
+		const { data, error } = await query
 
 		if (error) {
 			console.error('Error fetching institutions:', error)

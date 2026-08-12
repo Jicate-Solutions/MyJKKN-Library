@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id')
+		const requestedInstitutionId = searchParams.get('institution_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const retirementStatus = searchParams.get('retirement_status')
 
 		let query = supabase
@@ -45,6 +49,9 @@ export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -102,6 +109,8 @@ export async function PUT(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardRecord(request, 'lib_retirement_requests', body.id)
+		if (!guard.ok) return guard.response
 
 		if (!body.id) {
 			return NextResponse.json({ error: 'id is required' }, { status: 400 })

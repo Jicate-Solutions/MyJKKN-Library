@@ -11,9 +11,13 @@ export interface Institution {
 	myjkkn_institution_ids?: string[]
 }
 
+/**
+ * The shape every /api/lib/* route reads. The key is `institution_id` — an
+ * earlier `institutions_id` spelling (carried over from COE) matched no route,
+ * so choosing a college changed the URL but never actually filtered anything.
+ */
 export interface InstitutionFilter {
-	institution_code?: string
-	institutions_id?: string
+	institution_id?: string
 }
 
 interface InstitutionContextValue {
@@ -67,14 +71,15 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 					const data = await res.json()
 					setAvailableInstitutions(data || [])
 
+					// A single entry means the API pinned this user to one library, so it
+					// is their working context. More than one means they may switch, and
+					// the header shows "All Institutions" until they pick — so nothing is
+					// auto-selected here. Pre-selecting their home campus would filter
+					// every list to it while the badge still claimed "All Institutions".
 					if (data && data.length === 1) {
 						setCurrentInstitution(data[0])
-					} else if (data && user?.institution_code) {
-						// Auto-select the user's institution from their session
-						const userInst = data.find(
-							(i: Institution) => i.institution_code === user.institution_code
-						)
-						if (userInst) setCurrentInstitution(userInst)
+					} else {
+						setCurrentInstitution(null)
 					}
 				}
 			} catch {
@@ -85,19 +90,24 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 			}
 		}
 		loadInstitutions()
-	}, [user?.institution_code])
+		// Keyed on the signed-in user: the API answers per caller, so the list has
+		// to be re-read when someone else signs in.
+	}, [user?.email])
 
 	const currentInstitutionCode = selectedInstitution?.institution_code ?? currentInstitution?.institution_code ?? null
 	const currentInstitutionId = selectedInstitution?.id ?? currentInstitution?.id ?? null
 	const currentMyJKKNInstitutionIds = (selectedInstitution ?? currentInstitution)?.myjkkn_institution_ids ?? []
 
-	// canSwitchInstitution would be true for super_admin — simplified here
+	// Switching is decided server-side: /api/lib/institutions returns every
+	// institution to a super admin and exactly one to everyone else, so a
+	// librarian receives a single-entry list and gets no switcher. This is a
+	// display rule only — every /api/lib/* route re-checks the caller's scope,
+	// so picking another institution by any means still gets refused.
 	const canSwitchInstitution = availableInstitutions.length > 1
-	const shouldFilter = !!(currentInstitutionCode)
+	const shouldFilter = !!currentInstitutionId
 
 	const institutionFilter: InstitutionFilter = {}
-	if (currentInstitutionCode) institutionFilter.institution_code = currentInstitutionCode
-	if (currentInstitutionId) institutionFilter.institutions_id = currentInstitutionId
+	if (currentInstitutionId) institutionFilter.institution_id = currentInstitutionId
 
 	const queryParams = Object.entries(institutionFilter)
 		.map(([k, v]) => `${k}=${encodeURIComponent(v ?? '')}`)

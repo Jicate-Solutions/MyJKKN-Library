@@ -1,48 +1,66 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
 
 export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
-		const { institution_id, item_id, returned_by, return_condition, waive_charge } = body
+		const { institution_id, item_id, transaction_id, returned_by, return_condition, waive_charge } = body
 
 		if (!institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
 		}
-		if (!item_id) {
-			return NextResponse.json({ error: 'item_id is required' }, { status: 400 })
+		// A return is identified either by the book scanned at the desk or by the
+		// loan picked from the member's list. Both name the same loan, so accept
+		// either — the desk sends the loan id, the scanner sends the item.
+		if (!item_id && !transaction_id) {
+			return NextResponse.json(
+				{ error: 'Scan the book, or pick the loan to return' },
+				{ status: 400 }
+			)
 		}
 
-		// 1. Find the active lending transaction for this item
-		const { data: transaction, error: txError } = await supabase
+		// 1. Find the open loan
+		let lookup = supabase
 			.from('lib_lending_transactions')
 			.select('*')
-			.eq('item_id', item_id)
 			.eq('institution_id', institution_id)
 			.in('transaction_status', ['active', 'overdue'])
+
+		lookup = transaction_id
+			? lookup.eq('id', transaction_id)
+			: lookup.eq('item_id', item_id)
+
+		const { data: transactions, error: txError } = await lookup
 			.order('issued_at', { ascending: false })
 			.limit(1)
-			.single()
+
+		const transaction = transactions?.[0]
 
 		if (txError || !transaction) {
 			return NextResponse.json(
-				{ error: 'No active lending transaction found for this item' },
+				{ error: 'This copy is not on loan — nothing to return' },
 				{ status: 404 }
 			)
 		}
 
+		// Take the copy from the loan, not from the request: when the desk sends
+		// a transaction_id there is no item_id in the body at all.
+		const returnedItemId: string = transaction.item_id
+
 		const now = new Date()
 		const today = now.toISOString().split('T')[0]
-		const dueDate = new Date(transaction.due_date)
-		const returnDate = new Date(today)
 
-		// 2. Calculate overdue days
-		const overdueDays = Math.max(
-			0,
-			Math.floor((returnDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-		)
+		// 2. Calculate chargeable days using this campus's own rules — grace
+		// period and whether Sundays count both vary by institution.
+		const settings = await getInstitutionSettings(institution_id)
+		const overdueDays = chargeableLateDays(transaction.due_date, today, settings)
 
 		let chargeRecord = null
 
@@ -63,7 +81,12 @@ export async function POST(request: Request) {
 				.maybeSingle()
 
 			const chargePerDay = categoryConfig?.late_charge_per_day ?? 1.0
-			const totalCharge = overdueDays * chargePerDay
+			// A librarian can override the amount by hand — college holidays we
+			// have no calendar for are exactly why that is needed.
+			const computed = capFine(overdueDays * chargePerDay, settings)
+			const totalCharge = body.override_charge !== undefined
+				? Math.max(0, Number(body.override_charge))
+				: computed
 			const waiverAmount = waive_charge ? totalCharge : 0
 			const netPayable = totalCharge - waiverAmount
 
@@ -128,7 +151,7 @@ export async function POST(request: Request) {
 				...(newCondition ? { condition: newCondition } : {}),
 				updated_at: now.toISOString(),
 			})
-			.eq('id', item_id)
+			.eq('id', returnedItemId)
 
 		if (itemError) {
 			console.error('Error updating item status on return:', itemError)
@@ -139,7 +162,7 @@ export async function POST(request: Request) {
 		const { data: item } = await supabase
 			.from('lib_items')
 			.select('catalogue_record_id')
-			.eq('id', item_id)
+			.eq('id', returnedItemId)
 			.single()
 
 		if (item?.catalogue_record_id) {
@@ -157,7 +180,7 @@ export async function POST(request: Request) {
 					.from('lib_resource_holds')
 					.update({
 						hold_status: 'available',
-						item_id,
+						item_id: returnedItemId,
 						notified_at: now.toISOString(),
 						updated_at: now.toISOString(),
 					})
@@ -166,7 +189,7 @@ export async function POST(request: Request) {
 				await supabase
 					.from('lib_items')
 					.update({ status: 'on_hold', updated_at: now.toISOString() })
-					.eq('id', item_id)
+					.eq('id', returnedItemId)
 			}
 		}
 

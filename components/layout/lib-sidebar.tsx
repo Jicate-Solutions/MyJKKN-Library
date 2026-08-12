@@ -27,7 +27,10 @@ import {
 	Wrench,
 	PanelLeftClose,
 	PanelLeft,
-	Crown,
+	Crown,  ShieldCheck,
+	ScanLine,
+	SlidersHorizontal,
+	Layers,
 } from 'lucide-react'
 import {
 	Sidebar,
@@ -48,6 +51,8 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { ChevronRight } from 'lucide-react'
+import { useLibraryRole } from '@/hooks/use-library-role'
+import { isMemberAllowedPage } from '@/lib/auth/member-access'
 
 interface NavItem {
 	title: string
@@ -78,6 +83,7 @@ const navGroups: NavGroup[] = [
 		label: 'Circulation',
 		items: [
 			{ title: 'Circulation Desk', url: '/circulation', icon: RefreshCw },
+			{ title: 'Gate Entry', url: '/visits', icon: ScanLine },
 			{ title: 'Holds', url: '/circulation/holds', icon: ListOrdered },
 			{ title: 'Overdue', url: '/circulation/overdue', icon: ClockAlert },
 			{ title: 'Late Charges', url: '/circulation/charges', icon: BadgeDollarSign },
@@ -112,6 +118,9 @@ const navGroups: NavGroup[] = [
 		label: 'Reports',
 		items: [
 			{ title: 'Reports Dashboard', url: '/reports', icon: BarChart3 },
+			{ title: 'Library Rules', url: '/settings', icon: SlidersHorizontal },
+			{ title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
+			{ title: 'Staff Access', url: '/access', icon: ShieldCheck },
 		],
 	},
 ]
@@ -120,6 +129,16 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const pathname = usePathname()
 	const { toggleSidebar, state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
+	const { isMember } = useLibraryRole()
+
+	// A member sees Circulation and OPAC Search only. The API refuses the rest
+	// as well, so this just keeps the menu honest about what they can open.
+	const visibleGroups = React.useMemo(() => {
+		if (!isMember) return navGroups
+		return navGroups
+			.map(group => ({ ...group, items: group.items.filter(i => isMemberAllowedPage(i.url)) }))
+			.filter(group => group.items.length > 0)
+	}, [isMember])
 
 	const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>(() => {
 		const init: Record<string, boolean> = {}
@@ -156,7 +175,7 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 			</SidebarHeader>
 
 			<SidebarContent className="py-4">
-				{navGroups.map((group) => (
+				{visibleGroups.map((group) => (
 					<Collapsible
 						key={group.label}
 						open={isCollapsed ? true : (openGroups[group.label] ?? true)}

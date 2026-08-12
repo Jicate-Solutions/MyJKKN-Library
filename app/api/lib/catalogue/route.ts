@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const institutionId = searchParams.get('institution_id')
+		const requestedInstitutionId = searchParams.get('institution_id')
+		const guard = await guardCollection(request, requestedInstitutionId)
+		if (!guard.ok) return guard.response
+		const institutionId = guard.institutionId
 		const resourceFormat = searchParams.get('resource_format')
 		const search = searchParams.get('search')
 		const isActive = searchParams.get('is_active')
@@ -46,6 +50,9 @@ export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -62,6 +69,13 @@ export async function POST(request: Request) {
 			author_type?: string
 			sort_order?: number
 		}> = body.authors || []
+
+		// A single typed author still has to reach lib_catalogue_authors, or the
+		// registry list and the author search would show nothing for books added
+		// through the Pharmacy form — they read the joined table, not the column.
+		if (authors.length === 0 && body.author?.trim()) {
+			authors.push({ author_name: body.author.trim(), author_type: 'primary', sort_order: 0 })
+		}
 
 		// Insert the catalogue record first
 		const { data: record, error: recordError } = await supabase
@@ -88,6 +102,10 @@ export async function POST(request: Request) {
 				currency_code: body.currency_code ?? 'INR',
 				marc_data: body.marc_data ?? null,
 				default_loan_days: body.default_loan_days ?? null,
+				author: body.author?.trim() || null,
+				department: body.department?.trim() || null,
+				book_type: body.book_type?.trim() || null,
+				book_location: body.book_location?.trim() || null,
 				is_reference_only: body.is_reference_only ?? false,
 				is_active: body.is_active ?? true,
 				created_by: body.created_by ?? null,

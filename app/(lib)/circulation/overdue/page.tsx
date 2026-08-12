@@ -15,6 +15,7 @@ import {
 	Search, RefreshCw, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { fetchOverdue } from '@/services/library/lib-circulation-service'
+import { SendRemindersButton } from '@/components/library/send-reminders-button'
 import type { LibLendingTransaction } from '@/types/lib'
 
 function getDaysOverdue(dueDate: string): number {
@@ -165,14 +166,22 @@ export default function OverduePage() {
 								<h2 className="text-base font-semibold">Overdue Items</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} item{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
-										<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent>Refresh</TooltipContent>
-							</Tooltip>
+							<div className="flex items-center gap-1.5">
+								<SendRemindersButton
+									institutionId={institutionId}
+									type="overdue"
+									onSent={fetchData}
+									disabled={loading}
+								/>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
+											<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent>Refresh</TooltipContent>
+								</Tooltip>
+							</div>
 						</div>
 						{/* Row 2: Filters */}
 						<div className="flex items-center gap-2 flex-wrap mt-3">

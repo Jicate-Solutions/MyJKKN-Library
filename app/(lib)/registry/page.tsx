@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
+import { useInstitution } from '@/context/institution-context'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,12 +23,18 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibCatalogueRecord, LibResourceFormat } from '@/types/lib'
+import { PharmacyRegisterTable, type RegisterRow } from '@/components/library/pharmacy-register-table'
 import {
 	fetchCatalogueRecords,
+	fetchCatalogueById,
 	createCatalogueRecord,
 	updateCatalogueRecord,
 	deleteCatalogueRecord,
 } from '@/services/library/lib-catalogue-service'
+import { createItem } from '@/services/library/lib-items-service'
+import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
+import { PharmacyTitleForm } from '@/components/library/pharmacy-title-form'
+import { usesPharmacyRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -61,7 +68,19 @@ interface FormData {
 	price: string
 	is_reference_only: boolean
 	is_active: boolean
+	/** Pharmacy only — the number written in the book (see requiresAccession) */
+	accession_number: string
+	/** Pharmacy only — the register fields, unused and unsent by other campuses */
+	accession_date: string
+	author: string
+	book_type: string
+	/** What was typed after choosing "Others"; folded into book_type on save */
+	book_type_other: string
+	department: string
+	book_location: string
 }
+
+const today = () => new Date().toISOString().split('T')[0]
 
 const defaultForm: FormData = {
 	title: '',
@@ -80,13 +99,30 @@ const defaultForm: FormData = {
 	price: '',
 	is_reference_only: false,
 	is_active: true,
+	accession_number: '',
+	accession_date: today(),
+	author: '',
+	book_type: '',
+	book_type_other: '',
+	department: '',
+	book_location: '',
 }
 
 export default function RegistryPage() {
 	const { isReady, appendToUrl, getInstitutionIdForCreate, institutionId, mustSelectInstitution, shouldFilter } = useInstitutionFilter()
+	const { currentInstitutionCode } = useInstitution()
 	const { toast } = useToast()
 
+	// Pharmacy identifies every physical book by its accession number and wants it
+	// recorded the moment the book is entered, not on a second screen. Adding a
+	// title there therefore also creates the first copy. No other campus works
+	// this way, so no other campus sees this field.
+	const requiresAccession = usesPharmacyRegister(currentInstitutionCode)
+
 	const [records, setRecords] = useState<LibCatalogueRecord[]>([])
+	/** Pharmacy only — the register, one row per accession number. */
+	const [registerRows, setRegisterRows] = useState<RegisterRow[]>([])
+	const [deleteTitle, setDeleteTitle] = useState<{ id: string; title: string; copies: number } | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [search, setSearch] = useState('')
 	const [formatFilter, setFormatFilter] = useState<string>('all')
@@ -103,17 +139,20 @@ export default function RegistryPage() {
 		if (!isReady) return
 		try {
 			setLoading(true)
-			const url = appendToUrl('/api/lib/catalogue')
+			// Pharmacy reads the register — one row per physical book. Everyone
+			// else reads the catalogue — one row per title.
+			const url = appendToUrl(requiresAccession ? '/api/lib/catalogue/register' : '/api/lib/catalogue')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
-			setRecords(data)
+			if (requiresAccession) setRegisterRows(data)
+			else setRecords(data)
 		} catch {
 			toast({ title: 'Failed to load catalogue', variant: 'destructive' })
 		} finally {
 			setLoading(false)
 		}
-	}, [isReady, appendToUrl, toast])
+	}, [isReady, appendToUrl, toast, requiresAccession])
 
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
@@ -162,6 +201,42 @@ export default function RegistryPage() {
 		if (form.publication_year && (isNaN(Number(form.publication_year)) || Number(form.publication_year) < 1000)) {
 			e.publication_year = 'Enter a valid year'
 		}
+
+		if (requiresAccession) {
+			// The Pharmacy register has a filled column for each of these, so the
+			// form asks for the same. Only Sub-Title, Call Number, Classification
+			// Number and Book Location are optional there.
+			if (!form.author.trim()) e.author = 'Author is required'
+			if (!form.edition.trim()) e.edition = 'Edition is required'
+			if (!form.publisher_name.trim()) e.publisher_name = 'Publisher name is required'
+			if (!form.publisher_place.trim()) e.publisher_place = 'Place is required'
+			if (!form.publication_year.trim()) e.publication_year = 'Year is required'
+			else if (!/^\d{4}$/.test(form.publication_year.trim())) e.publication_year = 'Year must be four digits'
+			if (!form.price.trim()) e.price = 'Price is required'
+			else if (isNaN(Number(form.price)) || Number(form.price) < 0) e.price = 'Price must be a number'
+			// Only books are issued an ISBN. A magazine, journal or project report
+			// has none, and forcing the field would only get a made-up number
+			// typed in — which would then group two unrelated titles into one.
+			if (isbnRequiredFor(form.book_type) && !form.isbn.trim()) {
+				e.isbn = 'ISBN is required for books'
+			}
+			if (!form.book_type.trim()) e.book_type = 'Book type is required'
+			if (form.book_type === OTHER_BOOK_TYPE && !form.book_type_other.trim()) {
+				e.book_type_other = 'Say what kind of material this is'
+			}
+			if (!form.language.trim()) e.language = 'Language is required'
+			if (!form.pages.trim()) e.pages = 'Total pages is required'
+			else if (isNaN(Number(form.pages)) || Number(form.pages) <= 0) e.pages = 'Total pages must be a number'
+			if (!form.department.trim()) e.department = 'Department is required'
+
+			// Copy-level, and only when adding — an existing title's copies are
+			// managed on its own page
+			if (!editingItem) {
+				if (!form.accession_number.trim()) e.accession_number = 'Accession number is required'
+				if (!form.accession_date.trim()) e.accession_date = 'Date of adding is required'
+			}
+		}
+
 		setErrors(e)
 		return Object.keys(e).length === 0
 	}
@@ -171,19 +246,72 @@ export default function RegistryPage() {
 		try {
 			setSaving(true)
 			const instId = getInstitutionIdForCreate() ?? institutionId
+			// These belong to the physical copy or to the form itself, not to the
+			// title record, so they are peeled off before the payload is built
+			// The register fields are pulled out with them and added back only for
+			// Pharmacy, so the other campuses send exactly the payload they always
+			// sent rather than four empty columns they never asked for.
+			const {
+				accession_number, accession_date, book_type_other,
+				author, book_type, department, book_location,
+				...bibliographic
+			} = form
+
+			// "Others" is stored as whatever was typed, not as the word "Others" —
+			// a shelf full of books all labelled Others is no better than blank.
+			const bookType = book_type === OTHER_BOOK_TYPE ? book_type_other.trim() : book_type
+
 			const payload = {
-				...form,
+				...bibliographic,
 				institution_id: instId ?? '',
 				publication_year: form.publication_year ? Number(form.publication_year) : undefined,
 				pages: form.pages ? Number(form.pages) : undefined,
 				price: form.price ? Number(form.price) : undefined,
 				subtitle: form.subtitle || undefined,
 				currency_code: 'INR',
+				// The register speaks in book types; the rest of the system reads
+				// resource_format, so the chosen type sets both.
+				...(requiresAccession
+					? {
+						author,
+						department,
+						book_location,
+						book_type: bookType,
+						resource_format: formatForBookType(book_type) as LibResourceFormat,
+					}
+					: {}),
 			}
 			if (editingItem) {
 				const updated = await updateCatalogueRecord(editingItem.id, payload)
 				setRecords(prev => prev.map(r => r.id === updated.id ? updated : r))
 				toast({ title: '✅ Record updated', className: 'bg-green-50 border-green-200 text-green-800' })
+			} else if (requiresAccession) {
+				// One entry is one physical book. The server decides whether it is a
+				// new title or another copy of one already held — by ISBN, then ISSN,
+				// then title and author — so the copy count is however many
+				// accession numbers point at the title, never a typed figure.
+				const res = await fetch('/api/lib/catalogue/accession', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						...payload,
+						accession_number: accession_number.trim(),
+						accession_date: accession_date || undefined,
+					}),
+				})
+				const result = await res.json()
+				if (!res.ok) throw new Error(result.error || 'Could not save the book')
+
+				await fetchData()
+				toast({
+					title: result.copy_number > 1
+						? `✅ Copy ${result.copy_number} of "${result.matched_title ?? result.title}"`
+						: `✅ Book added — Accession ${result.accession_number}`,
+					description: result.copy_number > 1
+						? `Matched by ${result.matched_by}. The library now holds ${result.copy_number} copies.`
+						: undefined,
+					className: 'bg-green-50 border-green-200 text-green-800',
+				})
 			} else {
 				const created = await createCatalogueRecord(payload)
 				setRecords(prev => [created, ...prev])
@@ -217,6 +345,16 @@ export default function RegistryPage() {
 			price: r.price?.toString() ?? '',
 			is_reference_only: r.is_reference_only,
 			is_active: r.is_active,
+			// Editing a title never touches an existing copy's number or date
+			accession_number: '',
+			accession_date: today(),
+			author: r.author ?? r.authors?.[0]?.author_name ?? '',
+			// A type saved as free text lands back in the Others box, not silently
+			// reset to the first dropdown value
+			book_type: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? (r.book_type ?? '') : (r.book_type ? OTHER_BOOK_TYPE : ''),
+			book_type_other: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? '' : (r.book_type ?? ''),
+			department: r.department ?? '',
+			book_location: r.book_location ?? '',
 		})
 		setSheetOpen(true)
 	}
@@ -234,8 +372,69 @@ export default function RegistryPage() {
 		}
 	}
 
+	// A register row knows only which title it belongs to, so the full record is
+	// read back before the form opens — the row itself does not carry price,
+	// language or the rest of what the form edits.
+	const editTitleById = async (recordId: string) => {
+		try {
+			const record = await fetchCatalogueById(recordId)
+			handleEdit(record)
+		} catch {
+			toast({ title: '❌ Could not open that book', variant: 'destructive' })
+		}
+	}
+
+	const deleteTitleAndCopies = async () => {
+		if (!deleteTitle) return
+		try {
+			// Not the plain catalogue DELETE: that one refuses the moment a copy
+			// exists. This removes the book with its copies and settled history,
+			// and refuses only when a copy is out or money is owed on it.
+			const res = await fetch(`/api/lib/catalogue/${deleteTitle.id}/remove`, { method: 'DELETE' })
+			const result = await res.json()
+			if (!res.ok) throw new Error(result.error || 'Delete failed')
+
+			toast({
+				title: `✅ Removed — ${result.copies_removed} ${result.copies_removed === 1 ? 'copy' : 'copies'}`,
+				className: 'bg-green-50 border-green-200 text-green-800',
+			})
+			await fetchData()
+		} catch (err) {
+			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
+		} finally {
+			setDeleteTitle(null)
+		}
+	}
+
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
+			{/* Pharmacy reads its accession register — a line per physical book,
+			    accession number first. Every other campus keeps the title list
+			    below, unchanged. */}
+			{requiresAccession ? (
+				<PharmacyRegisterTable
+					rows={registerRows}
+					loading={loading}
+					onRefresh={fetchData}
+					onEdit={editTitleById}
+					onDelete={(id, title, copies) => setDeleteTitle({ id, title, copies })}
+					headerActions={
+						<>
+							<CatalogueBulkUpload
+								institutionId={getInstitutionIdForCreate() ?? institutionId}
+								onUploaded={fetchData}
+								disabled={mustSelectInstitution}
+							/>
+							<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
+								<PlusCircle className="h-4 w-4 mr-1.5" />
+								<span className="hidden sm:inline">Add Title</span>
+								<span className="sm:hidden">Add</span>
+							</Button>
+						</>
+					}
+				/>
+			) : (
+			<>
 			{/* Scorecards */}
 			<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
 				<Card className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
@@ -502,6 +701,8 @@ export default function RegistryPage() {
 					</CardContent>
 				</Card>
 			</TooltipProvider>
+			</>
+			)}
 
 			{/* Sheet Form */}
 			<Sheet open={sheetOpen} onOpenChange={o => { if (!o) resetForm(); setSheetOpen(o) }}>
@@ -513,6 +714,18 @@ export default function RegistryPage() {
 						</p>
 					</SheetHeader>
 					<div className="mt-6 space-y-8">
+						{/* Pharmacy fills its own accession register, field for field, so
+						    it gets its own layout. Every other campus keeps the screen
+						    below, untouched. */}
+						{requiresAccession ? (
+							<PharmacyTitleForm
+								form={form}
+								setForm={setForm}
+								errors={errors}
+								showCopySection={!editingItem}
+							/>
+						) : (
+						<>
 						{/* Section: Bibliographic */}
 						<div className="space-y-4">
 							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bibliographic</h3>
@@ -620,6 +833,8 @@ export default function RegistryPage() {
 								</div>
 							</div>
 						</div>
+						</>
+						)}
 
 						{/* Actions */}
 						<div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t">
@@ -631,6 +846,30 @@ export default function RegistryPage() {
 					</div>
 				</SheetContent>
 			</Sheet>
+
+			{/* Deleting from the register takes the book and every copy of it, so
+			    the count is spelled out rather than left to be discovered */}
+			<AlertDialog open={!!deleteTitle} onOpenChange={o => { if (!o) setDeleteTitle(null) }}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Remove from the register</AlertDialogTitle>
+						<AlertDialogDescription>
+							<strong>{deleteTitle?.title}</strong>
+							{deleteTitle && deleteTitle.copies > 1
+								? ` and all ${deleteTitle.copies} of its copies will be removed, along with every accession number they hold`
+								: ' will be removed, along with its accession number'}
+							{' '}and any past loan records. This cannot be undone.
+							{' '}A copy that is out with a member, or has an unpaid charge on it, will stop the removal.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={deleteTitleAndCopies} className="bg-red-600 hover:bg-red-700">
+							{deleteTitle && deleteTitle.copies > 1 ? `Remove all ${deleteTitle.copies}` : 'Remove'}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 
 			{/* Standalone Delete Dialog */}
 			<AlertDialog open={!!deleteTarget} onOpenChange={o => { if (!o) setDeleteTarget(null) }}>

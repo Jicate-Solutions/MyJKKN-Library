@@ -49,8 +49,8 @@ import { useInstitution, InstitutionFilter } from '@/context/institution-context
  * ```tsx
  * // In a page component
  * const {
- *   filter,           // { institution_code?: string, institutions_id?: string }
- *   queryString,      // "institution_code=CAS&institutions_id=uuid"
+ *   filter,           // { institution_id?: string }
+ *   queryString,      // "institution_id=uuid"
  *   shouldFilter,     // true if filtering is active
  *   isReady,          // true when context is initialized
  *   institutionCode,  // current institution code or null

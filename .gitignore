@@ -53,3 +53,12 @@ automation/output/
 automation/storage/
 automation/.env.automation
 automation/.venv/
+
+certificates
+
+# personal reference — never push
+/today-work/
+# requirement docs — hold the librarian's name and internal notes, repo is public
+/LIBRARY-REQUIREMENTS.md
+/LIBRARY-REQUIREMENTS-PHARMACY.md
+/LIBRARY-WORKFLOW-TANGLISH.html

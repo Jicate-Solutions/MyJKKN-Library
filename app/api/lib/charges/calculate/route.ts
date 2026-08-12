@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
 
 export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		const { institution_id, transaction_id, return_date } = body
 
@@ -35,13 +40,10 @@ export async function POST(request: Request) {
 
 		// Use provided return_date or today
 		const effectiveReturnDate = return_date ?? new Date().toISOString().split('T')[0]
-		const dueDate = new Date(transaction.due_date)
-		const returnDateObj = new Date(effectiveReturnDate)
 
-		const overdueDays = Math.max(
-			0,
-			Math.floor((returnDateObj.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-		)
+		// Same rules the return desk uses, so the preview and the charge agree
+		const settings = await getInstitutionSettings(institution_id)
+		const overdueDays = chargeableLateDays(transaction.due_date, effectiveReturnDate, settings)
 
 		// Get charge rate from member category
 		const memberCategory = transaction.member?.member_category
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
 			chargePerDay = categoryConfig?.late_charge_per_day ?? 1.0
 		}
 
-		const totalCharge = overdueDays * chargePerDay
+		const totalCharge = capFine(overdueDays * chargePerDay, settings)
 
 		return NextResponse.json({
 			transaction_id,
@@ -68,6 +70,8 @@ export async function POST(request: Request) {
 			charge_per_day: chargePerDay,
 			total_charge: totalCharge,
 			is_overdue: overdueDays > 0,
+			grace_days: settings.fine_grace_days,
+			working_days_only: settings.fine_working_days_only,
 		})
 	} catch (error) {
 		console.error('Unexpected error calculating charge:', error)

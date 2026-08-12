@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 
 export async function GET(
-	_request: Request,
+	request: Request,
 	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const { id } = await params
+		const guard = await guardRecord(request, 'lib_procurement_orders', id)
+		if (!guard.ok) return guard.response
 		const supabase = getSupabaseServer()
 
 		const { data, error } = await supabase
@@ -53,6 +56,8 @@ export async function PUT(
 ) {
 	try {
 		const { id } = await params
+		const guard = await guardRecord(request, 'lib_procurement_orders', id)
+		if (!guard.ok) return guard.response
 		const supabase = getSupabaseServer()
 		const body = await request.json()
 

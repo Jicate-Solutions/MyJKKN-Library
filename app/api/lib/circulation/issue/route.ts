@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { getInstitutionSettings } from '@/lib/library/institution-settings'
 
 export async function POST(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
 		const body = await request.json()
+		const guard = await guardWrite(request, body.institution_id)
+		if (!guard.ok) return guard.response
+		body.institution_id = guard.institutionId
 
 		const { institution_id, item_id, member_id, issued_by } = body
 
@@ -57,7 +62,10 @@ export async function POST(request: Request) {
 		if (!member.is_active) {
 			return NextResponse.json({ error: 'Member account is inactive' }, { status: 400 })
 		}
-		if (member.is_delinquent) {
+		// Whether unpaid charges stop a member borrowing is a campus decision:
+		// Pharmacy lets them take the next book while a fine is still open.
+		const settings = await getInstitutionSettings(institution_id)
+		if (member.is_delinquent && settings.block_borrowing_when_fine_due) {
 			return NextResponse.json(
 				{ error: 'Member has unpaid late charges — please clear outstanding charges before lending' },
 				{ status: 400 }
@@ -75,16 +83,21 @@ export async function POST(request: Request) {
 		const loanPeriodDays = body.loan_period_days ?? categoryConfig?.loan_period_days ?? 14
 		const maxItemsAllowed = categoryConfig?.max_items_allowed ?? 3
 
-		// 4. Check member hasn't exceeded their lending limit
-		const { count: activeLoans } = await supabase
+		// 4. The limit is on books held at once, not books borrowed over the
+		// year — returning one frees the slot immediately. An overdue book is
+		// still in the member's hands, so it must count: checking only 'active'
+		// would let someone holding three overdue books take three more.
+		const { count: booksHeld } = await supabase
 			.from('lib_lending_transactions')
 			.select('*', { count: 'exact', head: true })
 			.eq('member_id', member_id)
-			.eq('transaction_status', 'active')
+			.in('transaction_status', ['active', 'overdue'])
 
-		if ((activeLoans ?? 0) >= maxItemsAllowed) {
+		if ((booksHeld ?? 0) >= maxItemsAllowed) {
 			return NextResponse.json(
-				{ error: `Member has reached their maximum lending limit of ${maxItemsAllowed} items` },
+				{
+					error: `Member is already holding ${booksHeld} of ${maxItemsAllowed} books — return one before taking another`,
+				},
 				{ status: 400 }
 			)
 		}

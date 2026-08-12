@@ -97,6 +97,25 @@ export default function MembersPage() {
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
 
+	// MyJKKN ids already enrolled here — one person may hold only one membership,
+	// so the search lists them but blocks re-selection
+	const existingMemberIds = useMemo(() => {
+		const ids = new Set<string>()
+		for (const m of members) {
+			if (m.learner_id) ids.add(m.learner_id)
+			if (m.facilitator_id) ids.add(m.facilitator_id)
+			if (m.team_member_id) ids.add(m.team_member_id)
+		}
+		return ids
+	}, [members])
+
+	// A learner's member number is their roll number, so show it before saving
+	// rather than making the librarian save first to find out what it will be.
+	const pendingRollNumber = useMemo(() => {
+		if (form.member_category !== 'learner' || !selectedMyjkknMember) return null
+		return selectedMyjkknMember.roll_number ?? null
+	}, [form.member_category, selectedMyjkknMember])
+
 	// Scorecards use institution-filtered data (no search/status filter)
 	const scorecardData = useMemo(() => ({
 		total: members.length,
@@ -158,10 +177,25 @@ export default function MembersPage() {
 		if (isMyJKKNCategory && !editingItem && !selectedMyjkknMember) {
 			e.myjkkn = `Please select a ${form.member_category === 'learner' ? 'learner' : 'learning facilitator'} from MyJKKN`
 		}
+		// Catches a selection made before another librarian enrolled the same person
+		if (!editingItem && selectedMyjkknMember && existingMemberIds.has(selectedMyjkknMember.id)) {
+			e.myjkkn = `${selectedMyjkknMember.display_name} is already a member`
+		}
 		if (!isMyJKKNCategory && !form.display_name.trim()) {
 			e.display_name = 'Name is required'
 		}
 		if (!form.membership_start_date) e.membership_start_date = 'Start date is required'
+		if (!form.membership_end_date) e.membership_end_date = 'End date is required'
+
+		// Both present — the range itself must make sense
+		if (form.membership_start_date && form.membership_end_date) {
+			if (form.membership_end_date < form.membership_start_date) {
+				e.membership_end_date = 'End date cannot be before the start date'
+			} else if (form.membership_end_date === form.membership_start_date) {
+				e.membership_end_date = 'End date must be after the start date'
+			}
+		}
+
 		setErrors(e)
 		return Object.keys(e).length === 0
 	}
@@ -171,8 +205,10 @@ export default function MembersPage() {
 		try {
 			setSaving(true)
 			const instId = getInstitutionIdForCreate() ?? institutionId
+			// member_number is always assigned by the server — never sent from the form
+			const { member_number: _ignored, ...formWithoutMemberNumber } = form
 			const payload: Record<string, unknown> = {
-				...form,
+				...formWithoutMemberNumber,
 				institution_id: instId ?? '',
 				membership_end_date: form.membership_end_date || undefined,
 			}
@@ -181,6 +217,9 @@ export default function MembersPage() {
 			if (selectedMyjkknMember) {
 				if (form.member_category === 'learner') {
 					payload.learner_id = selectedMyjkknMember.id
+					// A learner's member number IS their roll number, so the card
+					// they already carry is the card the desk scans.
+					payload.roll_number = selectedMyjkknMember.roll_number
 				} else if (form.member_category === 'facilitator') {
 					payload.facilitator_id = selectedMyjkknMember.id
 				}
@@ -189,11 +228,11 @@ export default function MembersPage() {
 			if (editingItem) {
 				const updated = await updateMember(editingItem.id, payload)
 				setMembers(prev => prev.map(m => m.id === updated.id ? updated : m))
-				toast({ title: '✅ Member updated', className: 'bg-green-50 border-green-200 text-green-800' })
+				toast({ title: '✅ Member updated', className: 'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300' })
 			} else {
 				const created = await createMember(payload)
 				setMembers(prev => [created, ...prev])
-				toast({ title: '✅ Member enrolled', className: 'bg-green-50 border-green-200 text-green-800' })
+				toast({ title: '✅ Member enrolled', className: 'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300' })
 			}
 			setSheetOpen(false)
 			resetForm()
@@ -224,7 +263,7 @@ export default function MembersPage() {
 		try {
 			await deleteMember(deleteTarget.id)
 			setMembers(prev => prev.filter(x => x.id !== deleteTarget.id))
-			toast({ title: '✅ Member deleted', className: 'bg-green-50 border-green-200 text-green-800' })
+			toast({ title: '✅ Member deleted', className: 'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300' })
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
 		} finally {
@@ -236,47 +275,47 @@ export default function MembersPage() {
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
 			{/* Scorecards */}
 			<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
-				<Card className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
+				<Card className="border-l-4 border-l-brand-green dark:border-l-brand-green-400 hover-lift">
 					<CardContent className="p-4">
 						<div className="flex items-center justify-between">
 							<div>
-								<p className="text-2xl font-bold tracking-tight">{scorecardData.total}</p>
+								<p className="text-2xl font-bold tracking-tight font-heading text-brand-green dark:text-brand-green-400">{scorecardData.total}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Members</p>
 							</div>
-							<Users className="h-5 w-5 text-blue-500/40" />
+							<Users className="h-5 w-5 text-brand-green/40 dark:text-brand-green-400/40" />
 						</div>
 					</CardContent>
 				</Card>
-				<Card className="border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
+				<Card className="border-l-4 border-l-brand-green-400 hover-lift">
 					<CardContent className="p-4">
 						<div className="flex items-center justify-between">
 							<div>
-								<p className="text-2xl font-bold tracking-tight">{scorecardData.active}</p>
+								<p className="text-2xl font-bold tracking-tight font-heading text-brand-green-600 dark:text-brand-green-300">{scorecardData.active}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">Active</p>
 							</div>
-							<UserCheck className="h-5 w-5 text-emerald-500/40" />
+							<UserCheck className="h-5 w-5 text-brand-green-400/50" />
 						</div>
 					</CardContent>
 				</Card>
-				<Card className="border-l-4 border-l-amber-500 hover:shadow-md transition-shadow">
+				<Card className="border-l-4 border-l-brand-yellow hover-lift">
 					<CardContent className="p-4">
 						<div className="flex items-center justify-between">
 							<div>
-								<p className="text-2xl font-bold tracking-tight">{scorecardData.inactive}</p>
+								<p className="text-2xl font-bold tracking-tight font-heading text-brand-yellow-800 dark:text-brand-yellow-500">{scorecardData.inactive}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">Inactive</p>
 							</div>
-							<UserX className="h-5 w-5 text-amber-500/40" />
+							<UserX className="h-5 w-5 text-brand-yellow-700/50 dark:text-brand-yellow-500/50" />
 						</div>
 					</CardContent>
 				</Card>
-				<Card className="border-l-4 border-l-rose-500 hover:shadow-md transition-shadow">
+				<Card className="border-l-4 border-l-destructive hover-lift">
 					<CardContent className="p-4">
 						<div className="flex items-center justify-between">
 							<div>
-								<p className="text-2xl font-bold tracking-tight">{scorecardData.delinquent}</p>
+								<p className="text-2xl font-bold tracking-tight font-heading text-destructive">{scorecardData.delinquent}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">Delinquent</p>
 							</div>
-							<UserPlus className="h-5 w-5 text-rose-500/40" />
+							<UserPlus className="h-5 w-5 text-destructive/40" />
 						</div>
 					</CardContent>
 				</Card>
@@ -289,11 +328,11 @@ export default function MembersPage() {
 						{/* Row 1: Title + Actions */}
 						<div className="flex items-center justify-between">
 							<div>
-								<h2 className="text-base font-semibold">Knowledge Community Members</h2>
+								<h2 className="text-base font-semibold font-heading">Knowledge Community Members</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} member{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5">
-								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
+								<Button className="h-8 text-sm px-4 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900 focus-ring" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Member</span>
 									<span className="sm:hidden">Add</span>
@@ -389,7 +428,9 @@ export default function MembersPage() {
 												{mustSelectInstitution && <TableCell className="text-sm">{m.institution_id?.slice(0, 8) ?? '—'}</TableCell>}
 												<TableCell className="text-sm">{m.email ?? '—'}</TableCell>
 												<TableCell>
-													<Badge variant="outline" className={m.is_active ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}>
+													<Badge variant="outline" className={m.is_active
+														? 'bg-brand-green-50 text-brand-green-700 border-brand-green-200 dark:bg-brand-green-900/20 dark:text-brand-green-400 dark:border-brand-green-700'
+														: 'bg-brand-yellow-100 text-brand-yellow-900 border-brand-yellow-300 dark:bg-brand-yellow-900/20 dark:text-brand-yellow-500 dark:border-brand-yellow-800'}>
 														{m.is_active ? 'Active' : 'Inactive'}
 													</Badge>
 												</TableCell>
@@ -405,7 +446,7 @@ export default function MembersPage() {
 																<Edit className="h-4 w-4 mr-2" />Edit
 															</DropdownMenuItem>
 															<DropdownMenuSeparator />
-															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(m)}>
+															<DropdownMenuItem className="text-destructive focus:text-destructive focus:bg-destructive/10" onClick={() => setDeleteTarget(m)}>
 																<Trash2 className="h-4 w-4 mr-2" />Delete
 															</DropdownMenuItem>
 														</DropdownMenuContent>
@@ -448,7 +489,7 @@ export default function MembersPage() {
 													<Edit className="h-4 w-4 mr-2" />Edit
 												</DropdownMenuItem>
 												<DropdownMenuSeparator />
-												<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(m)}>
+												<DropdownMenuItem className="text-destructive focus:text-destructive focus:bg-destructive/10" onClick={() => setDeleteTarget(m)}>
 													<Trash2 className="h-4 w-4 mr-2" />Delete
 												</DropdownMenuItem>
 											</DropdownMenuContent>
@@ -456,7 +497,9 @@ export default function MembersPage() {
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
 										<MemberCategoryBadge category={m.member_category} />
-										<Badge variant="outline" className={m.is_active ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}>
+										<Badge variant="outline" className={m.is_active
+											? 'bg-brand-green-50 text-brand-green-700 border-brand-green-200 dark:bg-brand-green-900/20 dark:text-brand-green-400 dark:border-brand-green-700'
+											: 'bg-brand-yellow-100 text-brand-yellow-900 border-brand-yellow-300 dark:bg-brand-yellow-900/20 dark:text-brand-yellow-500 dark:border-brand-yellow-800'}>
 											{m.is_active ? 'Active' : 'Inactive'}
 										</Badge>
 									</div>
@@ -498,7 +541,7 @@ export default function MembersPage() {
 			<Sheet open={sheetOpen} onOpenChange={o => { if (!o) resetForm(); setSheetOpen(o) }}>
 				<SheetContent className="sm:max-w-[720px] overflow-y-auto">
 					<SheetHeader className="pb-4 border-b">
-						<SheetTitle className="text-lg font-semibold">{editingItem ? 'Edit Member' : 'Add Member'}</SheetTitle>
+						<SheetTitle className="text-lg font-semibold font-heading">{editingItem ? 'Edit Member' : 'Add Member'}</SheetTitle>
 						<p className="text-sm text-muted-foreground">
 							{editingItem ? 'Update member details below' : 'Fill in the details to add a new Knowledge Community Member'}
 						</p>
@@ -506,17 +549,26 @@ export default function MembersPage() {
 					<div className="mt-6 space-y-8">
 						{/* Section: Identity */}
 						<div className="space-y-4">
-							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Identity</h3>
+							<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Identity</h3>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Member Number</Label>
 									<Input
-										value={form.member_number}
-										onChange={e => setForm(f => ({ ...f, member_number: e.target.value }))}
-										className={errors.member_number ? 'border-red-500' : ''}
-										placeholder="Auto-generated if blank"
+										value={editingItem ? form.member_number : (pendingRollNumber ?? '')}
+										readOnly
+										disabled={!editingItem}
+										className="bg-muted font-mono"
+										placeholder="Generated automatically on save"
 									/>
-									{errors.member_number && <p className="text-xs text-red-500">{errors.member_number}</p>}
+									<p className="text-xs text-muted-foreground">
+										{editingItem
+											? 'Member numbers cannot be changed'
+											: form.member_category === 'learner'
+												? pendingRollNumber
+													? 'This is their MyJKKN roll number'
+													: 'Select a learner — their roll number becomes the member number'
+												: 'Assigned by the system — no manual entry'}
+									</p>
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Category</Label>
@@ -536,7 +588,7 @@ export default function MembersPage() {
 							{(form.member_category === 'learner' || form.member_category === 'facilitator') && !editingItem ? (
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">
-										{form.member_category === 'learner' ? 'Select Learner' : 'Select Learning Facilitator'} <span className="text-red-500">*</span>
+										{form.member_category === 'learner' ? 'Select Learner' : 'Select Learning Facilitator'} <span className="text-destructive">*</span>
 									</Label>
 									<MyJKKNMemberSearch
 										category={form.member_category}
@@ -544,25 +596,26 @@ export default function MembersPage() {
 										myjkknInstitutionIds={currentMyJKKNInstitutionIds}
 										onSelect={handleMyjkknSelect}
 										onBrowseAll={() => setBrowseModalOpen(true)}
+										existingMemberIds={existingMemberIds}
 										selectedMember={selectedMyjkknMember}
 										onClear={() => {
 											setSelectedMyjkknMember(null)
 											setForm(prev => ({ ...prev, display_name: '', email: '', phone: '' }))
 										}}
 									/>
-									{errors.myjkkn && <p className="text-xs text-red-500">{errors.myjkkn}</p>}
+									{errors.myjkkn && <p className="text-xs text-destructive">{errors.myjkkn}</p>}
 								</div>
 							) : (
 								<>
 									<div className="space-y-2">
-										<Label className="text-sm font-semibold">Full Name <span className="text-red-500">*</span></Label>
+										<Label className="text-sm font-semibold">Full Name <span className="text-destructive">*</span></Label>
 										<Input
 											value={form.display_name}
 											onChange={e => setForm(f => ({ ...f, display_name: e.target.value }))}
-											className={errors.display_name ? 'border-red-500' : ''}
+											className={errors.display_name ? 'border-destructive' : ''}
 											placeholder="Full name"
 										/>
-										{errors.display_name && <p className="text-xs text-red-500">{errors.display_name}</p>}
+										{errors.display_name && <p className="text-xs text-destructive">{errors.display_name}</p>}
 									</div>
 								</>
 							)}
@@ -570,10 +623,10 @@ export default function MembersPage() {
 
 						{/* Section: Contact — show for manual categories or editing, or after MyJKKN selection */}
 						<div className="space-y-4 pt-2 border-t">
-							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact</h3>
+							<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Contact</h3>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Email</Label>
+									<Label className="text-sm font-semibold">College Mail ID</Label>
 									<Input
 										type="email"
 										value={form.email}
@@ -584,7 +637,7 @@ export default function MembersPage() {
 									/>
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Phone</Label>
+									<Label className="text-sm font-semibold">Mobile</Label>
 									<Input
 										value={form.phone}
 										onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
@@ -598,21 +651,28 @@ export default function MembersPage() {
 
 						{/* Section: Membership */}
 						<div className="space-y-4 pt-2 border-t">
-							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Membership</h3>
+							<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Membership</h3>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Start Date <span className="text-red-500">*</span></Label>
+									<Label className="text-sm font-semibold">Start Date <span className="text-destructive">*</span></Label>
 									<Input
 										type="date"
 										value={form.membership_start_date}
 										onChange={e => setForm(f => ({ ...f, membership_start_date: e.target.value }))}
-										className={errors.membership_start_date ? 'border-red-500' : ''}
+										className={errors.membership_start_date ? 'border-destructive' : ''}
 									/>
-									{errors.membership_start_date && <p className="text-xs text-red-500">{errors.membership_start_date}</p>}
+									{errors.membership_start_date && <p className="text-xs text-destructive">{errors.membership_start_date}</p>}
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">End Date</Label>
-									<Input type="date" value={form.membership_end_date} onChange={e => setForm(f => ({ ...f, membership_end_date: e.target.value }))} />
+									<Label className="text-sm font-semibold">End Date <span className="text-destructive">*</span></Label>
+									<Input
+										type="date"
+										value={form.membership_end_date}
+										min={form.membership_start_date || undefined}
+										onChange={e => setForm(f => ({ ...f, membership_end_date: e.target.value }))}
+										className={errors.membership_end_date ? 'border-destructive' : ''}
+									/>
+									{errors.membership_end_date && <p className="text-xs text-destructive">{errors.membership_end_date}</p>}
 								</div>
 							</div>
 							<div className="flex items-center gap-3">
@@ -624,7 +684,7 @@ export default function MembersPage() {
 						{/* Actions */}
 						<div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t">
 							<Button variant="outline" className="h-10 px-6 w-full sm:w-auto" onClick={() => setSheetOpen(false)}>Cancel</Button>
-							<Button className="h-10 px-6 w-full sm:w-auto" onClick={handleSave} disabled={saving}>
+							<Button className="h-10 px-6 w-full sm:w-auto bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900 focus-ring" onClick={handleSave} disabled={saving}>
 								{saving ? 'Saving...' : (editingItem ? 'Update Member' : 'Create Member')}
 							</Button>
 						</div>
@@ -636,14 +696,14 @@ export default function MembersPage() {
 			<AlertDialog open={!!deleteTarget} onOpenChange={o => { if (!o) setDeleteTarget(null) }}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Delete Member</AlertDialogTitle>
+						<AlertDialogTitle className="font-heading">Delete Member</AlertDialogTitle>
 						<AlertDialogDescription>
 							Are you sure you want to delete <strong>{deleteTarget?.display_name ?? deleteTarget?.member_number}</strong>? This action cannot be undone.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+						<AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Delete</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
@@ -655,6 +715,7 @@ export default function MembersPage() {
 					onOpenChange={setBrowseModalOpen}
 					category={form.member_category}
 					myjkknInstitutionIds={currentMyJKKNInstitutionIds}
+					existingMemberIds={existingMemberIds}
 					onSelect={handleMyjkknSelect}
 				/>
 			)}

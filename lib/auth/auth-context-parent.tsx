@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef, ReactNode, Suspense } from 'react'
 import { useSearchParams, usePathname } from 'next/navigation'
 import { parentAuthService } from './parent-auth-service'
+import { installSessionFetch } from './session-fetch'
 import { ParentAppUser } from './config'
 
 interface AuthContextType {
@@ -459,6 +460,11 @@ function AuthProviderInner({
 
 // Main AuthProvider that wraps the inner component in Suspense
 export function AuthProvider({ children, autoValidate = false }: AuthProviderProps) {
+	// Installed during render, not in an effect: child effects run before the
+	// parent's, so a page's first fetch would otherwise escape the 401 handler.
+	// The installer is idempotent, so a repeated render costs nothing.
+	installSessionFetch()
+
 	const [user, setUser] = useState<ParentAppUser | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [error, setError] = useState<string | null>(null)

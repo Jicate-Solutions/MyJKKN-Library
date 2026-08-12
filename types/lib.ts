@@ -94,6 +94,14 @@ export interface LibCatalogueRecord {
 	currency_code: string
 	marc_data?: Record<string, unknown>
 	default_loan_days?: number
+	/** Primary author as written in the book. `authors` still holds the full list. */
+	author?: string
+	/** Owning department — choices come from the college's own list, not the database. */
+	department?: string
+	/** Books / Magazine / Journals / Projects, or free text when Others is chosen. */
+	book_type?: string
+	/** Where the copy sits: beero, rack, shelf. Free text. */
+	book_location?: string
 	is_reference_only: boolean
 	is_active: boolean
 	created_at: string

@@ -10,11 +10,164 @@ import { Badge } from '@/components/ui/badge'
 import { BarcodeScannerInput } from '@/components/library/barcode-scanner-input'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
 import { MemberCategoryBadge } from '@/components/library/member-category-badge'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
 	CheckCircle, RefreshCw, RotateCcw, User, BookOpen, AlertTriangle, ArrowRightLeft,
 } from 'lucide-react'
 import { issueItem, returnItem, renewItem } from '@/services/library/lib-circulation-service'
 import type { LibLendingTransaction, LibMember, LibItem } from '@/types/lib'
+
+/** One book currently in a member's hands, as the desk lookup returns it. */
+interface MemberLoan {
+	id: string
+	item_id: string | null
+	accession_number: string | null
+	title: string
+	call_number: string | null
+	issued_at: string
+	due_date: string
+	renewal_count: number
+	renewal_limit: number
+	can_renew: boolean
+	is_overdue: boolean
+	overdue_days: number
+	estimated_charge: number
+}
+
+interface DeskMember extends LibMember {
+	items_on_loan?: number
+	max_items_allowed?: number | null
+	outstanding_charges?: number
+	category_name?: string
+	loans?: MemberLoan[]
+}
+
+const asDate = (value: string | null | undefined) =>
+	value ? new Date(value).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
+
+/**
+ * The books a member is holding, with the two actions the desk needs on each.
+ *
+ * This is the first question asked at the counter — "what have I got out, and
+ * when is it due" — so it belongs beside the member, not behind another search.
+ */
+function MemberLoansPanel({
+	loans,
+	maxItems,
+	institutionId,
+	onChanged,
+}: {
+	loans: MemberLoan[]
+	maxItems?: number | null
+	institutionId: string | null
+	onChanged: () => void
+}) {
+	const { toast } = useToast()
+	const [busyId, setBusyId] = useState<string | null>(null)
+
+	const act = async (loan: MemberLoan, action: 'return' | 'renew') => {
+		try {
+			setBusyId(loan.id)
+			if (action === 'return') {
+				await returnItem({ transaction_id: loan.id, institution_id: institutionId ?? '' })
+				toast({
+					title: `✅ Returned — ${loan.title}`,
+					description: loan.estimated_charge > 0 ? `Late charge ₹${loan.estimated_charge}` : undefined,
+					className: 'bg-green-50 border-green-200 text-green-800',
+				})
+			} else {
+				const tx = await renewItem({ transaction_id: loan.id, institution_id: institutionId ?? '' })
+				toast({
+					title: `✅ Renewed — ${loan.title}`,
+					description: tx?.due_date ? `New due date ${asDate(tx.due_date)}` : undefined,
+					className: 'bg-green-50 border-green-200 text-green-800',
+				})
+			}
+			onChanged()
+		} catch (err) {
+			toast({
+				title: '❌ ' + (err instanceof Error ? err.message : 'Action failed'),
+				variant: 'destructive',
+			})
+		} finally {
+			setBusyId(null)
+		}
+	}
+
+	if (loans.length === 0) {
+		return (
+			<div className="rounded-md border border-dashed px-4 py-6 text-center">
+				<BookOpen className="mx-auto h-6 w-6 text-muted-foreground/40" />
+				<p className="mt-1 text-sm text-muted-foreground">No books with this member right now</p>
+			</div>
+		)
+	}
+
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+					Books with this member
+				</p>
+				<span className="text-xs text-muted-foreground">
+					{loans.length}{maxItems ? ` of ${maxItems}` : ''} out
+				</span>
+			</div>
+
+			<div className="divide-y rounded-md border">
+				{loans.map(loan => (
+					<div key={loan.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium">{loan.title}</p>
+							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+								{loan.accession_number && <span className="font-mono">{loan.accession_number}</span>}
+								<span>Taken {asDate(loan.issued_at)}</span>
+								<span className={loan.is_overdue ? 'font-medium text-destructive' : ''}>
+									Due {asDate(loan.due_date)}
+								</span>
+								{loan.renewal_limit > 0 && (
+									<span>Renewed {loan.renewal_count} of {loan.renewal_limit}</span>
+								)}
+							</div>
+						</div>
+
+						{loan.is_overdue && (
+							<Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-xs text-destructive">
+								<AlertTriangle className="mr-1 h-3 w-3" />
+								{loan.overdue_days} day{loan.overdue_days === 1 ? '' : 's'} late
+								{loan.estimated_charge > 0 ? ` · ₹${loan.estimated_charge}` : ''}
+							</Badge>
+						)}
+
+						<div className="flex items-center gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								className="h-8 text-xs"
+								disabled={busyId === loan.id || !loan.can_renew}
+								title={loan.can_renew ? 'Extend the due date' : 'Renewal limit reached'}
+								onClick={() => act(loan, 'renew')}
+							>
+								<RotateCcw className="mr-1 h-3 w-3" /> Renew
+							</Button>
+							<Button
+								size="sm"
+								className="h-8 text-xs"
+								disabled={busyId === loan.id}
+								onClick={() => act(loan, 'return')}
+							>
+								{busyId === loan.id
+									? <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+									: <CheckCircle className="mr-1 h-3 w-3" />}
+								Return
+							</Button>
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	)
+}
 
 // ─── Issue Tab ────────────────────────────────────────────────────────────────
 
@@ -23,32 +176,45 @@ function IssueTab({ institutionId }: { institutionId: string | null }) {
 	const [step, setStep] = useState<'member' | 'item' | 'confirm'>('member')
 	const [memberBarcode, setMemberBarcode] = useState('')
 	const [itemBarcode, setItemBarcode] = useState('')
-	const [member, setMember] = useState<LibMember | null>(null)
+	// The desk lookup returns more than the stored row: the MyJKKN photo and
+	// what the member currently has out, so the librarian can decide at a glance.
+	const [member, setMember] = useState<DeskMember | null>(null)
 	const [item, setItem] = useState<LibItem | null>(null)
 	const [issuing, setIssuing] = useState(false)
 	const [result, setResult] = useState<LibLendingTransaction | null>(null)
 
-	const lookupMember = useCallback(async (barcode: string) => {
+	// Show the reason the server gave, not a blanket "not found". A broken query
+	// and a genuinely unknown card look identical otherwise, and the desk cannot
+	// tell whether to re-scan or call for help.
+	const lookupMember = useCallback(async (barcode: string, keepStep = false) => {
 		try {
 			const res = await fetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
-			if (!res.ok) throw new Error('Member not found')
 			const data = await res.json()
+			if (!res.ok) throw new Error(data.error || 'Member not found')
 			setMember(data)
-			setStep('item')
-		} catch {
-			toast({ title: '❌ Member not found', description: `Barcode: ${barcode}`, variant: 'destructive' })
+			if (!keepStep) setStep('item')
+		} catch (err) {
+			toast({
+				title: '❌ ' + (err instanceof Error ? err.message : 'Member not found'),
+				description: `Scanned: ${barcode}`,
+				variant: 'destructive',
+			})
 		}
 	}, [institutionId, toast])
 
 	const lookupItem = useCallback(async (barcode: string) => {
 		try {
 			const res = await fetch(`/api/lib/items/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
-			if (!res.ok) throw new Error('Item not found')
 			const data = await res.json()
+			if (!res.ok) throw new Error(data.error || 'Item not found')
 			setItem(data)
 			setStep('confirm')
-		} catch {
-			toast({ title: '❌ Item not found', description: `Barcode: ${barcode}`, variant: 'destructive' })
+		} catch (err) {
+			toast({
+				title: '❌ ' + (err instanceof Error ? err.message : 'Item not found'),
+				description: `Scanned: ${barcode}`,
+				variant: 'destructive',
+			})
 		}
 	}, [institutionId, toast])
 
@@ -119,10 +285,38 @@ function IssueTab({ institutionId }: { institutionId: string | null }) {
 				)}
 				{member && step !== 'member' && (
 					<CardContent className="pt-0 pb-3 px-4">
-						<div className="flex items-center gap-2 text-sm">
-							<User className="h-4 w-4 text-muted-foreground shrink-0" />
-							<span className="font-medium">{member.display_name}</span>
-							<MemberCategoryBadge category={member.member_category} />
+						{/* The photo is the check that matters: the person at the desk
+						    and the person the card belongs to are not always the same. */}
+						<div className="flex items-center gap-3 text-sm">
+							<Avatar className="h-10 w-10 shrink-0">
+								{member.photo_url && <AvatarImage src={member.photo_url} alt={member.display_name ?? ''} />}
+								<AvatarFallback className="text-xs bg-brand-green-50 text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-400">
+									{(member.display_name ?? member.member_number ?? '?').slice(0, 2).toUpperCase()}
+								</AvatarFallback>
+							</Avatar>
+							<div className="min-w-0">
+								<div className="flex items-center gap-2">
+									<span className="font-medium truncate">{member.display_name}</span>
+									<MemberCategoryBadge category={member.member_category} />
+								</div>
+								<div className="text-xs text-muted-foreground">
+									{member.member_number}
+									{member.items_on_loan !== undefined && member.max_items_allowed
+										? ` · ${member.items_on_loan} of ${member.max_items_allowed} books out`
+										: ''}
+									{member.outstanding_charges ? ` · ₹${member.outstanding_charges} due` : ''}
+								</div>
+							</div>
+						</div>
+
+						{/* What they already have, and the actions on each */}
+						<div className="mt-3 border-t pt-3">
+							<MemberLoansPanel
+								loans={member.loans ?? []}
+								maxItems={member.max_items_allowed}
+								institutionId={institutionId}
+								onChanged={() => lookupMember(member.member_number, true)}
+							/>
 						</div>
 					</CardContent>
 				)}
