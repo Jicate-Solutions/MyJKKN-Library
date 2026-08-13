@@ -66,8 +66,32 @@ function readToken(request: Request): string | null {
 	return readCookie(request, 'access_token')
 }
 
-/** Asks MyJKKN who this token belongs to. Returns the email, or null. */
-async function resolveEmail(token: string): Promise<string | null> {
+/**
+ * The name as MyJKKN spells it.
+ *
+ * Different sign-in paths fill different fields, so the first non-empty one
+ * wins, falling back to first + last. Returns null rather than an empty string
+ * when MyJKKN sends no name at all — an absent name must never overwrite the
+ * one we already hold.
+ */
+export function nameFromParent(user: any): string | null {
+	if (!user) return null
+
+	const joined = [user.first_name, user.last_name].filter(Boolean).join(' ')
+	const name = String(user.full_name || user.name || user.display_name || user.displayName || joined || '')
+		.replace(/\s+/g, ' ')
+		.trim()
+
+	return name.length > 0 ? name : null
+}
+
+interface ParentIdentity {
+	email: string
+	fullName: string | null
+}
+
+/** Asks MyJKKN who this token belongs to. Returns their email and name, or null. */
+async function resolveIdentity(token: string): Promise<ParentIdentity | null> {
 	try {
 		const response = await fetch(`${authConfig.parentAppUrl}/api/auth/validate`, {
 			method: 'POST',
@@ -75,8 +99,12 @@ async function resolveEmail(token: string): Promise<string | null> {
 			body: JSON.stringify({ access_token: token, child_app_id: authConfig.appId }),
 		})
 		if (!response.ok) return null
+
 		const data = await response.json()
-		return data?.user?.email ?? null
+		const email = data?.user?.email ?? null
+		if (!email) return null
+
+		return { email, fullName: nameFromParent(data.user) }
 	} catch (error) {
 		console.error('[access] Token validation failed:', error)
 		return null
@@ -143,6 +171,38 @@ async function callerFromUser(
 const USER_FIELDS = 'id, email, full_name, role, is_super_admin, institution_id, is_active'
 
 /**
+ * Keeps our copy of the name identical to MyJKKN's.
+ *
+ * MyJKKN owns who a person is; this project only borrows it. So whatever their
+ * MyJKKN profile says is what the library shows — including after a correction
+ * or a change of name there, with nobody having to edit the row by hand.
+ *
+ * The row is written only when the two actually differ, so an ordinary request
+ * costs one string comparison. A failed write is logged and swallowed: a stale
+ * name is no reason to refuse someone entry.
+ */
+async function syncNameFromParent(
+	supabase: ReturnType<typeof getSupabaseServer>,
+	user: { id: string; full_name: string | null },
+	parentName: string | null
+): Promise<void> {
+	if (!parentName || parentName === user.full_name) return
+
+	const { error } = await supabase
+		.from('users')
+		.update({ full_name: parentName, updated_at: new Date().toISOString() })
+		.eq('id', user.id)
+
+	if (error) {
+		console.error('[access] Could not sync name from MyJKKN:', error.message)
+		return
+	}
+
+	// Show the new name on this request, not the next one
+	user.full_name = parentName
+}
+
+/**
  * Identifies the caller.
  *
  * When a super admin has picked someone to view as, the returned caller IS
@@ -154,19 +214,21 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 	const token = readToken(request)
 	if (!token) return { caller: null, error: 'Not signed in', status: 401 }
 
-	const email = await resolveEmail(token)
-	if (!email) return { caller: null, error: 'Session expired — please sign in again', status: 401 }
+	const identity = await resolveIdentity(token)
+	if (!identity) return { caller: null, error: 'Session expired — please sign in again', status: 401 }
 
 	const supabase = getSupabaseServer()
 
 	const { data: user } = await supabase
 		.from('users')
 		.select(USER_FIELDS)
-		.eq('email', email)
+		.eq('email', identity.email)
 		.maybeSingle()
 
 	if (!user) return { caller: null, error: 'Your account is not provisioned for the library', status: 403 }
 	if (!user.is_active) return { caller: null, error: 'Your account is inactive', status: 403 }
+
+	await syncNameFromParent(supabase, user, identity.fullName)
 
 	const realCaller = await callerFromUser(user)
 
@@ -213,6 +275,13 @@ export function resolveInstitutionScope(
 	requestedInstitutionId: string | null
 ): { institutionId: string | null; error?: string; status?: number } {
 	if (caller.isSuperAdmin) {
+		return { institutionId: requestedInstitutionId }
+	}
+
+	// An admin with no college attached oversees all of them — the CEO's case.
+	// Deliberately narrow: it reads every library but, unlike super_admin, it
+	// cannot open Staff Access or view as another user.
+	if (caller.role === 'admin' && !caller.institutionId) {
 		return { institutionId: requestedInstitutionId }
 	}
 

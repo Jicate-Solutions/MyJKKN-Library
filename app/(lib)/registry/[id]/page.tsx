@@ -23,8 +23,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibCatalogueRecord, LibItem, LibItemStatus, LibItemCondition } from '@/types/lib'
-import { useInstitution } from '@/context/institution-context'
-import { usesPharmacyRegister } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister } from '@/lib/library/catalogue-options'
 import { fetchCatalogueById } from '@/services/library/lib-catalogue-service'
 import { fetchItems, createItem, updateItem, deleteItem } from '@/services/library/lib-items-service'
 
@@ -60,14 +59,12 @@ const defaultItemForm: ItemFormData = {
 export default function CatalogueDetailPage() {
 	const { id } = useParams<{ id: string }>()
 	const { institutionId, getInstitutionIdForCreate } = useInstitutionFilter()
-	const { currentInstitutionCode } = useInstitution()
 	const { toast } = useToast()
 
-	// Pharmacy accessions a book on the way in — one entry, one accession
-	// number, and the copy count follows from that. Adding a bare copy here
-	// afterwards would let the two drift apart, so this page only shows what
-	// is held. Every other campus keeps the Add Item button.
-	const copiesAreReadOnly = usesPharmacyRegister(currentInstitutionCode)
+	// A book is accessioned on the way in — one entry, one accession number, and
+	// the copy count follows from that. Adding a bare copy here afterwards would
+	// let the two drift apart, so this page only shows what is held.
+	const copiesAreReadOnly = usesAccessionRegister()
 
 	const [record, setRecord] = useState<LibCatalogueRecord | null>(null)
 	const [items, setItems] = useState<LibItem[]>([])

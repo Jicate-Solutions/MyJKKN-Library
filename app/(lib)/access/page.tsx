@@ -3,9 +3,9 @@
 /**
  * Staff Access — who may sign in to the library system and what they may do.
  *
- * Visible to admin and super_admin only; the API enforces the same rule, so
- * reaching this URL directly gains nothing. An admin sees only their own
- * institution's accounts and cannot grant super_admin or admin.
+ * Super admin only. The API enforces the same rule, so typing this URL gains
+ * nothing — an admin who tries lands on the "access restricted" card below.
+ * Running a library, even all of them, does not include deciding who else may.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'

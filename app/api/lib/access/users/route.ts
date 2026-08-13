@@ -4,15 +4,14 @@
  * GET  /api/lib/access/users            list staff accounts with their role
  * POST /api/lib/access/users            assign a role  { user_id, role }
  *
- * super_admin sees and manages every institution. admin manages only their own
- * institution, and cannot grant super_admin or admin.
+ * super_admin only. Handing out roles is not something an admin does, so the
+ * page, its sidebar link and these handlers all stop at the same rule.
  */
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import {
 	getCaller,
-	hasAtLeast,
 	canAssignRole,
 	resolveInstitutionScope,
 	ASSIGNABLE_ROLES,
@@ -24,8 +23,10 @@ export async function GET(request: Request) {
 		const { caller, error, status } = await getCaller(request)
 		if (!caller) return NextResponse.json({ error }, { status: status ?? 401 })
 
-		if (!hasAtLeast(caller, 'admin')) {
-			return NextResponse.json({ error: 'Only an admin or super admin can view staff access' }, { status: 403 })
+		// Granting library roles is a super admin job. An admin runs a library —
+		// or all of them — but does not decide who else may.
+		if (!caller.isSuperAdmin) {
+			return NextResponse.json({ error: 'Only a super admin can view staff access' }, { status: 403 })
 		}
 
 		const { searchParams } = new URL(request.url)
@@ -92,8 +93,8 @@ export async function POST(request: Request) {
 		const { caller, error, status } = await getCaller(request)
 		if (!caller) return NextResponse.json({ error }, { status: status ?? 401 })
 
-		if (!hasAtLeast(caller, 'admin')) {
-			return NextResponse.json({ error: 'Only an admin or super admin can assign roles' }, { status: 403 })
+		if (!caller.isSuperAdmin) {
+			return NextResponse.json({ error: 'Only a super admin can assign roles' }, { status: 403 })
 		}
 
 		const body = await request.json()

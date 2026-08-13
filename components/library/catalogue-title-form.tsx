@@ -1,22 +1,22 @@
 'use client'
 
 /**
- * The Add Title form as the Pharmacy accession register wants it.
+ * The Add Title form, as the accession register wants it. Every campus enters
+ * books this way.
  *
- * Kept separate from the registry page's default form so the other six colleges
- * keep the screen they already know — this file is only ever rendered for COP.
- *
- * The order follows the register itself: the number and the book, then who
- * published it, then what it physically is, then where it lives in the library.
- * A librarian copying from the register reads straight down and types straight
+ * The order follows the register itself: the number and the book, then what it
+ * physically is, then who published it, then where it lives in the library. A
+ * librarian copying from the register reads straight down and types straight
  * down.
+ *
+ * The only per-college part is the department list — see `departmentsFor`.
  */
 
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-	PHARMACY_DEPARTMENTS,
+	departmentsFor,
 	BOOK_TYPES,
 	LANGUAGES,
 	LENDABLE_OPTIONS,
@@ -25,7 +25,7 @@ import {
 	usesIssn,
 } from '@/lib/library/catalogue-options'
 
-export interface PharmacyFormFields {
+export interface TitleFormFields {
 	accession_number: string
 	accession_date: string
 	title: string
@@ -49,12 +49,14 @@ export interface PharmacyFormFields {
 	book_location: string
 }
 
-interface Props<T extends PharmacyFormFields> {
+interface Props<T extends TitleFormFields> {
 	form: T
 	setForm: React.Dispatch<React.SetStateAction<T>>
 	errors: Record<string, string>
 	/** Hidden while editing — an existing copy's number is changed on its own page. */
 	showCopySection: boolean
+	/** Decides which department list the form offers. */
+	institutionCode: string | null | undefined
 }
 
 function Required() {
@@ -73,10 +75,11 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 	)
 }
 
-export function PharmacyTitleForm<T extends PharmacyFormFields>({ form, setForm, errors, showCopySection }: Props<T>) {
-	const set = (patch: Partial<PharmacyFormFields>) => setForm(f => ({ ...f, ...patch }))
+export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, errors, showCopySection, institutionCode }: Props<T>) {
+	const set = (patch: Partial<TitleFormFields>) => setForm(f => ({ ...f, ...patch }))
+	const departments = departmentsFor(institutionCode)
 
-	const field = (name: keyof PharmacyFormFields, label: string, required: boolean, extra?: {
+	const field = (name: keyof TitleFormFields, label: string, required: boolean, extra?: {
 		placeholder?: string
 		type?: string
 		mono?: boolean
@@ -86,7 +89,7 @@ export function PharmacyTitleForm<T extends PharmacyFormFields>({ form, setForm,
 			<Input
 				type={extra?.type}
 				value={form[name] as string}
-				onChange={e => set({ [name]: e.target.value } as Partial<PharmacyFormFields>)}
+				onChange={e => set({ [name]: e.target.value } as Partial<TitleFormFields>)}
 				className={`${extra?.mono ? 'font-mono' : ''} ${errors[name as string] ? 'border-red-500' : ''}`}
 				placeholder={extra?.placeholder}
 			/>
@@ -228,14 +231,31 @@ export function PharmacyTitleForm<T extends PharmacyFormFields>({ form, setForm,
 			<Section title="Where It Belongs">
 				<div className="space-y-2">
 					<Label className="text-sm font-semibold">Department <Required /></Label>
-					<Select value={form.department} onValueChange={v => set({ department: v })}>
-						<SelectTrigger className={errors.department ? 'border-red-500' : ''}>
-							<SelectValue placeholder="Choose department" />
-						</SelectTrigger>
-						<SelectContent>
-							{PHARMACY_DEPARTMENTS.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
-						</SelectContent>
-					</Select>
+					{/* A college whose list we have picks from it; one whose list has
+					    not come in yet types the name. Offering another college's
+					    departments would be worse than offering none. */}
+					{departments.length > 0 ? (
+						<Select value={form.department} onValueChange={v => set({ department: v })}>
+							<SelectTrigger className={errors.department ? 'border-red-500' : ''}>
+								<SelectValue placeholder="Choose department" />
+							</SelectTrigger>
+							<SelectContent>
+								{departments.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+							</SelectContent>
+						</Select>
+					) : (
+						<>
+							<Input
+								value={form.department}
+								onChange={e => set({ department: e.target.value })}
+								className={errors.department ? 'border-red-500' : ''}
+								placeholder="Type the department name"
+							/>
+							<p className="text-xs text-muted-foreground">
+								Your college&apos;s department list is not set up yet, so type it for now.
+							</p>
+						</>
+					)}
 					{errors.department && <p className="text-xs text-red-500">{errors.department}</p>}
 				</div>
 				{field('book_location', 'Book Location', false, { placeholder: 'e.g. Beero 2 / Rack 3' })}

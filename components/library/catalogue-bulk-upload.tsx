@@ -21,7 +21,7 @@ import {
 	TEMPLATE_COLUMNS,
 	TEMPLATE_EXAMPLE,
 	BULK_ROW_LIMIT,
-	PHARMACY_DEPARTMENTS,
+	departmentsFor,
 	BOOK_TYPE_LABELS,
 	LANGUAGES,
 } from '@/lib/library/catalogue-options'
@@ -45,6 +45,8 @@ interface UploadResult {
 
 interface Props {
 	institutionId: string | null
+	/** Decides which departments the template lists and the sheet accepts. */
+	institutionCode: string | null | undefined
 	/** Called after a successful upload so the list behind the dialog refreshes. */
 	onUploaded: () => void
 	disabled?: boolean
@@ -65,7 +67,8 @@ function normaliseHeader(header: string): string {
 	return header.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
-export function CatalogueBulkUpload({ institutionId, onUploaded, disabled }: Props) {
+export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded, disabled }: Props) {
+	const departments = departmentsFor(institutionCode)
 	const { toast } = useToast()
 	const fileInput = useRef<HTMLInputElement>(null)
 	const [uploading, setUploading] = useState(false)
@@ -83,7 +86,13 @@ export function CatalogueBulkUpload({ institutionId, onUploaded, disabled }: Pro
 			['Column', 'Must fill?', 'What to write'],
 			...TEMPLATE_COLUMNS.map(c => [c.header, c.required ? 'Yes' : 'Optional', c.note ?? '']),
 			[],
-			['Departments', '', PHARMACY_DEPARTMENTS.join(', ')],
+			[
+				'Departments',
+				'',
+				departments.length > 0
+					? departments.join(', ')
+					: 'Your list is not set up yet — type the department name and it will be accepted',
+			],
 			['Book Types', '', BOOK_TYPE_LABELS.join(', ')],
 			['Languages', '', LANGUAGES.join(', ')],
 			[],

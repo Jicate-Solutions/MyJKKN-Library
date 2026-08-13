@@ -17,7 +17,7 @@ import { guardWrite } from '@/lib/auth/api-guard'
 import {
 	TEMPLATE_COLUMNS,
 	BULK_ROW_LIMIT,
-	PHARMACY_DEPARTMENTS,
+	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
@@ -66,7 +66,12 @@ function identityKey(row: IncomingRow): string {
  * Checks one row against the same rules the form uses.
  * Returns the error message, or null when the row is good.
  */
-function validateRow(row: IncomingRow, seen: Map<string, number>, rowNumber: number): string | null {
+function validateRow(
+	row: IncomingRow,
+	seen: Map<string, number>,
+	rowNumber: number,
+	institutionCode: string | null
+): string | null {
 	for (const column of TEMPLATE_COLUMNS) {
 		if (column.required && !text(row[column.key])) {
 			return `${column.header} is empty`
@@ -97,9 +102,11 @@ function validateRow(row: IncomingRow, seen: Map<string, number>, rowNumber: num
 		return 'Reference Only must be Lendable or Non-lendable'
 	}
 
+	// Each college has its own department list; one that has not given us a list
+	// yet accepts whatever is typed rather than rejecting every row.
 	const department = text(row.department)
-	if (!PHARMACY_DEPARTMENTS.some(d => d.toLowerCase() === department.toLowerCase())) {
-		return `Department "${department}" is not in the list`
+	if (!isValidDepartment(institutionCode, department)) {
+		return `Department "${department}" is not in your college's list`
 	}
 
 	// Two rows of the same sheet claiming one number — caught here rather than
@@ -136,6 +143,18 @@ export async function POST(request: Request) {
 		}
 
 		const supabase = getSupabaseServer()
+
+		// Which college is uploading, so the department column is checked against
+		// that college's list. Read from the database rather than trusted from the
+		// request — the caller could otherwise name a college whose list is looser.
+		const { data: institution } = await supabase
+			.from('institutions')
+			.select('institution_code')
+			.eq('id', institutionId)
+			.maybeSingle()
+
+		const institutionCode: string | null = institution?.institution_code ?? null
+
 		const failures: RowFailure[] = []
 		const seen = new Map<string, number>()
 		const valid: Array<{ row: number; data: IncomingRow }> = []
@@ -143,7 +162,7 @@ export async function POST(request: Request) {
 		rows.forEach((row, index) => {
 			// +2: the header is row 1, so the first data row is row 2 in Excel
 			const rowNumber = index + 2
-			const problem = validateRow(row, seen, rowNumber)
+			const problem = validateRow(row, seen, rowNumber, institutionCode)
 			if (problem) {
 				failures.push({ row: rowNumber, accession_number: text(row.accession_number), error: problem })
 			} else {

@@ -107,8 +107,9 @@ export async function guardWrite(
 	const scope = resolveInstitutionScope(caller, bodyInstitutionId ?? null)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
 
-	// A super admin must say which institution a new row belongs to
-	if (caller.isSuperAdmin && !scope.institutionId) {
+	// Anyone who spans institutions must say which one a new row belongs to —
+	// a super admin, or an admin with no college of their own.
+	if (!scope.institutionId && (caller.isSuperAdmin || caller.role === 'admin')) {
 		return deny('institution_id is required — select an institution first', 400)
 	}
 
@@ -132,7 +133,8 @@ export async function guardRecord(
 	const blocked = denyIfMemberBlocked(caller, request)
 	if (blocked) return blocked
 
-	if (caller.isSuperAdmin) {
+	// Spans every institution: a super admin, or an admin overseeing all colleges
+	if (caller.isSuperAdmin || (caller.role === 'admin' && !caller.institutionId)) {
 		noteIfImpersonated(caller, request, null)
 		return { ok: true, caller, institutionId: null }
 	}

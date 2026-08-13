@@ -2,9 +2,10 @@
  * Institutions the signed-in user may work in.
  *
  * This list drives the sidebar institution switcher, so it is the real limit on
- * what a librarian can reach: a super admin gets every institution, everyone
- * else gets exactly their own. Returning all of them here would let any user
- * switch into another campus, which is why the filter lives server-side.
+ * what a librarian can reach: a super admin gets every institution, as does an
+ * admin with no college of their own; everyone else gets exactly theirs.
+ * Returning all of them here would let any user switch into another campus,
+ * which is why the filter lives server-side.
  */
 
 import { NextResponse } from 'next/server'
@@ -26,11 +27,19 @@ export async function GET(request: Request) {
 			.eq('is_active', true)
 			.order('name')
 
-		if (!caller.isSuperAdmin) {
+		// An admin with no college of their own oversees all of them, so the
+		// switcher has to offer all of them — otherwise they sign in to an empty
+		// list and can reach nothing.
+		const spansAllInstitutions = caller.isSuperAdmin || caller.role === 'admin'
+
+		if (!spansAllInstitutions) {
 			if (!caller.institutionId) {
 				// Nothing to switch between — better an empty list than everyone's
 				return NextResponse.json([])
 			}
+			query = query.eq('id', caller.institutionId)
+		} else if (caller.institutionId) {
+			// An admin tied to one college still sees only that one
 			query = query.eq('id', caller.institutionId)
 		}
 

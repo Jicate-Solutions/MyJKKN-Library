@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibCatalogueRecord, LibResourceFormat } from '@/types/lib'
-import { PharmacyRegisterTable, type RegisterRow } from '@/components/library/pharmacy-register-table'
+import { AccessionRegisterTable, type RegisterRow } from '@/components/library/accession-register-table'
 import {
 	fetchCatalogueRecords,
 	fetchCatalogueById,
@@ -33,8 +33,8 @@ import {
 } from '@/services/library/lib-catalogue-service'
 import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
-import { PharmacyTitleForm } from '@/components/library/pharmacy-title-form'
-import { usesPharmacyRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor } from '@/lib/library/catalogue-options'
+import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -68,9 +68,9 @@ interface FormData {
 	price: string
 	is_reference_only: boolean
 	is_active: boolean
-	/** Pharmacy only — the number written in the book (see requiresAccession) */
+	/** The number written in the book (see requiresAccession) */
 	accession_number: string
-	/** Pharmacy only — the register fields, unused and unsent by other campuses */
+	/** Register fields, sent only when the register layout is in use */
 	accession_date: string
 	author: string
 	book_type: string
@@ -113,16 +113,16 @@ export default function RegistryPage() {
 	const { currentInstitutionCode } = useInstitution()
 	const { toast } = useToast()
 
-	// Pharmacy identifies every physical book by its accession number and wants it
-	// recorded the moment the book is entered, not on a second screen. Adding a
-	// title there therefore also creates the first copy. No other campus works
-	// this way, so no other campus sees this field.
-	const requiresAccession = usesPharmacyRegister(currentInstitutionCode)
+	// Every library identifies a physical book by the accession number written
+	// inside it, and wants it recorded the moment the book is entered rather than
+	// on a second screen. Adding a title therefore also records that copy.
+	const requiresAccession = usesAccessionRegister()
 
 	const [records, setRecords] = useState<LibCatalogueRecord[]>([])
-	/** Pharmacy only — the register, one row per accession number. */
+	/** The register — one row per accession number. */
 	const [registerRows, setRegisterRows] = useState<RegisterRow[]>([])
-	const [deleteTitle, setDeleteTitle] = useState<{ id: string; title: string; copies: number } | null>(null)
+	/** The one physical book waiting on a delete confirmation. */
+	const [deleteCopy, setDeleteCopy] = useState<RegisterRow | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [search, setSearch] = useState('')
 	const [formatFilter, setFormatFilter] = useState<string>('all')
@@ -139,8 +139,8 @@ export default function RegistryPage() {
 		if (!isReady) return
 		try {
 			setLoading(true)
-			// Pharmacy reads the register — one row per physical book. Everyone
-			// else reads the catalogue — one row per title.
+			// The register is one row per physical book. The plain catalogue list
+			// is kept behind the same flag for the fallback path below.
 			const url = appendToUrl(requiresAccession ? '/api/lib/catalogue/register' : '/api/lib/catalogue')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
@@ -384,44 +384,46 @@ export default function RegistryPage() {
 		}
 	}
 
-	const deleteTitleAndCopies = async () => {
-		if (!deleteTitle) return
+	const removeCopy = async () => {
+		if (!deleteCopy) return
 		try {
-			// Not the plain catalogue DELETE: that one refuses the moment a copy
-			// exists. This removes the book with its copies and settled history,
-			// and refuses only when a copy is out or money is owed on it.
-			const res = await fetch(`/api/lib/catalogue/${deleteTitle.id}/remove`, { method: 'DELETE' })
+			// One accession number, not the title. The other copies of the same
+			// book are separate rows and are left where they are.
+			const res = await fetch(`/api/lib/items/${deleteCopy.item_id}/remove`, { method: 'DELETE' })
 			const result = await res.json()
 			if (!res.ok) throw new Error(result.error || 'Delete failed')
 
+			// Just the fact and the number. The counts on screen come back
+			// corrected from the refresh below, without being announced.
 			toast({
-				title: `✅ Removed — ${result.copies_removed} ${result.copies_removed === 1 ? 'copy' : 'copies'}`,
+				title: `✅ Book removed — Accession ${result.accession_number}`,
 				className: 'bg-green-50 border-green-200 text-green-800',
 			})
 			await fetchData()
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
 		} finally {
-			setDeleteTitle(null)
+			setDeleteCopy(null)
 		}
 	}
 
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
-			{/* Pharmacy reads its accession register — a line per physical book,
-			    accession number first. Every other campus keeps the title list
-			    below, unchanged. */}
+			{/* The accession register — a line per physical book, accession number
+			    first. The title list below is the fallback for any campus not on
+			    the register layout. */}
 			{requiresAccession ? (
-				<PharmacyRegisterTable
+				<AccessionRegisterTable
 					rows={registerRows}
 					loading={loading}
 					onRefresh={fetchData}
 					onEdit={editTitleById}
-					onDelete={(id, title, copies) => setDeleteTitle({ id, title, copies })}
+					onDelete={row => setDeleteCopy(row)}
 					headerActions={
 						<>
 							<CatalogueBulkUpload
 								institutionId={getInstitutionIdForCreate() ?? institutionId}
+								institutionCode={currentInstitutionCode}
 								onUploaded={fetchData}
 								disabled={mustSelectInstitution}
 							/>
@@ -718,11 +720,12 @@ export default function RegistryPage() {
 						    it gets its own layout. Every other campus keeps the screen
 						    below, untouched. */}
 						{requiresAccession ? (
-							<PharmacyTitleForm
+							<CatalogueTitleForm
 								form={form}
 								setForm={setForm}
 								errors={errors}
 								showCopySection={!editingItem}
+								institutionCode={currentInstitutionCode}
 							/>
 						) : (
 						<>
@@ -847,25 +850,24 @@ export default function RegistryPage() {
 				</SheetContent>
 			</Sheet>
 
-			{/* Deleting from the register takes the book and every copy of it, so
-			    the count is spelled out rather than left to be discovered */}
-			<AlertDialog open={!!deleteTitle} onOpenChange={o => { if (!o) setDeleteTitle(null) }}>
+			{/* One row, one book. The accession number is the only detail kept —
+			    with several copies of a title the rows read alike, and that number
+			    is what tells the librarian which one they are about to remove.
+			    Copy counts are left out and refresh by themselves afterwards. */}
+			<AlertDialog open={!!deleteCopy} onOpenChange={o => { if (!o) setDeleteCopy(null) }}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Remove from the register</AlertDialogTitle>
+						<AlertDialogTitle>Delete this book</AlertDialogTitle>
 						<AlertDialogDescription>
-							<strong>{deleteTitle?.title}</strong>
-							{deleteTitle && deleteTitle.copies > 1
-								? ` and all ${deleteTitle.copies} of its copies will be removed, along with every accession number they hold`
-								: ' will be removed, along with its accession number'}
-							{' '}and any past loan records. This cannot be undone.
-							{' '}A copy that is out with a member, or has an unpaid charge on it, will stop the removal.
+							<strong>{deleteCopy?.title}</strong> — Accession <strong>{deleteCopy?.accession_number}</strong>
+							{' '}will be removed from the register. This cannot be undone.
+							{' '}If it is out with a member, or has an unpaid charge on it, the removal will stop.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction onClick={deleteTitleAndCopies} className="bg-red-600 hover:bg-red-700">
-							{deleteTitle && deleteTitle.copies > 1 ? `Remove all ${deleteTitle.copies}` : 'Remove'}
+						<AlertDialogAction onClick={removeCopy} className="bg-red-600 hover:bg-red-700">
+							Delete
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

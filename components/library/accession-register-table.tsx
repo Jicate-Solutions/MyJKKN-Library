@@ -54,13 +54,13 @@ interface Props {
 	onRefresh: () => void
 	/** Opens the title behind this copy for editing. */
 	onEdit: (catalogueRecordId: string) => void
-	/** Removes the title and every copy of it — the count is shown in the menu. */
-	onDelete: (catalogueRecordId: string, title: string, totalCopies: number) => void
+	/** Removes this one physical book. Its other copies are separate rows and stay. */
+	onDelete: (row: RegisterRow) => void
 	/** Add Title and Bulk Upload, owned by the page. */
 	headerActions: React.ReactNode
 }
 
-export function PharmacyRegisterTable({ rows, loading, onRefresh, onEdit, onDelete, headerActions }: Props) {
+export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDelete, headerActions }: Props) {
 	const [search, setSearch] = useState('')
 	const [typeFilter, setTypeFilter] = useState('all')
 	const [currentPage, setCurrentPage] = useState(1)
@@ -273,14 +273,14 @@ export function PharmacyRegisterTable({ rows, loading, onRefresh, onEdit, onDele
 																<Edit className="h-4 w-4 mr-2" />Edit book details
 															</DropdownMenuItem>
 															<DropdownMenuSeparator />
-															{/* The count is in the label because deleting from one
-															    copy's line removes every copy of that book */}
+															{/* A row is one book, so the label says exactly that.
+															    Copy counts belong on the shelf, not in a menu. */}
 															<DropdownMenuItem
 																className="text-red-600 focus:text-red-600 focus:bg-red-50"
-																onClick={() => r.catalogue_record_id && onDelete(r.catalogue_record_id, r.title, r.total_copies)}
+																onClick={() => onDelete(r)}
 															>
 																<Trash2 className="h-4 w-4 mr-2" />
-																Delete {r.total_copies > 1 ? `all ${r.total_copies} copies` : 'this book'}
+																Delete this book
 															</DropdownMenuItem>
 														</DropdownMenuContent>
 													</DropdownMenu>
@@ -332,10 +332,10 @@ export function PharmacyRegisterTable({ rows, loading, onRefresh, onEdit, onDele
 												<DropdownMenuSeparator />
 												<DropdownMenuItem
 													className="text-red-600 focus:text-red-600 focus:bg-red-50"
-													onClick={() => r.catalogue_record_id && onDelete(r.catalogue_record_id, r.title, r.total_copies)}
+													onClick={() => onDelete(r)}
 												>
 													<Trash2 className="h-4 w-4 mr-2" />
-													Delete {r.total_copies > 1 ? `all ${r.total_copies} copies` : 'this book'}
+													Delete this book
 												</DropdownMenuItem>
 											</DropdownMenuContent>
 										</DropdownMenu>

@@ -1,35 +1,151 @@
 /**
- * The choices behind the Pharmacy accession register.
+ * The choices behind the accession register.
  *
  * The Add Title form and the bulk upload sheet both read from here, so a value
- * that is valid when typed by hand is valid when uploaded, and the template
- * can never drift from what the form accepts.
+ * that is valid when typed by hand is valid when uploaded, and the template can
+ * never drift from what the form accepts.
  *
- * Scoped to Pharmacy (COP) on purpose — every college names its departments
- * differently, and the database deliberately has no CHECK constraint on these
- * columns so the other six are free to use their own lists later.
+ * Entering a book works the same way on every campus. Only the department list
+ * differs, which is why it is keyed by institution code below and why the
+ * database deliberately has no CHECK constraint on the column — a college whose
+ * list is not here yet types its department instead of picking one, rather than
+ * being blocked or offered another college's departments.
  */
 
-/** Campuses that use the Pharmacy accession register layout. */
+/** Pharmacy, which also runs its own gate-entry screen. */
 export const PHARMACY_CODE = 'COP'
 
 export function usesPharmacyRegister(institutionCode: string | null | undefined): boolean {
 	return institutionCode === PHARMACY_CODE
 }
 
-/** The eight departments a Pharmacy book can belong to. */
-export const PHARMACY_DEPARTMENTS = [
-	'Pharmaceutics',
-	'Pharmaceutical Chemistry',
-	'Pharmaceutical Analysis',
-	'Pharmacology',
-	'Pharmacognosy',
-	'Pharmacy Practice',
-	'Regulatory Affairs',
-	'PHARMD',
-] as const
+/** Every campus enters books through the accession register. */
+export function usesAccessionRegister(): boolean {
+	return true
+}
 
-export type PharmacyDepartment = (typeof PHARMACY_DEPARTMENTS)[number]
+/**
+ * Departments by institution code, as each college gave them.
+ *
+ * Codes are the ones in this library's own `institutions.institution_code`:
+ * AHS, CAS, CET, CNR, COE, COP, DCH. They are not the codes the COE project's
+ * 20260106 migration uses — Nursing is CNR here and CON there, Dental is DCH
+ * here and COD there — so read them from this database, never from that file.
+ *
+ * Arts & Science is one library under `CAS` but two colleges on the ground, so
+ * its departments carry
+ * "Aided" or "Self" — Commerce, English, Mathematics and Tamil exist on both
+ * sides and would otherwise be indistinguishable in a report.
+ */
+export const DEPARTMENTS_BY_INSTITUTION: Record<string, readonly string[]> = {
+	// Pharmacy
+	COP: [
+		'Pharmaceutics',
+		'Pharmaceutical Chemistry',
+		'Pharmaceutical Analysis',
+		'Pharmacology',
+		'Pharmacognosy',
+		'Pharmacy Practice',
+		'Regulatory Affairs',
+		'PHARMD',
+	],
+	// Allied Health Sciences
+	AHS: [
+		'Department of Allied (UG)',
+	],
+	// Arts & Science — aided side, then self-financing side
+	CAS: [
+		'Aided — Botany',
+		'Aided — Chemistry',
+		'Aided — Chemistry (PG)',
+		'Aided — Commerce',
+		'Aided — Commerce (PG)',
+		'Aided — Economics',
+		'Aided — English',
+		'Aided — Geography',
+		'Aided — History',
+		'Aided — History (PG)',
+		'Aided — MASTER OF COMPUTER APPLICATIONS',
+		'Aided — Mathematics',
+		'Aided — Tamil',
+		'Aided — Zoology',
+		'Aided — Zoology (PG)',
+		'Self — Commerce',
+		'Self — Commerce (PG)',
+		'Self — Computer Science',
+		'Self — Computer Science (PG)',
+		'Self — Department of Clinical and Lab Technology',
+		'Self — English',
+		'Self — English (PG)',
+		'Self — Mathematics',
+		'Self — Mathematics (PG)',
+		'Self — Microbiology',
+		'Self — Physics',
+		'Self — Tamil',
+		'Self — Textile Fashion Designing',
+		'Self — Visual Communication',
+	],
+	// Education
+	COE: [
+		'Bachelor of Education',
+		'Pedagogy of History',
+	],
+	// Engineering & Technology
+	CET: [
+		'Computer Science and Engineering',
+		'Computer Science and Engineering (PG)',
+		'Electrical and Electronics Engineering',
+		'Electronics and Communication Engineering',
+		'Information Technology',
+		'Master of Business Administration (PG)',
+		'Mechanical Engineering',
+		'Science and Humanities',
+	],
+	// Nursing
+	CNR: [
+		'Adult Health Nursing',
+		'Child Health Nursing',
+		'Community Health Nursing',
+		'Department of Nursing (UG)',
+		'Medical Surgical Nursing',
+		'Mental Health Nursing',
+		'Nutrition and Dietetics',
+		'Obstetrics and Gynaecological Nursing',
+	],
+	// Dental
+	DCH: [
+		'Conservative and Endodontics',
+		'Department of Dentistry (UG)',
+		'Oral and Maxillofacial Surgery',
+		'Oral Medicine and Radiology',
+		'Oral Pathology and Dental Anatomy',
+		'Orthodontics',
+		'Pediatrics',
+		'Periodontics',
+		'Prosthodontics',
+		'Public Health Dentistry',
+	],
+}
+
+/** Kept for the Pharmacy-specific callers that predate the per-college table. */
+export const PHARMACY_DEPARTMENTS = DEPARTMENTS_BY_INSTITUTION.COP
+
+/**
+ * The departments this college picks from. Empty when the college has not given
+ * a list yet — the form then takes typed text, which is
+ * better than a dropdown holding somebody else's departments.
+ */
+export function departmentsFor(institutionCode: string | null | undefined): readonly string[] {
+	if (!institutionCode) return []
+	return DEPARTMENTS_BY_INSTITUTION[institutionCode.toUpperCase()] ?? []
+}
+
+/** Whether a typed or uploaded department is acceptable for this college. */
+export function isValidDepartment(institutionCode: string | null | undefined, department: string): boolean {
+	const list = departmentsFor(institutionCode)
+	if (list.length === 0) return department.trim().length > 0
+	return list.some(d => d.toLowerCase() === department.trim().toLowerCase())
+}
 
 /**
  * What the librarian calls the material, and the `resource_format` each one
@@ -134,7 +250,9 @@ export const TEMPLATE_COLUMNS: TemplateColumn[] = [
 	{ key: 'classification_number', header: 'Classification Number', required: false, note: 'Optional' },
 	{ key: 'reference_only', header: 'Reference Only', required: true, note: 'Lendable / Non-lendable' },
 	{ key: 'accession_date', header: 'Date of Adding', required: true, note: 'YYYY-MM-DD, e.g. 2026-08-12' },
-	{ key: 'department', header: 'Department', required: true, note: PHARMACY_DEPARTMENTS.join(' / ') },
+	// The note is filled in per college when the template is built — each one
+	// has its own list, and printing another college's here would invite it
+	{ key: 'department', header: 'Department', required: true, note: 'One of your college\'s departments' },
 	{ key: 'book_location', header: 'Book Location', required: false, note: 'Optional — beero / rack / shelf' },
 ]
 
