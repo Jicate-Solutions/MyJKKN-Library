@@ -43,23 +43,14 @@ const text = (value: unknown): string => (value ?? '').toString().trim()
 /**
  * Which rows of this sheet describe the same book.
  *
- * Mirrors the order `findExistingTitle` matches in — standard number first,
- * then the six descriptive fields — so rows the database would group are
- * grouped here too, before any of them is written.
+ * Uses the same rule `findExistingTitle` uses — title and author, read past
+ * capitals and extra spaces — so rows the database would group are grouped here
+ * too, before any of them is written. ISBN takes no part: two rows sharing one
+ * while naming different books are two books.
  */
 function identityKey(row: IncomingRow): string {
-	const isbn = text(row.isbn).replace(/[^0-9xX]/g, '').toLowerCase()
-	if (isbn) return `isbn:${isbn}`
-
-	const issn = text(row.issn).replace(/[^0-9xX]/g, '').toLowerCase()
-	if (issn) return `issn:${issn}`
-
 	const soft = (value: unknown) => text(value).toLowerCase().replace(/\s+/g, ' ')
-	return [
-		'book',
-		soft(row.title), soft(row.author), soft(row.edition),
-		soft(row.publisher_name), soft(row.publisher_place), soft(row.publication_year),
-	].join('|')
+	return `${soft(row.title)}|${soft(row.author)}`
 }
 
 /**

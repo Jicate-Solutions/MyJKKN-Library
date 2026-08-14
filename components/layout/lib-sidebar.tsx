@@ -54,18 +54,22 @@ import { ChevronRight } from 'lucide-react'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { isMemberAllowedPage } from '@/lib/auth/member-access'
 
-interface NavItem {
+export interface NavItem {
 	title: string
 	url: string
 	icon: React.ElementType
 }
 
-interface NavGroup {
+export interface NavGroup {
 	label: string
 	items: NavItem[]
 }
 
-const navGroups: NavGroup[] = [
+/**
+ * The menu. Exported because the mobile bottom navbar shows the same thing —
+ * two copies of this list would drift the first time a page is added.
+ */
+export const navGroups: NavGroup[] = [
 	{
 		label: 'Overview',
 		items: [
@@ -125,30 +129,35 @@ const navGroups: NavGroup[] = [
 	},
 ]
 
+/**
+ * What this person may be shown.
+ *
+ * A member sees Circulation and OPAC Search only, and handing out roles is a
+ * super admin job — the pages and their APIs refuse everyone else anyway, so
+ * this only keeps the menu honest. Shared with the mobile bottom navbar so the
+ * two menus can never disagree about who sees what.
+ */
+export function visibleNavGroups(role: string | null | undefined, isMember: boolean): NavGroup[] {
+	const withoutRestricted = navGroups
+		.map(group => ({
+			...group,
+			items: group.items.filter(i => i.url !== '/access' || role === 'super_admin'),
+		}))
+		.filter(group => group.items.length > 0)
+
+	if (!isMember) return withoutRestricted
+	return withoutRestricted
+		.map(group => ({ ...group, items: group.items.filter(i => isMemberAllowedPage(i.url)) }))
+		.filter(group => group.items.length > 0)
+}
+
 export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const pathname = usePathname()
 	const { toggleSidebar, state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
 	const { isMember, role } = useLibraryRole()
 
-	// A member sees Circulation and OPAC Search only. The API refuses the rest
-	// as well, so this just keeps the menu honest about what they can open.
-	const visibleGroups = React.useMemo(() => {
-		// Handing out roles is a super admin job, so nobody else is shown the
-		// door to it — the page and its API refuse them anyway, but a menu item
-		// that always says "access restricted" is just noise.
-		const withoutRestricted = navGroups
-			.map(group => ({
-				...group,
-				items: group.items.filter(i => i.url !== '/access' || role === 'super_admin'),
-			}))
-			.filter(group => group.items.length > 0)
-
-		if (!isMember) return withoutRestricted
-		return withoutRestricted
-			.map(group => ({ ...group, items: group.items.filter(i => isMemberAllowedPage(i.url)) }))
-			.filter(group => group.items.length > 0)
-	}, [isMember, role])
+	const visibleGroups = React.useMemo(() => visibleNavGroups(role, isMember), [isMember, role])
 
 	const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>(() => {
 		const init: Record<string, boolean> = {}

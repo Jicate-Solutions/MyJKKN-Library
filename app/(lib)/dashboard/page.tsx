@@ -39,8 +39,8 @@ export default function LibDashboard() {
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
 			{/* Page Header */}
-			<div className="flex items-center justify-between pt-1">
-				<div>
+			<div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+				<div className="min-w-0">
 					<h1 className="text-lg font-semibold">Library Dashboard</h1>
 					<p className="text-xs text-muted-foreground">JKKN Learning Commons — at a glance</p>
 				</div>

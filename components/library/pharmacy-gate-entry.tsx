@@ -260,18 +260,18 @@ export function PharmacyGateEntry() {
 										onChange={e => setBarcode(e.target.value)}
 										onKeyDown={e => { if (e.key === 'Enter') handleScan() }}
 										disabled={scanning}
-										className="h-11 text-base"
+										className="h-11 text-base min-w-0"
 									/>
 									<Button
 										onClick={handleScan}
 										disabled={scanning || !barcode.trim()}
-										className="h-11 px-6 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
+										className="h-11 px-4 sm:px-6 shrink-0 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
 									>
 										{scanning ? 'Working...' : 'Record'}
 									</Button>
 								</div>
 							) : (
-								<div className="flex items-center gap-3 text-sm text-muted-foreground py-2">
+								<div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground py-2">
 									<CalendarDays className="h-5 w-5 flex-shrink-0" />
 									<span>
 										You are looking at an older day&apos;s register. Go back to today to scan cards.
@@ -349,9 +349,9 @@ export function PharmacyGateEntry() {
 									value={viewDate}
 									max={today}
 									onChange={e => setViewDate(e.target.value || today)}
-									className="h-8 w-[150px] text-sm"
+									className="h-8 w-[150px] shrink-0 text-sm"
 								/>
-								<div className="relative w-[200px]">
+								<div className="relative w-full sm:w-[200px]">
 									<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 									<Input
 										placeholder="Name or ID"

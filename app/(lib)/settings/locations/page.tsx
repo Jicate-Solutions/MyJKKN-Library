@@ -170,14 +170,14 @@ export default function LocationsPage() {
 		<div className="flex flex-1 flex-col gap-4 min-h-0">
 			<Card className="flex-1 flex flex-col min-h-0">
 				<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
-					<div className="flex items-center justify-between">
-						<div>
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<div className="min-w-0">
 							<h2 className="text-base font-semibold font-heading">Shelf Locations</h2>
 							<p className="text-xs text-muted-foreground">
 								{locations.length} shelves · a shelf marked reference never lets its books out
 							</p>
 						</div>
-						<div className="flex items-center gap-2">
+						<div className="flex items-center gap-2 shrink-0">
 							<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
 								<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 							</Button>

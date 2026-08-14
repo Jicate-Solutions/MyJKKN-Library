@@ -282,3 +282,25 @@ export const TEMPLATE_EXAMPLE: Record<string, string> = {
 
 /** Rows above this are rejected outright — a 12,000-row paste is a KOHA import, not a desk entry. */
 export const BULK_ROW_LIMIT = 1000
+
+/**
+ * The column that makes bulk edit possible: the id the database gave this copy
+ * when it was accessioned.
+ *
+ * Everything else in the sheet can be retyped — this is what says *which* book
+ * the retyped line belongs to. Without it an edited accession number would read
+ * as a new book rather than a correction.
+ */
+export const EDIT_ID_COLUMN: TemplateColumn = {
+	key: 'id',
+	header: 'Book ID',
+	required: true,
+	note: 'Given by the system. Do not change or delete it — it is how the edit finds the book.',
+}
+
+/**
+ * Higher than the upload limit because this sheet is not typed, it is the
+ * library's own register coming back. A college with 8,000 books must be able
+ * to download it, fix one column and send it back in one go.
+ */
+export const BULK_EDIT_ROW_LIMIT = 10000

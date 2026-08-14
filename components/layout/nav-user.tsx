@@ -153,7 +153,7 @@ export function NavUser({ variant = "compact" }: NavUserProps) {
           </button>
         </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[320px] rounded-2xl p-2"
+            className="w-[calc(100vw-1.5rem)] max-w-[320px] sm:w-[320px] rounded-2xl p-2"
             side={isMobile ? "bottom" : "bottom"}
             align="end"
             sideOffset={4}
@@ -332,7 +332,7 @@ export function NavUser({ variant = "compact" }: NavUserProps) {
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[320px] rounded-2xl p-2"
+            className="w-[calc(100vw-1.5rem)] max-w-[320px] sm:w-[320px] rounded-2xl p-2"
             side={isMobile ? "bottom" : "right"}
             align="end"
             sideOffset={4}

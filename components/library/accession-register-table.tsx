@@ -159,15 +159,15 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 
 				<Card className="flex-1 flex flex-col min-h-0">
 					<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold">Accession Register</h2>
 								<p className="text-xs text-muted-foreground">
 									{filtered.length} book{filtered.length !== 1 ? 's' : ''}
 									{filtered.length !== rows.length && ` of ${rows.length}`}
 								</p>
 							</div>
-							<div className="flex items-center gap-1.5">{headerActions}</div>
+							<div className="flex items-center gap-1.5 shrink-0">{headerActions}</div>
 						</div>
 						<div className="flex items-center gap-2 flex-wrap mt-3">
 							<Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setCurrentPage(1) }}>
@@ -355,7 +355,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 						</div>
 
 						{/* Pagination */}
-						<div className="flex items-center justify-between pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
+						<div className="flex flex-wrap items-center justify-between gap-2 pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>

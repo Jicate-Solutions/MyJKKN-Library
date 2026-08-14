@@ -175,14 +175,14 @@ export default function LibrarySettingsPage() {
 
 	return (
 		<div className="flex flex-1 flex-col gap-4 overflow-y-auto">
-			<div className="flex items-center justify-between flex-shrink-0">
-				<div>
+			<div className="flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
+				<div className="min-w-0">
 					<h2 className="text-base font-semibold font-heading">Library Rules</h2>
 					<p className="text-xs text-muted-foreground">
 						These apply to this campus only — no other college is affected.
 					</p>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex items-center gap-2 shrink-0">
 					<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
 						<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 					</Button>

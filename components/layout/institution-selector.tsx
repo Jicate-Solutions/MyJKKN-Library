@@ -164,7 +164,7 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 									"text-white hover:text-white",
 									"shadow-sm hover:shadow-md"
 								)
-							: "w-[280px] justify-between",
+							: "w-full max-w-[280px] justify-between",
 						className
 					)}
 					disabled={isLoading}
@@ -194,14 +194,14 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 								<Sparkles className={cn(isCompact ? "h-3.5 w-3.5" : "h-4 w-4", "shrink-0 text-amber-400")} />
 							</>
 						)}
-						<span className={cn("truncate", isCompact && "max-w-[100px]")}>{displayText}</span>
+						<span className={cn("truncate", isCompact && "max-w-[72px] sm:max-w-[100px]")}>{displayText}</span>
 					</div>
 					<ChevronsUpDown className={cn(isCompact ? "h-3.5 w-3.5" : "h-4 w-4", "shrink-0 opacity-60 group-hover:opacity-100 transition-opacity")} />
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent
 				className={cn(
-					"w-[360px] p-0 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+					"w-[calc(100vw-1.5rem)] max-w-[360px] sm:w-[360px] p-0 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
 				)}
 				align={isCompact ? "end" : "start"}
 				sideOffset={8}

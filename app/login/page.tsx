@@ -5,9 +5,7 @@ import Image from 'next/image';
 import { useAuth } from '@/lib/auth/auth-context-parent';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Info, Users as UsersIcon, Shield, Lock, ArrowRight, CheckCircle, Crown, Mail, ArrowLeft, RefreshCw } from 'lucide-react';
+import { Info, Users as UsersIcon, Shield, Lock, ArrowRight, CheckCircle, Crown } from 'lucide-react';
 import {
   Card,
   CardContent,
@@ -25,10 +23,6 @@ function LoginContent() {
   const [isHovered, setIsHovered] = useState(false);
   const [showFeatures, setShowFeatures] = useState(false);
   const [currentYear, setCurrentYear] = useState<number>(new Date().getFullYear());
-  const [showEmailForm, setShowEmailForm] = useState(false);
-  const [email, setEmail] = useState('');
-  const [emailError, setEmailError] = useState<string | null>(null);
-  const [isEmailLoading, setIsEmailLoading] = useState(false);
 
   // Check if we're processing OAuth callback (token in URL)
   const hasTokenInUrl = searchParams.get('token') !== null;
@@ -97,40 +91,6 @@ function LoginContent() {
     setFormError(null);
     const redirectParam = searchParams.get('redirect');
     loginWithGoogle(redirectParam || undefined);
-  };
-
-  const handleEmailSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setEmailError(null);
-    setIsEmailLoading(true);
-
-    try {
-      const response = await fetch('/api/auth/send-verification', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email: email.toLowerCase() }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to send verification code');
-      }
-
-      // Redirect to verification page
-      router.push(`/verify-email?email=${encodeURIComponent(email.toLowerCase())}`);
-    } catch (err) {
-      setEmailError(err instanceof Error ? err.message : 'Failed to send verification code');
-    } finally {
-      setIsEmailLoading(false);
-    }
-  };
-
-  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setEmail(e.target.value);
-    setEmailError(null);
   };
 
   // Don't show loading screen if user is already authenticated
@@ -218,7 +178,7 @@ function LoginContent() {
                 <Crown className='h-8 w-8 text-green-600 dark:text-green-400 drop-shadow-lg' />
               </div>
               
-              {/* JKKN | COE Text */}
+              {/* JKKN Text */}
               <div className='text-4xl lg:text-5xl font-extrabold tracking-widest text-green-600 dark:text-green-400 drop-shadow-lg relative z-10'>
                 JKKN 
               </div>
@@ -238,7 +198,7 @@ function LoginContent() {
                 Educational Institution
               </h1>
               <p className='text-lg text-slate-600 dark:text-slate-300 font-medium'>
-                Controller of Examination Portal
+                Library Management Portal
               </p>
             </div>
           </div>
@@ -291,11 +251,11 @@ function LoginContent() {
                 Welcome Back
               </CardTitle>
               <CardDescription className='text-slate-600 dark:text-slate-400 text-base'>
-                Sign in to your JKKN | COE Portal account
+                Sign in to your JKKN Library account
           </CardDescription>
         </CardHeader>
             
-            <CardContent className='space-y-6 px-8 pb-8 relative z-10'>
+            <CardContent className='space-y-6 px-5 sm:px-8 pb-8 relative z-10'>
           {(error || formError) && (
                 <div className='rounded-xl bg-red-50 dark:bg-red-900/20 p-4 border border-red-200 dark:border-red-800 animate-in slide-in-from-top-2 duration-300'>
               <div className='flex items-start gap-3'>
@@ -314,7 +274,7 @@ function LoginContent() {
             disabled={isLoading}
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
-                className='w-full h-12 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white border-0 rounded-xl font-semibold text-base shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden'
+                className='w-full h-12 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white border-0 rounded-xl font-semibold text-sm sm:text-base shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden'
             size='lg'
           >
                 {/* Button texture overlay */}
@@ -345,92 +305,6 @@ function LoginContent() {
                   {isHovered && <ArrowRight className='h-4 w-4 transition-transform duration-200' />}
                 </div>
           </Button>
-
-          {/* Divider */}
-          <div className='relative my-6'>
-            <div className='absolute inset-0 flex items-center'>
-              <div className='w-full border-t border-slate-200 dark:border-slate-700'></div>
-            </div>
-            <div className='relative flex justify-center text-sm'>
-              <span className='px-4 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400'>or</span>
-            </div>
-          </div>
-
-          {/* Email Login Section */}
-          {!showEmailForm ? (
-            <Button
-              type='button'
-              onClick={() => setShowEmailForm(true)}
-              variant='outline'
-              className='w-full h-12 border-2 border-slate-200 dark:border-slate-700 hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-xl font-semibold text-base transition-all duration-300'
-              size='lg'
-            >
-              <Mail className='mr-3 h-5 w-5' />
-              Continue with Email
-            </Button>
-          ) : (
-            <div className='space-y-4'>
-              <div className='flex items-center justify-between mb-4'>
-                <h3 className='text-lg font-semibold text-slate-800 dark:text-white'>Sign in with Email</h3>
-                <Button
-                  type='button'
-                  variant='ghost'
-                  size='sm'
-                  onClick={() => {
-                    setShowEmailForm(false);
-                    setEmail('');
-                    setEmailError(null);
-                  }}
-                  className='text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                >
-                  <ArrowLeft className='h-4 w-4 mr-1' />
-                  Back
-                </Button>
-              </div>
-
-              <form onSubmit={handleEmailSubmit} className='space-y-4'>
-                <div className='space-y-2'>
-                  <Label htmlFor='email' className='text-sm font-semibold text-slate-700 dark:text-slate-300'>
-                    Email Address
-                  </Label>
-                  <Input
-                    id='email'
-                    type='email'
-                    value={email}
-                    onChange={handleEmailChange}
-                    placeholder='Enter your email address'
-                    className='h-12 text-base'
-                    required
-                    disabled={isEmailLoading}
-                  />
-                  {emailError && (
-                    <div className='flex items-center gap-2 text-sm text-red-600 dark:text-red-400'>
-                      <Info className='h-4 w-4' />
-                      {emailError}
-                    </div>
-                  )}
-                </div>
-
-                <Button
-                  type='submit'
-                  disabled={isEmailLoading || !email.trim()}
-                  className='w-full h-12 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white border-0 rounded-xl font-semibold text-base shadow-lg hover:shadow-xl transition-all duration-300'
-                >
-                  {isEmailLoading ? (
-                    <>
-                      <RefreshCw className='mr-2 h-4 w-4 animate-spin' />
-                      Sending Code...
-                    </>
-                  ) : (
-                    <>
-                      <Mail className='mr-2 h-4 w-4' />
-                      Send Verification Code
-                    </>
-                  )}
-                </Button>
-              </form>
-            </div>
-          )}
 
           {/* Security Note */}
           <div className='text-center space-y-2'>

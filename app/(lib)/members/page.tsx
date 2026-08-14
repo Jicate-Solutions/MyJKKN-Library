@@ -326,12 +326,12 @@ export default function MembersPage() {
 				<Card className="flex-1 flex flex-col min-h-0">
 					<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
 						{/* Row 1: Title + Actions */}
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold font-heading">Knowledge Community Members</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} member{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
-							<div className="flex items-center gap-1.5">
+							<div className="flex items-center gap-1.5 shrink-0">
 								<Button className="h-8 text-sm px-4 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900 focus-ring" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Member</span>
@@ -509,7 +509,7 @@ export default function MembersPage() {
 						</div>
 
 						{/* Pagination */}
-						<div className="flex items-center justify-between pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
+						<div className="flex flex-wrap items-center justify-between gap-2 pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>

@@ -108,7 +108,7 @@ export function MemberProfileCell({
 	if (loading) {
 		return (
 			<div className="flex items-center gap-2.5">
-				<Skeleton className="h-8 w-8 rounded-full" />
+				<Skeleton className="h-8 w-8 rounded-full shrink-0" />
 				<div className="space-y-1">
 					<Skeleton className="h-3.5 w-24" />
 					<Skeleton className="h-3 w-16" />
@@ -121,7 +121,7 @@ export function MemberProfileCell({
 		const diceBearUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(profile.name)}&backgroundColor=059669&textColor=ffffff&fontSize=40`
 		return (
 			<div className="flex items-center gap-2.5">
-				<Avatar className="h-8 w-8">
+				<Avatar className="h-8 w-8 shrink-0">
 					<AvatarImage src={profile.photoUrl || diceBearUrl} alt={profile.name} />
 					<AvatarFallback className="text-xs bg-blue-100 text-blue-700">
 						{getInitials(profile.name)}
@@ -141,7 +141,7 @@ export function MemberProfileCell({
 	const diceBearUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}&backgroundColor=6b7280&textColor=ffffff&fontSize=40`
 	return (
 		<div className="flex items-center gap-2.5">
-			<Avatar className="h-8 w-8">
+			<Avatar className="h-8 w-8 shrink-0">
 				<AvatarImage src={diceBearUrl} alt={displayName} />
 				<AvatarFallback className="text-xs">{getInitials(displayName)}</AvatarFallback>
 			</Avatar>

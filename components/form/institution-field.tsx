@@ -219,7 +219,7 @@ export const InstitutionFieldCompact = memo(function InstitutionFieldCompact({
 	}, [shouldAutoFill, defaultInstitutionCode, value, onChange])
 
 	if (isLoading) {
-		return <Skeleton className={cn("h-9 w-[180px]", className)} />
+		return <Skeleton className={cn("h-9 w-full max-w-[180px]", className)} />
 	}
 
 	if (!shouldShowField && shouldAutoFill) {
@@ -235,7 +235,7 @@ export const InstitutionFieldCompact = memo(function InstitutionFieldCompact({
 
 	return (
 		<Select value={value} onValueChange={onChange} disabled={disabled}>
-			<SelectTrigger className={cn("w-[180px] h-9", error ? 'border-red-500' : '', className)}>
+			<SelectTrigger className={cn("w-full max-w-[180px] h-9", error ? 'border-red-500' : '', className)}>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent>

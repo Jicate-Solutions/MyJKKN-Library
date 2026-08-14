@@ -7,12 +7,16 @@
  * works out that the fifth entry of the same book is copy 5. That way the count
  * can never disagree with the shelf — it *is* the shelf.
  *
- * Order of matching:
- *   1. ISBN, when the book has one. An ISBN names an edition, so two books
- *      sharing one are the same book by definition.
- *   2. ISSN, for magazines and journals, which carry that instead.
- *   3. Title + Author + Edition + Publisher + Year + Place, for everything with
- *      neither — old books, reprints, project reports.
+ * What makes two entries the same book: the title and the author, and nothing
+ * else. Capitals and extra spaces are ignored on both, so "PHARMACOGNOSY" by
+ * "C.K.  Kokate" is the book already held under "Pharmacognosy / C.K. Kokate".
+ * If either the title or the author differs by so much as a word, it is a
+ * different book and gets its own record.
+ *
+ * ISBN and ISSN are stored like any other detail and take no part in this. Two
+ * rows carrying one ISBN but naming different books are two books — the sheet
+ * is trusted over the number, because a copied-down ISBN is the ordinary
+ * mistake and it used to file the second book under the first one's title.
  */
 
 import type { getSupabaseServer } from '@/lib/supabase-server'
@@ -22,6 +26,10 @@ type Supabase = ReturnType<typeof getSupabaseServer>
 export interface TitleIdentity {
 	title: string
 	author?: string | null
+	/**
+	 * The rest travel with the identity because the caller saves them on a new
+	 * record, but none of them decides whether this is a copy.
+	 */
 	edition?: string | null
 	publisher_name?: string | null
 	publisher_place?: string | null
@@ -34,7 +42,7 @@ export interface TitleMatch {
 	id: string
 	title: string
 	/** Shown to the librarian so they can see why two books were treated as one. */
-	matchedBy: 'ISBN' | 'ISSN' | 'title and author'
+	matchedBy: 'title and author'
 }
 
 /** "C.K.  Kokate " and "c.k. kokate" are the same person to a human, so also to us. */
@@ -42,65 +50,19 @@ function normalise(value: unknown): string {
 	return (value ?? '').toString().trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-/** 978-93-85790-00-1 and 9789385790001 are the same number printed two ways. */
-function digitsOnly(value: string): string {
-	return value.replace(/[^0-9xX]/g, '').toLowerCase()
-}
-
-/**
- * Looks for a record already carrying this standard number.
- *
- * Both the typed form and the digits-only form are tried, which covers a
- * hyphenated number being matched against a plain one. A stored hyphenated
- * number searched for with plain digits still slips through — that case falls
- * to the six-field check below, which catches it anyway, since two copies of
- * one book agree on title and author whatever the punctuation.
- */
-async function findByStandardNumber(
-	supabase: Supabase,
-	institutionId: string,
-	column: 'isbn' | 'issn',
-	value: string
-): Promise<{ id: string; title: string } | null> {
-	const typed = value.trim()
-	const plain = digitsOnly(typed)
-	if (!typed) return null
-
-	const forms = plain && plain !== typed.toLowerCase() ? [typed, plain] : [typed]
-
-	const { data } = await supabase
-		.from('lib_catalogue_records')
-		.select('id, title')
-		.eq('institution_id', institutionId)
-		.or(forms.map(f => `${column}.ilike.${f}`).join(','))
-		.limit(1)
-
-	return data?.[0] ?? null
-}
-
 export async function findExistingTitle(
 	supabase: Supabase,
 	institutionId: string,
 	identity: TitleIdentity
 ): Promise<TitleMatch | null> {
-	const isbn = (identity.isbn ?? '').toString().trim()
-	if (isbn) {
-		const hit = await findByStandardNumber(supabase, institutionId, 'isbn', isbn)
-		if (hit) return { ...hit, matchedBy: 'ISBN' }
-	}
-
-	const issn = (identity.issn ?? '').toString().trim()
-	if (issn) {
-		const hit = await findByStandardNumber(supabase, institutionId, 'issn', issn)
-		if (hit) return { ...hit, matchedBy: 'ISSN' }
-	}
+	if (!identity.title.trim()) return null
 
 	// Candidates are pulled with the spaces in the title turned into wildcards,
 	// because "Old  Pharmacopoeia" typed with a double space is the same book as
 	// "Old Pharmacopoeia" and an exact match would miss it. The wildcard only
 	// widens the net; the real comparison happens below, normalised, in code —
-	// where the remaining five fields can be read the way a person reads them
-	// rather than as exact strings.
+	// where title and author are read the way a person reads them rather than as
+	// exact strings.
 	const titlePattern = identity.title
 		.trim()
 		.replace(/[%_\\]/g, m => `\\${m}`)
@@ -108,18 +70,14 @@ export async function findExistingTitle(
 
 	const { data: sameTitle } = await supabase
 		.from('lib_catalogue_records')
-		.select('id, title, author, edition, publisher_name, publisher_place, publication_year')
+		.select('id, title, author')
 		.eq('institution_id', institutionId)
 		.ilike('title', titlePattern)
-		.limit(50)
+		.limit(200)
 
 	const match = (sameTitle || []).find(record =>
 		normalise(record.title) === normalise(identity.title) &&
-		normalise(record.author) === normalise(identity.author) &&
-		normalise(record.edition) === normalise(identity.edition) &&
-		normalise(record.publisher_name) === normalise(identity.publisher_name) &&
-		normalise(record.publisher_place) === normalise(identity.publisher_place) &&
-		normalise(record.publication_year) === normalise(identity.publication_year)
+		normalise(record.author) === normalise(identity.author)
 	)
 
 	return match ? { id: match.id, title: match.title, matchedBy: 'title and author' } : null

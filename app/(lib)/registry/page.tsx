@@ -33,6 +33,7 @@ import {
 } from '@/services/library/lib-catalogue-service'
 import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
+import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
 import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor } from '@/lib/library/catalogue-options'
 
@@ -427,6 +428,12 @@ export default function RegistryPage() {
 								onUploaded={fetchData}
 								disabled={mustSelectInstitution}
 							/>
+							<CatalogueBulkEdit
+								institutionId={getInstitutionIdForCreate() ?? institutionId}
+								institutionCode={currentInstitutionCode}
+								onSaved={fetchData}
+								disabled={mustSelectInstitution}
+							/>
 							<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 								<PlusCircle className="h-4 w-4 mr-1.5" />
 								<span className="hidden sm:inline">Add Title</span>
@@ -490,12 +497,12 @@ export default function RegistryPage() {
 				<Card className="flex-1 flex flex-col min-h-0">
 					<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
 						{/* Row 1: Title + Actions */}
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold">Catalogue Registry</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} title{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
-							<div className="flex items-center gap-1.5">
+							<div className="flex items-center gap-1.5 shrink-0">
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Title</span>
@@ -676,7 +683,7 @@ export default function RegistryPage() {
 						</div>
 
 						{/* Pagination */}
-						<div className="flex items-center justify-between pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
+						<div className="flex flex-wrap items-center justify-between gap-2 pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>

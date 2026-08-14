@@ -169,12 +169,12 @@ export function StandardGateEntry() {
 								onChange={e => setBarcode(e.target.value)}
 								onKeyDown={e => { if (e.key === 'Enter') handleScan() }}
 								disabled={scanning}
-								className="h-10 text-sm"
+								className="h-10 text-sm min-w-0"
 							/>
 							<Button
 								onClick={handleScan}
 								disabled={scanning || !barcode.trim()}
-								className="h-10 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
+								className="h-10 shrink-0 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
 							>
 								{scanning ? 'Working...' : 'Record'}
 							</Button>
@@ -219,8 +219,8 @@ export function StandardGateEntry() {
 
 			<Card className="flex-1 flex flex-col min-h-0">
 				<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
-					<div className="flex items-center justify-between">
-						<div>
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<div className="min-w-0">
 							<h2 className="text-base font-semibold font-heading">Today's Gate Register</h2>
 							<p className="text-xs text-muted-foreground">
 								{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}

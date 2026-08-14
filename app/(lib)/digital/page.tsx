@@ -272,12 +272,12 @@ export default function DigitalResourcesPage() {
 			<TooltipProvider delayDuration={300}>
 				<Card className="flex-shrink-0">
 					<CardHeader className="px-4 py-3 border-b">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold">Digital Resources</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} resource{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
-							<div className="flex items-center gap-1.5">
+							<div className="flex items-center gap-1.5 shrink-0">
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Resource</span>

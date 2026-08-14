@@ -201,8 +201,8 @@ export default function ChargesPage() {
 				<Card className="flex-1 flex flex-col min-h-0">
 					<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
 						{/* Row 1: Title + Actions */}
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold">Late Charges</h2>
 								<p className="text-xs text-muted-foreground">{filtered.length} charge{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
@@ -376,7 +376,7 @@ export default function ChargesPage() {
 						</div>
 
 						{/* Pagination */}
-						<div className="flex items-center justify-between pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
+						<div className="flex flex-wrap items-center justify-between gap-2 pt-3 px-0 sm:px-4 pb-1 border-t mt-auto">
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>

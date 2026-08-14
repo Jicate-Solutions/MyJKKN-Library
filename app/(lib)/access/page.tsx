@@ -219,8 +219,8 @@ export default function StaffAccessPage() {
 			<TooltipProvider delayDuration={300}>
 				<Card className="flex-1 flex flex-col min-h-0">
 					<CardHeader className="flex-shrink-0 px-4 py-3 border-b">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<div className="min-w-0">
 								<h2 className="text-base font-semibold font-heading">Staff Access</h2>
 								<p className="text-xs text-muted-foreground">
 									{filtered.length} account{filtered.length !== 1 ? 's' : ''}
