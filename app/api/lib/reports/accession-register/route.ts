@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -19,52 +20,56 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
 		}
 
-		let query = supabase
-			.from('lib_items')
-			.select(`
-				id,
-				accession_number,
-				accession_date,
-				barcode,
-				copy_number,
-				condition,
-				price,
-				invoice_cost,
-				invoice_number,
-				date_received,
-				status,
-				is_active,
-				catalogue_record:lib_catalogue_records(
+		// Sliced, because one request returns at most a thousand rows and a
+		// register printed with the thousandth line missing is not the register.
+		const { data, error } = await fetchAllRows(range => {
+			let query = supabase
+				.from('lib_items')
+				.select(`
 					id,
-					title,
-					isbn,
-					issn,
-					edition,
-					publication_year,
-					resource_format,
-					classification_number,
-					call_number,
-					publisher_name,
-					publisher_place,
-					authors:lib_catalogue_authors(author_name, author_type, sort_order)
-				),
-				location:lib_locations(location_code, location_name),
-				supplier_id
-			`)
-			.eq('institution_id', institutionId)
+					accession_number,
+					accession_date,
+					barcode,
+					copy_number,
+					condition,
+					price,
+					invoice_cost,
+					invoice_number,
+					date_received,
+					status,
+					is_active,
+					catalogue_record:lib_catalogue_records(
+						id,
+						title,
+						isbn,
+						issn,
+						edition,
+						publication_year,
+						resource_format,
+						classification_number,
+						call_number,
+						publisher_name,
+						publisher_place,
+						authors:lib_catalogue_authors(author_name, author_type, sort_order)
+					),
+					location:lib_locations(location_code, location_name),
+					supplier_id
+				`)
+				.eq('institution_id', institutionId)
 
-		if (fromDate) query = query.gte('accession_date', fromDate)
-		if (toDate) query = query.lte('accession_date', toDate)
-		if (resourceFormat) {
-			// Filter via catalogue_record — apply post-fetch
-		}
-		if (search) {
-			query = query.or(`accession_number.ilike.%${search}%,barcode.ilike.%${search}%`)
-		}
+			if (fromDate) query = query.gte('accession_date', fromDate)
+			if (toDate) query = query.lte('accession_date', toDate)
+			if (resourceFormat) {
+				// Filter via catalogue_record — apply post-fetch
+			}
+			if (search) {
+				query = query.or(`accession_number.ilike.%${search}%,barcode.ilike.%${search}%`)
+			}
 
-		const { data, error } = await query
-			.order('accession_number', { ascending: true })
-			.range(0, 9999)
+			return query
+				.order('accession_number', { ascending: true })
+				.range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching accession register:', error)

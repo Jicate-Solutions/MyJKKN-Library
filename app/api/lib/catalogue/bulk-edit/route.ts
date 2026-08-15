@@ -26,13 +26,13 @@ import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
 import {
 	TEMPLATE_COLUMNS,
 	EDIT_ID_COLUMN,
-	BULK_EDIT_ROW_LIMIT,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 /** How many books are changed at once. Same reasoning as the upload route. */
 const CONCURRENCY = 8
@@ -122,19 +122,24 @@ export async function GET(request: Request) {
 
 		const supabase = getSupabaseServer()
 
-		const { data, error } = await supabase
-			.from('lib_items')
-			.select(`
-				id, accession_number, accession_date, price, is_lendable,
-				catalogue:lib_catalogue_records(
-					title, subtitle, author, edition, publisher_name, publisher_place,
-					publication_year, book_type, isbn, issn, language, pages, price,
-					call_number, classification_number, department, book_location
-				)
-			`)
-			.eq('institution_id', institutionId)
-			.order('accession_number', { ascending: true })
-			.range(0, BULK_EDIT_ROW_LIMIT - 1)
+		// Sliced: one request returns at most a thousand rows, and a sheet that
+		// quietly stopped at the thousandth book would be edited as if the rest
+		// of the library did not exist.
+		const { data, error } = await fetchAllRows(range =>
+			supabase
+				.from('lib_items')
+				.select(`
+					id, accession_number, accession_date, price, is_lendable,
+					catalogue:lib_catalogue_records(
+						title, subtitle, author, edition, publisher_name, publisher_place,
+						publication_year, book_type, isbn, issn, language, pages, price,
+						call_number, classification_number, department, book_location
+					)
+				`)
+				.eq('institution_id', institutionId)
+				.order('accession_number', { ascending: true })
+				.range(range.from, range.to)
+		)
 
 		if (error) {
 			console.error('Error loading the register for bulk edit:', error)
@@ -192,12 +197,8 @@ export async function PUT(request: Request) {
 		if (rows.length === 0) {
 			return NextResponse.json({ error: 'The sheet has no rows to read' }, { status: 400 })
 		}
-		if (rows.length > BULK_EDIT_ROW_LIMIT) {
-			return NextResponse.json(
-				{ error: `${rows.length} rows is too many for one edit — split it into files of ${BULK_EDIT_ROW_LIMIT} or fewer` },
-				{ status: 400 }
-			)
-		}
+		// No ceiling here either: the sheet that came down carries the whole
+		// library, so the one going back up must be allowed to carry it too.
 
 		const supabase = getSupabaseServer()
 
@@ -214,9 +215,14 @@ export async function PUT(request: Request) {
 		const seenId = new Map<string, number>()
 		const seenAccession = new Map<string, number>()
 
+		// A long sheet arrives in batches so the screen can show how far it has
+		// got. Each batch says how many rows came before it, so a failure is
+		// still reported by the row number the librarian sees in Excel.
+		const rowOffset = Number(body.row_offset) > 0 ? Number(body.row_offset) : 0
+
 		rows.forEach((row, index) => {
 			// +2: the header is row 1, so the first data row is row 2 in Excel
-			const rowNumber = index + 2
+			const rowNumber = index + 2 + rowOffset
 			const bookId = text(row[EDIT_ID_COLUMN.key])
 			const accession = text(row.accession_number)
 

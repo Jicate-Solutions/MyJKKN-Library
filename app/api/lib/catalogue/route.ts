@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -14,25 +15,29 @@ export async function GET(request: Request) {
 		const search = searchParams.get('search')
 		const isActive = searchParams.get('is_active')
 
-		let query = supabase
-			.from('lib_catalogue_records')
-			.select(`
-				*,
-				authors:lib_catalogue_authors(id, author_name, author_type, sort_order)
-			`)
+		// Sliced, because one request returns at most a thousand rows and a
+		// college holding more titles than that would silently lose the rest.
+		const { data, error } = await fetchAllRows(range => {
+			let query = supabase
+				.from('lib_catalogue_records')
+				.select(`
+					*,
+					authors:lib_catalogue_authors(id, author_name, author_type, sort_order)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (resourceFormat) query = query.eq('resource_format', resourceFormat)
-		if (isActive !== null) query = query.eq('is_active', isActive === 'true')
-		if (search) {
-			query = query.or(
-				`title.ilike.%${search}%,isbn.ilike.%${search}%,issn.ilike.%${search}%,publisher_name.ilike.%${search}%,call_number.ilike.%${search}%`
-			)
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (resourceFormat) query = query.eq('resource_format', resourceFormat)
+			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
+			if (search) {
+				query = query.or(
+					`title.ilike.%${search}%,isbn.ilike.%${search}%,issn.ilike.%${search}%,publisher_name.ilike.%${search}%,call_number.ilike.%${search}%`
+				)
+			}
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query
+				.order('created_at', { ascending: false })
+				.range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching catalogue records:', error)

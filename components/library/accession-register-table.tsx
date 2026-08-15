@@ -60,8 +60,26 @@ interface Props {
 	headerActions: React.ReactNode
 }
 
+/** The three things a librarian looks a book up by, each with its own box. */
+interface SearchTerms {
+	accession: string
+	isbn: string
+	title: string
+}
+
+const NO_TERMS: SearchTerms = { accession: '', isbn: '', title: '' }
+
+/** Spaces and capitals are noise in every one of these fields. */
+const soften = (value: unknown): string => (value ?? '').toString().trim().toLowerCase()
+
+/** 978-81-239-2565-3 and 9788123925653 are one number printed two ways. */
+const digitsOnly = (value: unknown): string => soften(value).replace(/[^0-9x]/g, '')
+
 export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDelete, headerActions }: Props) {
-	const [search, setSearch] = useState('')
+	/** What is being typed. Nothing is searched until the button is pressed. */
+	const [draft, setDraft] = useState<SearchTerms>(NO_TERMS)
+	/** What was asked for, as of the last press of Search. */
+	const [applied, setApplied] = useState<SearchTerms>(NO_TERMS)
 	const [typeFilter, setTypeFilter] = useState('all')
 	const [currentPage, setCurrentPage] = useState(1)
 	const [itemsPerPage, setItemsPerPage] = useState(25)
@@ -73,19 +91,75 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 		referenceOnly: rows.filter(r => r.is_reference_only).length,
 	}), [rows])
 
+	/**
+	 * Each book's three fields, prepared once when the register loads rather
+	 * than converted again for every book on every search.
+	 */
+	const searchable = useMemo(() => {
+		const index = new Map<string, { accession: string; isbn: string; title: string }>()
+		for (const r of rows) {
+			index.set(r.item_id, {
+				accession: soften(r.accession_number),
+				isbn: digitsOnly(r.isbn),
+				title: soften(r.title),
+			})
+		}
+		return index
+	}, [rows])
+
+	/**
+	 * The rows on show.
+	 *
+	 * A box that is left empty asks nothing; boxes that are filled must all be
+	 * satisfied, so Accession 65 with ISBN 978… narrows rather than widens.
+	 *
+	 * Accession is then ordered by how well it matched. Typing "65" into the
+	 * accession box used to bury book 65 under 1065, 1650 and every ISBN
+	 * containing those two digits — the number asked for was in the list, just
+	 * not where anyone would look. Now the exact number comes first, then the
+	 * numbers beginning with it, then the rest.
+	 */
 	const filtered = useMemo(() => {
-		const term = search.trim().toLowerCase()
-		return rows.filter(r => {
-			const matchesSearch = !term ||
-				r.accession_number.toLowerCase().includes(term) ||
-				r.title.toLowerCase().includes(term) ||
-				(r.author?.toLowerCase().includes(term) ?? false) ||
-				(r.isbn?.toLowerCase().includes(term) ?? false) ||
-				(r.department?.toLowerCase().includes(term) ?? false)
-			const matchesType = typeFilter === 'all' || (r.book_type ?? '') === typeFilter
-			return matchesSearch && matchesType
+		const accession = soften(applied.accession)
+		const isbn = digitsOnly(applied.isbn)
+		const title = soften(applied.title)
+
+		const matched = rows.filter(r => {
+			const fields = searchable.get(r.item_id)
+			if (!fields) return false
+
+			if (accession && !fields.accession.includes(accession)) return false
+			if (isbn && !fields.isbn.includes(isbn)) return false
+			if (title && !fields.title.includes(title)) return false
+
+			return typeFilter === 'all' || (r.book_type ?? '') === typeFilter
 		})
-	}, [rows, search, typeFilter])
+
+		if (!accession) return matched
+
+		const rank = (row: RegisterRow) => {
+			const value = searchable.get(row.item_id)?.accession ?? ''
+			if (value === accession) return 0
+			if (value.startsWith(accession)) return 1
+			return 2
+		}
+
+		return [...matched].sort((a, b) => rank(a) - rank(b))
+	}, [rows, applied, typeFilter, searchable])
+
+	const hasSearch = Boolean(applied.accession || applied.isbn || applied.title)
+	const hasDraft = Boolean(draft.accession || draft.isbn || draft.title)
+
+	const runSearch = () => {
+		setApplied(draft)
+		setCurrentPage(1)
+	}
+
+	const clearSearch = () => {
+		setDraft(NO_TERMS)
+		setApplied(NO_TERMS)
+		setCurrentPage(1)
+	}
 
 	const pageSizeOptions = useMemo(() => {
 		const options = [10, 25, 50, 100]
@@ -169,7 +243,10 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">{headerActions}</div>
 						</div>
-						<div className="flex items-center gap-2 flex-wrap mt-3">
+						{/* A box per field, and nothing happens until Search is pressed —
+						    so a half-typed accession number never rearranges the list
+						    under the librarian's hands. */}
+						<div className="flex items-end gap-2 flex-wrap mt-3">
 							<Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setCurrentPage(1) }}>
 								<SelectTrigger className="h-8 text-sm w-[150px]"><SelectValue placeholder="Book type" /></SelectTrigger>
 								<SelectContent>
@@ -177,15 +254,48 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 									{typesInUse.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
 								</SelectContent>
 							</Select>
-							<div className="relative flex-1 max-w-sm">
-								<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+
+							<div className="w-[150px]">
+								<label className="text-[11px] font-medium text-muted-foreground">Accession #</label>
 								<Input
-									placeholder="Search accession, title, author, ISBN, department..."
-									value={search}
-									onChange={e => { setSearch(e.target.value); setCurrentPage(1) }}
-									className="pl-8 h-8 text-sm"
+									placeholder="e.g. 65"
+									value={draft.accession}
+									onChange={e => setDraft(d => ({ ...d, accession: e.target.value }))}
+									className="h-8 text-sm mt-0.5"
 								/>
 							</div>
+
+							<div className="w-[180px]">
+								<label className="text-[11px] font-medium text-muted-foreground">ISBN</label>
+								<Input
+									placeholder="With or without dashes"
+									value={draft.isbn}
+									onChange={e => setDraft(d => ({ ...d, isbn: e.target.value }))}
+									className="h-8 text-sm mt-0.5"
+								/>
+							</div>
+
+							<div className="flex-1 min-w-[180px] max-w-sm">
+								<label className="text-[11px] font-medium text-muted-foreground">Title</label>
+								<Input
+									placeholder="Any part of the title"
+									value={draft.title}
+									onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+									className="h-8 text-sm mt-0.5"
+								/>
+							</div>
+
+							<Button className="h-8 text-sm px-4" onClick={runSearch}>
+								<Search className="h-4 w-4 mr-1.5" />
+								Search
+							</Button>
+
+							{(hasSearch || hasDraft) && (
+								<Button variant="ghost" className="h-8 text-sm px-3" onClick={clearSearch}>
+									Clear
+								</Button>
+							)}
+
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={onRefresh}>

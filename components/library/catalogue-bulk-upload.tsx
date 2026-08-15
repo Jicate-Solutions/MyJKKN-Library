@@ -17,14 +17,24 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/hooks/common/use-toast'
 import { FileSpreadsheet, Download, Upload, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
 	TEMPLATE_COLUMNS,
 	TEMPLATE_EXAMPLE,
-	BULK_ROW_LIMIT,
 	departmentsFor,
 	BOOK_TYPE_LABELS,
 	LANGUAGES,
 } from '@/lib/library/catalogue-options'
+
+/**
+ * Books per request.
+ *
+ * The sheet is sent in batches for one reason: a single request tells the
+ * screen nothing until it is over, and a librarian watching a still page for a
+ * minute assumes it has hung. Small enough that the bar moves, large enough
+ * that a full sheet is not a hundred round trips.
+ */
+const BATCH_SIZE = 50
 
 interface RowFailure {
 	row: number
@@ -72,6 +82,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 	const { toast } = useToast()
 	const fileInput = useRef<HTMLInputElement>(null)
 	const [uploading, setUploading] = useState(false)
+	const [progress, setProgress] = useState({ done: 0, total: 0 })
 	const [result, setResult] = useState<UploadResult | null>(null)
 
 	const downloadTemplate = () => {
@@ -97,7 +108,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 			['Languages', '', LANGUAGES.join(', ')],
 			[],
 			['Row 2 is a filled example — delete it before uploading, or leave it and it will be saved as a book.'],
-			[`Up to ${BULK_ROW_LIMIT} books in one file.`],
+			['As many books as you like in one file — a long sheet simply takes longer.'],
 			['Do not rename or reorder the columns.'],
 		])
 		guide['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 90 }]
@@ -166,20 +177,47 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 				return
 			}
 
-			const res = await fetch('/api/lib/catalogue/bulk', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ institution_id: institutionId, rows }),
-			})
-			const data = await res.json()
+			// Sent batch by batch so the screen can show how far it has got. The
+			// counts add up across batches; a batch that fails outright stops the
+			// run rather than leaving the librarian to guess where it stopped.
+			setProgress({ done: 0, total: rows.length })
 
-			if (!res.ok) {
-				toast({ title: '❌ ' + (data.error ?? 'Upload failed'), variant: 'destructive' })
-				return
+			const total: UploadResult = {
+				created: 0, new_titles: 0, copies_added: 0,
+				failed: 0, total: rows.length, failures: [],
 			}
 
-			setResult(data)
-			if (data.created > 0) onUploaded()
+			for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+				const batch = rows.slice(start, start + BATCH_SIZE)
+
+				const res = await fetch('/api/lib/catalogue/bulk', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ institution_id: institutionId, rows: batch, row_offset: start }),
+				})
+				const data = await res.json()
+
+				if (!res.ok) {
+					if (total.created > 0) onUploaded()
+					toast({
+						title: '❌ ' + (data.error ?? 'Upload failed'),
+						description: total.created > 0 ? `${total.created} books were added before this.` : undefined,
+						variant: 'destructive',
+					})
+					return
+				}
+
+				total.created += data.created ?? 0
+				total.new_titles += data.new_titles ?? 0
+				total.copies_added += data.copies_added ?? 0
+				total.failed += data.failed ?? 0
+				total.failures.push(...(data.failures ?? []))
+
+				setProgress({ done: Math.min(start + batch.length, rows.length), total: rows.length })
+			}
+
+			setResult(total)
+			if (total.created > 0) onUploaded()
 		} catch (err) {
 			toast({
 				title: '❌ Could not read the file',
@@ -188,11 +226,20 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 			})
 		} finally {
 			setUploading(false)
+			setProgress({ done: 0, total: 0 })
 		}
 	}
 
 	return (
 		<>
+			<BulkProgressDialog
+				open={uploading}
+				title="Adding books"
+				done={progress.done}
+				total={progress.total}
+				note="Books already added are saved even if something fails later."
+			/>
+
 			<input
 				ref={fileInput}
 				type="file"
@@ -226,7 +273,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 						<Upload className="h-4 w-4 text-muted-foreground" />
 						<div>
 							<p className="text-sm font-medium">Upload filled sheet</p>
-							<p className="text-xs text-muted-foreground">Up to {BULK_ROW_LIMIT} books in one file</p>
+							<p className="text-xs text-muted-foreground">Any number of books in one file</p>
 						</div>
 					</DropdownMenuItem>
 				</DropdownMenuContent>

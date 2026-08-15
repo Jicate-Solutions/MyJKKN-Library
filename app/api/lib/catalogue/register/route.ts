@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -21,22 +22,28 @@ export async function GET(request: Request) {
 
 		const supabase = getSupabaseServer()
 
-		let query = supabase
-			.from('lib_items')
-			.select(`
-				id, accession_number, copy_number, status, is_lendable, accession_date,
-				catalogue:lib_catalogue_records(
-					id, title, subtitle, author, edition, isbn, issn,
-					resource_format, book_type, department, book_location,
-					publisher_name, publication_year, is_reference_only
-				)
-			`)
+		// Read in slices rather than one go: the database hands back at most a
+		// thousand rows per request, and a college with more books than that was
+		// seeing its register cut off at the thousandth line — copy counts
+		// included, since they are worked out from the rows in hand.
+		const { data, error } = await fetchAllRows(range => {
+			let query = supabase
+				.from('lib_items')
+				.select(`
+					id, accession_number, copy_number, status, is_lendable, accession_date,
+					catalogue:lib_catalogue_records(
+						id, title, subtitle, author, edition, isbn, issn,
+						resource_format, book_type, department, book_location,
+						publisher_name, publication_year, is_reference_only
+					)
+				`)
 
-		if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+			if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
 
-		const { data, error } = await query
-			.order('accession_number', { ascending: true })
-			.range(0, 9999)
+			return query
+				.order('accession_number', { ascending: true })
+				.range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching the accession register:', error)

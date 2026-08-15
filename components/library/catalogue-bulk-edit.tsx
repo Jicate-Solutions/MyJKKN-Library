@@ -19,10 +19,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/hooks/common/use-toast'
 import { FilePenLine, Download, Upload, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
 	TEMPLATE_COLUMNS,
 	EDIT_ID_COLUMN,
-	BULK_EDIT_ROW_LIMIT,
 	departmentsFor,
 	BOOK_TYPE_LABELS,
 	LANGUAGES,
@@ -56,6 +56,9 @@ interface Props {
 /** Every column of the edit sheet: the Book ID first, then the usual ones. */
 const EDIT_COLUMNS = [EDIT_ID_COLUMN, ...TEMPLATE_COLUMNS]
 
+/** Books per request — same reasoning as the upload side: a bar that moves. */
+const BATCH_SIZE = 50
+
 /** Excel gives dates back as Date objects; the server wants YYYY-MM-DD. */
 function cellToText(value: unknown): string {
 	if (value === null || value === undefined) return ''
@@ -76,6 +79,9 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 	const { toast } = useToast()
 	const fileInput = useRef<HTMLInputElement>(null)
 	const [busy, setBusy] = useState(false)
+	/** What the progress modal says it is doing — downloading, or saving. */
+	const [busyTitle, setBusyTitle] = useState('Working')
+	const [progress, setProgress] = useState({ done: 0, total: 0 })
 	const [result, setResult] = useState<EditResult | null>(null)
 
 	const downloadBooks = async () => {
@@ -85,6 +91,10 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 		}
 
 		try {
+			// Nothing to count while the server is gathering the books, so the bar
+			// runs without a number until the file is written
+			setBusyTitle('Preparing the sheet')
+			setProgress({ done: 0, total: 0 })
 			setBusy(true)
 
 			const res = await fetch(`/api/lib/catalogue/bulk-edit?institution_id=${institutionId}`)
@@ -142,6 +152,7 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 			})
 		} finally {
 			setBusy(false)
+			setProgress({ done: 0, total: 0 })
 		}
 	}
 
@@ -203,20 +214,42 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 				return
 			}
 
-			const res = await fetch('/api/lib/catalogue/bulk-edit', {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ institution_id: institutionId, rows }),
-			})
-			const data = await res.json()
+			// Sent batch by batch so the screen can show how far it has got
+			setBusyTitle('Saving changes')
+			setProgress({ done: 0, total: rows.length })
 
-			if (!res.ok) {
-				toast({ title: '❌ ' + (data.error ?? 'Edit failed'), variant: 'destructive' })
-				return
+			const total: EditResult = { updated: 0, moved: 0, failed: 0, total: rows.length, failures: [] }
+
+			for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+				const batch = rows.slice(start, start + BATCH_SIZE)
+
+				const res = await fetch('/api/lib/catalogue/bulk-edit', {
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ institution_id: institutionId, rows: batch, row_offset: start }),
+				})
+				const data = await res.json()
+
+				if (!res.ok) {
+					if (total.updated > 0) onSaved()
+					toast({
+						title: '❌ ' + (data.error ?? 'Edit failed'),
+						description: total.updated > 0 ? `${total.updated} books were updated before this.` : undefined,
+						variant: 'destructive',
+					})
+					return
+				}
+
+				total.updated += data.updated ?? 0
+				total.moved += data.moved ?? 0
+				total.failed += data.failed ?? 0
+				total.failures.push(...(data.failures ?? []))
+
+				setProgress({ done: Math.min(start + batch.length, rows.length), total: rows.length })
 			}
 
-			setResult(data)
-			if (data.updated > 0) onSaved()
+			setResult(total)
+			if (total.updated > 0) onSaved()
 		} catch (err) {
 			toast({
 				title: '❌ Could not read the file',
@@ -225,11 +258,20 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 			})
 		} finally {
 			setBusy(false)
+			setProgress({ done: 0, total: 0 })
 		}
 	}
 
 	return (
 		<>
+			<BulkProgressDialog
+				open={busy}
+				title={busyTitle}
+				done={progress.done}
+				total={progress.total}
+				note={busyTitle === 'Saving changes' ? 'Changes already saved stay saved even if something fails later.' : undefined}
+			/>
+
 			<input
 				ref={fileInput}
 				type="file"
@@ -263,7 +305,7 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 						<Upload className="h-4 w-4 text-muted-foreground" />
 						<div>
 							<p className="text-sm font-medium">Upload edited sheet</p>
-							<p className="text-xs text-muted-foreground">Up to {BULK_EDIT_ROW_LIMIT.toLocaleString()} books in one file</p>
+							<p className="text-xs text-muted-foreground">Any number of books in one file</p>
 						</div>
 					</DropdownMenuItem>
 				</DropdownMenuContent>

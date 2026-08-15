@@ -16,7 +16,6 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import {
 	TEMPLATE_COLUMNS,
-	BULK_ROW_LIMIT,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
@@ -126,12 +125,10 @@ export async function POST(request: Request) {
 		if (rows.length === 0) {
 			return NextResponse.json({ error: 'The sheet has no rows to read' }, { status: 400 })
 		}
-		if (rows.length > BULK_ROW_LIMIT) {
-			return NextResponse.json(
-				{ error: `${rows.length} rows is too many for one upload — split it into files of ${BULK_ROW_LIMIT} or fewer` },
-				{ status: 400 }
-			)
-		}
+		// No ceiling on how many books one upload may carry. A college arriving
+		// with its whole register — several thousand books in one file — must be
+		// able to send it as it is; the screen sends it in batches and shows how
+		// far it has got, so a long sheet costs time, not a rejection.
 
 		const supabase = getSupabaseServer()
 
@@ -150,9 +147,14 @@ export async function POST(request: Request) {
 		const seen = new Map<string, number>()
 		const valid: Array<{ row: number; data: IncomingRow }> = []
 
+		// A long sheet arrives in batches so the screen can show how far it has
+		// got. Each batch says how many rows came before it, so a failure is
+		// still reported by the row number the librarian sees in Excel.
+		const rowOffset = Number(body.row_offset) > 0 ? Number(body.row_offset) : 0
+
 		rows.forEach((row, index) => {
 			// +2: the header is row 1, so the first data row is row 2 in Excel
-			const rowNumber = index + 2
+			const rowNumber = index + 2 + rowOffset
 			const problem = validateRow(row, seen, rowNumber, institutionCode)
 			if (problem) {
 				failures.push({ row: rowNumber, accession_number: text(row.accession_number), error: problem })
