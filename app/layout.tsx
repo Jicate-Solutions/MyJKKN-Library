@@ -4,6 +4,7 @@ import '@/styles/globals.css'
 import { AuthProvider } from '@/lib/auth/auth-context-parent'
 import { ThemeProvider } from '@/components/common/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
+import { BugReporterWrapper } from '@/components/bug-reporter/bug-reporter-wrapper'
 
 const inter = Inter({
 	subsets: ['latin'],
@@ -42,7 +43,11 @@ export default function RootLayout({
 			<body className={`${spaceGrotesk.className} ${inter.variable} ${spaceGrotesk.variable} antialiased`} suppressHydrationWarning>
 				<ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
 					<AuthProvider autoValidate={false}>
-						{children}
+						{/* Inside the auth provider, so a report carries the name of
+						    whoever filed it */}
+						<BugReporterWrapper>
+							{children}
+						</BugReporterWrapper>
 					</AuthProvider>
 				</ThemeProvider>
 				<Toaster />

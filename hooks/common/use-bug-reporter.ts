@@ -4,7 +4,8 @@ import { useCallback } from 'react'
 interface BugReportOptions {
 	title: string
 	description: string
-	category?: 'bug' | 'error' | 'feature' | 'feedback' | 'other'
+	/** The platform's own list — anything else it would reject. */
+	category?: 'bug' | 'feature_request' | 'ui_design' | 'performance' | 'security' | 'other'
 	page_url?: string
 	console_logs?: string[]
 	severity?: 'low' | 'medium' | 'high' | 'critical'
@@ -48,17 +49,25 @@ export function useBugReporter() {
 			}
 
 			try {
-				const report = {
+				// The platform takes console lines as objects and has no severity
+				// field of its own, so severity travels with the metadata.
+				const timestamp = new Date().toISOString()
+
+				await apiClient.createBugReport({
 					title: options.title,
 					description: options.description,
 					page_url: options.page_url || window.location.href,
 					category: options.category || 'bug',
-					console_logs: options.console_logs || [],
-					severity: options.severity,
-					metadata: options.metadata
-				}
-
-				await apiClient.createBugReport(report)
+					console_logs: (options.console_logs || []).map(message => ({
+						level: 'log' as const,
+						message,
+						timestamp,
+					})),
+					metadata: {
+						...options.metadata,
+						...(options.severity ? { severity: options.severity } : {}),
+					},
+				})
 				return { success: true }
 			} catch (error) {
 				console.error('Failed to report bug:', error)
@@ -86,7 +95,7 @@ export function useBugReporter() {
 			return reportBug({
 				title: customTitle || `Error: ${errorMessage}`,
 				description,
-				category: 'error',
+				category: 'bug',
 				severity: 'high',
 				metadata: {
 					errorName: error instanceof Error ? error.name : 'UnknownError',
@@ -136,7 +145,7 @@ export function useBugReporter() {
 					? `Exception in ${context.action}: ${errorMessage}`
 					: `Exception: ${errorMessage}`,
 				description,
-				category: 'error',
+				category: 'bug',
 				severity: 'high',
 				metadata: {
 					...context.additionalInfo,

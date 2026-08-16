@@ -486,7 +486,7 @@ input[type="number"] {
   font-family: var(--font-inter) !important;
 }
 
-/* Bug reporter button positioning - Bottom Left */
+/* Bug reporter button positioning - Bottom Right */
 [data-bug-reporter-button],
 .bug-reporter-button,
 .bug-reporter-floating-btn,
@@ -495,35 +495,62 @@ button[aria-label*="bug"],
 button[aria-label*="report"],
 div[class*="bug-reporter"] button:last-child {
   bottom: 1.5rem !important;
-  left: 1.5rem !important;
-  right: auto !important;
+  right: 1.5rem !important;
+  left: auto !important;
   z-index: 9999 !important;
 }
 
-/* Bug reporter button styling  */
+/* On a phone the bottom navigation bar owns that corner, so the button sits
+   above it rather than on top of a menu item. The bar is hidden from 768px up,
+   where the button returns to the corner. */
+@media (max-width: 767px) {
+  [data-bug-reporter-button],
+  .bug-reporter-button,
+  .bug-reporter-floating-btn,
+  .bug-reporter-widget,
+  button[aria-label*="bug"],
+  button[aria-label*="report"],
+  div[class*="bug-reporter"] button:last-child {
+    bottom: 5.5rem !important;
+    right: 1rem !important;
+  }
+}
+
+/* Bug reporter button styling — matched to the round red bug button MyJKKN
+   carries in the same corner, so the two apps look like one system: a solid
+   red disc, white mark, soft lift under it. */
 .bug-reporter-button,
 [data-bug-reporter-button],
 .bug-reporter-floating-btn {
-  background: #c70f0f !important;
+  background: #e11d1d !important;
   color: white !important;
-  border-radius: 50% !important;
-  width: 40px !important;
-  height: 40px !important;
+  border: none !important;
+  border-radius: 9999px !important;
+  width: 56px !important;
+  height: 56px !important;
   padding: 0 !important;
-  font-size: 10px !important;
-  font-weight: 200 !important;
+  font-size: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
-  transition: all 0.2s ease !important;
+  box-shadow: 0 6px 16px rgba(225, 29, 29, 0.35), 0 2px 6px rgba(0, 0, 0, 0.18) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease !important;
+}
+
+/* The mark inside, sized to the disc rather than to whatever the SDK ships */
+.bug-reporter-button svg,
+[data-bug-reporter-button] svg,
+.bug-reporter-floating-btn svg {
+  width: 26px !important;
+  height: 26px !important;
+  stroke-width: 1.75 !important;
 }
 
 /* Bug reporter button hover state */
 .bug-reporter-button:hover,
 [data-bug-reporter-button]:hover,
 .bug-reporter-floating-btn:hover {
-  background: #a50d0d !important;
-  transform: translateY(-2px) scale(1.05) !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+  background: #c81414 !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 0 10px 22px rgba(225, 29, 29, 0.45), 0 3px 8px rgba(0, 0, 0, 0.22) !important;
 }
