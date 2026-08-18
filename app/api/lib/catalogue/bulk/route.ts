@@ -22,6 +22,7 @@ import {
 	isbnRequiredFor,
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
+import { toSheetDate } from '@/lib/library/sheet-date'
 
 /** How many books are in flight at once. Enough to be quick, few enough to be kind to the connection pool. */
 const CONCURRENCY = 8
@@ -77,9 +78,11 @@ function validateRow(
 	const pages = text(row.pages)
 	if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
 
-	const date = text(row.accession_date)
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Date of Adding must look like 2026-08-12'
-	if (isNaN(new Date(date).getTime())) return 'Date of Adding is not a real date'
+	// Any way a date is ordinarily written is read; only something that is not
+	// a date at all is refused
+	if (!toSheetDate(row.accession_date)) {
+		return 'Date of Adding is not a date — write it as 2026-08-12 or 12-08-2026'
+	}
 
 	// Only books carry an ISBN. Magazines, journals, project reports and
 	// whatever lands under Others were never issued one.
@@ -302,7 +305,8 @@ export async function POST(request: Request) {
 							status: 'available',
 							is_lendable: !referenceOnly,
 							is_active: true,
-							accession_date: text(data.accession_date),
+							// Whatever form it was written in, stored the one way
+							accession_date: toSheetDate(data.accession_date),
 						})
 
 					if (itemError) {

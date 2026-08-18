@@ -33,6 +33,7 @@ import {
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { fetchAllRows } from '@/lib/library/fetch-all'
+import { toSheetDate } from '@/lib/library/sheet-date'
 
 /** How many books are changed at once. Same reasoning as the upload route. */
 const CONCURRENCY = 8
@@ -85,9 +86,11 @@ function validateRow(row: IncomingRow, institutionCode: string | null): string |
 	const pages = text(row.pages)
 	if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
 
-	const date = text(row.accession_date)
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Date of Adding must look like 2026-08-12'
-	if (isNaN(new Date(date).getTime())) return 'Date of Adding is not a real date'
+	// Read the same way the upload sheet reads it, so a file that goes in one
+	// way is not refused coming back the other
+	if (!toSheetDate(row.accession_date)) {
+		return 'Date of Adding is not a date — write it as 2026-08-12 or 12-08-2026'
+	}
 
 	if (isbnRequiredFor(text(row.book_type)) && !text(row.isbn)) {
 		return 'ISBN is empty — books must have one'
@@ -454,7 +457,7 @@ export async function PUT(request: Request) {
 
 					const copyFields: Record<string, unknown> = {
 						accession_number: accession,
-						accession_date: text(data.accession_date),
+						accession_date: toSheetDate(data.accession_date),
 						price,
 						is_lendable: !referenceOnly,
 					}
