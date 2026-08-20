@@ -24,9 +24,11 @@ interface Props {
 	total: number
 	/** One line under the bar — what is happening right now. */
 	note?: string
+	/** What is being counted. Books, unless the caller says otherwise. */
+	unit?: string
 }
 
-export function BulkProgressDialog({ open, title, done, total, note }: Props) {
+export function BulkProgressDialog({ open, title, done, total, note, unit = 'books' }: Props) {
 	if (!open) return null
 
 	const counting = total > 0
@@ -47,7 +49,7 @@ export function BulkProgressDialog({ open, title, done, total, note }: Props) {
 					<div className="flex-1">
 						<p className="text-sm font-semibold">{title}</p>
 						<p className="text-xs text-muted-foreground mt-0.5">
-							{counting ? `${done} of ${total} books` : 'Please wait...'}
+							{counting ? `${done} of ${total} ${unit}` : 'Please wait...'}
 						</p>
 					</div>
 					{counting && (

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -19,6 +20,7 @@ import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import { MemberProfileCell } from '@/components/library/member-profile-cell'
 import { MyJKKNMemberSearch, type SelectedMember } from '@/components/library/myjkkn-member-search'
 import { MyJKKNBrowseModal } from '@/components/library/myjkkn-browse-modal'
+import { MemberBulkEnrol } from '@/components/library/member-bulk-enrol'
 import {
 	Users, UserCheck, UserX, UserPlus,
 	MoreHorizontal, Edit, Trash2, Search, RefreshCw,
@@ -33,11 +35,53 @@ import {
 	deleteMember,
 } from '@/services/library/lib-members-service'
 
-const CATEGORIES: LibMemberCategory[] = ['learner', 'facilitator', 'team_member', 'guest', 'alumni']
+/**
+ * The three kinds of member a library enrols.
+ *
+ * Learner and Facilitator are people MyJKKN already knows, so they are picked
+ * rather than typed. Other is everyone else the library lends to — a research
+ * scholar, a visiting doctor, a retired teacher — and the librarian writes what
+ * to call them, because no fixed list would ever cover all seven campuses.
+ */
+const CATEGORIES: { value: LibMemberCategory; label: string }[] = [
+	{ value: 'learner', label: 'Learner' },
+	{ value: 'facilitator', label: 'Facilitator' },
+	{ value: 'other', label: 'Other' },
+]
+
+/** A date coming back from MyJKKN may carry a time; the form wants only the day. */
+const dayOnly = (value: unknown): string => {
+	const text = (value ?? '').toString().trim()
+	return text ? text.split('T')[0] : ''
+}
+
+/** dd-mm-yyyy, the way the register reads dates. */
+const readableDay = (value: string): string => {
+	const [year, month, day] = value.split('-')
+	return year && month && day ? `${day}-${month}-${year}` : value
+}
+
+/**
+ * A batch of this college, as MyJKKN keeps it.
+ *
+ * Membership dates come from here and nowhere else: a learner belongs to the
+ * library for as long as their batch runs. Many MyJKKN profiles have no batch
+ * recorded against them, which is why the batch can also be chosen by hand —
+ * chosen, never guessed, because a Pharm D learner given a B.Pharm batch's
+ * dates would quietly hold a membership that ends two years early.
+ */
+interface BatchOption {
+	id: string
+	label: string
+	start: string
+	end: string
+}
 
 interface FormData {
 	member_number: string
 	member_category: LibMemberCategory
+	/** Only for "Other" — what this member is called */
+	category_label: string
 	display_name: string
 	email: string
 	phone: string
@@ -49,6 +93,7 @@ interface FormData {
 const defaultForm: FormData = {
 	member_number: '',
 	member_category: 'learner',
+	category_label: '',
 	display_name: '',
 	email: '',
 	phone: '',
@@ -76,6 +121,16 @@ export default function MembersPage() {
 	const [itemsPerPage, setItemsPerPage] = useState(10)
 	const [selectedMyjkknMember, setSelectedMyjkknMember] = useState<SelectedMember | null>(null)
 	const [browseModalOpen, setBrowseModalOpen] = useState(false)
+	// Which half of the Add Member sheet is showing: one member, or a program
+	const [addTab, setAddTab] = useState<'individual' | 'bulk'>('individual')
+	// Where the membership dates came from, so the librarian can see they were
+	// filled from the learner's batch and not typed by somebody
+	const [batchNote, setBatchNote] = useState<string | null>(null)
+	const [batchLoading, setBatchLoading] = useState(false)
+	// This college's batches, for the learners MyJKKN has not filed under one
+	const [collegeBatches, setCollegeBatches] = useState<BatchOption[]>([])
+	const [chosenBatchId, setChosenBatchId] = useState<string>('')
+	const [batchMissing, setBatchMissing] = useState(false)
 	const { currentMyJKKNInstitutionIds } = useInstitution()
 
 	const fetchData = useCallback(async () => {
@@ -96,6 +151,39 @@ export default function MembersPage() {
 
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
+
+	// This college's batches, read once the first time a learner is being added.
+	// MyJKKN returns every campus's batches whatever is asked of it, so they are
+	// filtered here — another college's batch must never appear in this list.
+	useEffect(() => {
+		if (!sheetOpen || editingItem || collegeBatches.length > 0) return
+		if (currentMyJKKNInstitutionIds.length === 0) return
+
+		let cancelled = false
+		const loadBatches = async () => {
+			try {
+				const res = await fetch('/api/myjkkn/batches?limit=200')
+				if (!res.ok) return
+				const json = await res.json()
+				const rows: Record<string, any>[] = json.data || json || []
+				const mine = rows
+					.filter(b => currentMyJKKNInstitutionIds.includes(b.institution_id) && b.start_date)
+					.map(b => ({
+						id: b.id as string,
+						label: [b.batch_code, b.batch_year || b.batch_name].filter(Boolean).join(' · '),
+						start: dayOnly(b.start_date),
+						end: dayOnly(b.end_date),
+					}))
+					// Newest first — a librarian enrolling today wants this year's batch
+					.sort((a, b) => b.start.localeCompare(a.start))
+				if (!cancelled) setCollegeBatches(mine)
+			} catch {
+				// The form still works: the dates can be typed
+			}
+		}
+		loadBatches()
+		return () => { cancelled = true }
+	}, [sheetOpen, editingItem, collegeBatches.length, currentMyJKKNInstitutionIds])
 
 	// MyJKKN ids already enrolled here — one person may hold only one membership,
 	// so the search lists them but blocks re-selection
@@ -158,9 +246,13 @@ export default function MembersPage() {
 		setErrors({})
 		setEditingItem(null)
 		setSelectedMyjkknMember(null)
+		setBatchNote(null)
+		setBatchMissing(false)
+		setChosenBatchId('')
+		setAddTab('individual')
 	}
 
-	const handleMyjkknSelect = (member: SelectedMember) => {
+	const handleMyjkknSelect = async (member: SelectedMember) => {
 		setSelectedMyjkknMember(member)
 		setForm(prev => ({
 			...prev,
@@ -168,6 +260,68 @@ export default function MembersPage() {
 			email: member.email || '',
 			phone: member.phone || '',
 		}))
+		setBatchNote(null)
+		setBatchMissing(false)
+		setChosenBatchId('')
+
+		// A learner's membership should run for as long as their course does, so
+		// the dates come from their batch rather than from whoever is at the desk.
+		// Facilitators have no batch — their dates stay as typed.
+		if (member.category !== 'learner') return
+
+		// Plenty of MyJKKN profiles have no batch recorded. Rather than leaving
+		// the dates silently empty, the form says so and offers this college's
+		// batches to pick from — the dates still come from a real batch.
+		if (!member.batch_id) {
+			setBatchMissing(true)
+			return
+		}
+
+		try {
+			setBatchLoading(true)
+			const res = await fetch(`/api/myjkkn/batches/${member.batch_id}`)
+			if (!res.ok) { setBatchMissing(true); return }
+			const batch = await res.json()
+			const start = dayOnly(batch?.start_date)
+			const end = dayOnly(batch?.end_date)
+			if (!start && !end) { setBatchMissing(true); return }
+
+			setForm(prev => ({
+				...prev,
+				membership_start_date: start || prev.membership_start_date,
+				membership_end_date: end || prev.membership_end_date,
+			}))
+			setErrors(prev => {
+				const { membership_start_date: _s, membership_end_date: _e, ...rest } = prev
+				return rest
+			})
+			setChosenBatchId(member.batch_id)
+			const batchName = [batch?.batch_code, batch?.batch_year].filter(Boolean).join(' · ')
+			setBatchNote(batchName ? `Filled from batch ${batchName}` : 'Filled from the learner\'s batch')
+		} catch {
+			setBatchMissing(true)
+		} finally {
+			setBatchLoading(false)
+		}
+	}
+
+	/** Dates from a batch the librarian picked, when MyJKKN did not name one. */
+	const applyBatch = (batchId: string) => {
+		const batch = collegeBatches.find(b => b.id === batchId)
+		setChosenBatchId(batchId)
+		if (!batch) return
+
+		setForm(prev => ({
+			...prev,
+			membership_start_date: batch.start || prev.membership_start_date,
+			membership_end_date: batch.end || prev.membership_end_date,
+		}))
+		setErrors(prev => {
+			const { membership_start_date: _s, membership_end_date: _e, ...rest } = prev
+			return rest
+		})
+		setBatchNote(`Filled from batch ${batch.label}`)
+		setBatchMissing(false)
 	}
 
 	const validate = (): boolean => {
@@ -183,6 +337,10 @@ export default function MembersPage() {
 		}
 		if (!isMyJKKNCategory && !form.display_name.trim()) {
 			e.display_name = 'Name is required'
+		}
+		// "Other" is only meaningful once it is named
+		if (form.member_category === 'other' && !form.category_label.trim()) {
+			e.category_label = 'Type what this member is called'
 		}
 		if (!form.membership_start_date) e.membership_start_date = 'Start date is required'
 		if (!form.membership_end_date) e.membership_end_date = 'End date is required'
@@ -207,10 +365,21 @@ export default function MembersPage() {
 			const instId = getInstitutionIdForCreate() ?? institutionId
 			// member_number is always assigned by the server — never sent from the form
 			const { member_number: _ignored, ...formWithoutMemberNumber } = form
+			const { category_label: _typedLabel, ...formWithoutLabel } = formWithoutMemberNumber
 			const payload: Record<string, unknown> = {
-				...formWithoutMemberNumber,
+				...formWithoutLabel,
 				institution_id: instId ?? '',
 				membership_end_date: form.membership_end_date || undefined,
+			}
+
+			// Only "Other" carries a typed name; the other two are named already.
+			// The field is sent only when it means something — so a library still
+			// running the older database is never asked to store a column it has
+			// not been given yet.
+			if (form.member_category === 'other') {
+				payload.category_label = form.category_label.trim()
+			} else if (editingItem?.category_label) {
+				payload.category_label = null
 			}
 
 			// Attach MyJKKN reference if selected
@@ -245,9 +414,11 @@ export default function MembersPage() {
 
 	const handleEdit = (m: LibMember) => {
 		setEditingItem(m)
+		setBatchNote(null)
 		setForm({
 			member_number: m.member_number,
 			member_category: m.member_category,
+			category_label: m.category_label ?? '',
 			display_name: m.display_name ?? '',
 			email: m.email ?? '',
 			phone: m.phone ?? '',
@@ -346,7 +517,7 @@ export default function MembersPage() {
 								<SelectContent>
 									<SelectItem value="all">All Categories</SelectItem>
 									{CATEGORIES.map(c => (
-										<SelectItem key={c} value={c} className="capitalize">{c.replace('_', ' ')}</SelectItem>
+										<SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
 									))}
 								</SelectContent>
 							</Select>
@@ -424,7 +595,7 @@ export default function MembersPage() {
 														fallbackName={m.display_name}
 													/>
 												</TableCell>
-												<TableCell><MemberCategoryBadge category={m.member_category} /></TableCell>
+												<TableCell><MemberCategoryBadge category={m.member_category} label={m.category_label} /></TableCell>
 												{mustSelectInstitution && <TableCell className="text-sm">{m.institution_id?.slice(0, 8) ?? '—'}</TableCell>}
 												<TableCell className="text-sm">{m.email ?? '—'}</TableCell>
 												<TableCell>
@@ -496,7 +667,7 @@ export default function MembersPage() {
 										</DropdownMenu>
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
-										<MemberCategoryBadge category={m.member_category} />
+										<MemberCategoryBadge category={m.member_category} label={m.category_label} />
 										<Badge variant="outline" className={m.is_active
 											? 'bg-brand-green-50 text-brand-green-700 border-brand-green-200 dark:bg-brand-green-900/20 dark:text-brand-green-400 dark:border-brand-green-700'
 											: 'bg-brand-yellow-100 text-brand-yellow-900 border-brand-yellow-300 dark:bg-brand-yellow-900/20 dark:text-brand-yellow-500 dark:border-brand-yellow-800'}>
@@ -543,10 +714,29 @@ export default function MembersPage() {
 					<SheetHeader className="pb-4 border-b">
 						<SheetTitle className="text-lg font-semibold font-heading">{editingItem ? 'Edit Member' : 'Add Member'}</SheetTitle>
 						<p className="text-sm text-muted-foreground">
-							{editingItem ? 'Update member details below' : 'Fill in the details to add a new Knowledge Community Member'}
+							{editingItem
+								? 'Update member details below'
+								: addTab === 'bulk'
+									? 'Enrol a program\'s learners, or the college\'s facilitators, together'
+									: 'Fill in the details to add a new Knowledge Community Member'}
 						</p>
 					</SheetHeader>
-					<div className="mt-6 space-y-8">
+
+					{/* One at a time, or a whole program at once. Editing is always
+					    one member, so the tabs only appear while adding. */}
+					<Tabs
+						value={editingItem ? 'individual' : addTab}
+						onValueChange={value => setAddTab(value as 'individual' | 'bulk')}
+						className="mt-4"
+					>
+						{!editingItem && (
+							<TabsList className="grid w-full grid-cols-2">
+								<TabsTrigger value="individual">Individual</TabsTrigger>
+								<TabsTrigger value="bulk">Bulk</TabsTrigger>
+							</TabsList>
+						)}
+
+						<TabsContent value="individual" className="mt-6 space-y-8">
 						{/* Section: Identity */}
 						<div className="space-y-4">
 							<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Identity</h3>
@@ -573,16 +763,48 @@ export default function MembersPage() {
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Category</Label>
 									<Select value={form.member_category} onValueChange={v => {
-										setForm(f => ({ ...f, member_category: v as LibMemberCategory, display_name: '', email: '', phone: '' }))
+										const next = v as LibMemberCategory
+										setForm(f => ({
+											...f,
+											member_category: next,
+											// The typed name belongs to "Other" alone
+											category_label: next === 'other' ? f.category_label : '',
+											display_name: '',
+											email: '',
+											phone: '',
+											// Dates filled from a learner's batch do not belong to the next person
+											membership_start_date: defaultForm.membership_start_date,
+											membership_end_date: '',
+										}))
 										setSelectedMyjkknMember(null)
+										setBatchNote(null)
 									}}>
 										<SelectTrigger><SelectValue /></SelectTrigger>
 										<SelectContent>
-											{CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c.replace('_', ' ')}</SelectItem>)}
+											{CATEGORIES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
 										</SelectContent>
 									</Select>
 								</div>
 							</div>
+
+							{/* What "Other" is called here — a research scholar, a visiting
+							    doctor, a school teacher. Every campus words it differently. */}
+							{form.member_category === 'other' && (
+								<div className="space-y-2">
+									<Label className="text-sm font-semibold">
+										Category Name <span className="text-destructive">*</span>
+									</Label>
+									<Input
+										value={form.category_label}
+										onChange={e => setForm(f => ({ ...f, category_label: e.target.value }))}
+										className={errors.category_label ? 'border-destructive' : ''}
+										placeholder="e.g. Research Scholar, Visiting Faculty, Alumni"
+									/>
+									{errors.category_label
+										? <p className="text-xs text-destructive">{errors.category_label}</p>
+										: <p className="text-xs text-muted-foreground">This is what shows against their name in the members list</p>}
+								</div>
+							)}
 
 							{/* MyJKKN search for learner/facilitator (new members only) */}
 							{(form.member_category === 'learner' || form.member_category === 'facilitator') && !editingItem ? (
@@ -600,7 +822,15 @@ export default function MembersPage() {
 										selectedMember={selectedMyjkknMember}
 										onClear={() => {
 											setSelectedMyjkknMember(null)
-											setForm(prev => ({ ...prev, display_name: '', email: '', phone: '' }))
+											setForm(prev => ({
+												...prev,
+												display_name: '',
+												email: '',
+												phone: '',
+												membership_start_date: defaultForm.membership_start_date,
+												membership_end_date: '',
+											}))
+											setBatchNote(null)
 										}}
 									/>
 									{errors.myjkkn && <p className="text-xs text-destructive">{errors.myjkkn}</p>}
@@ -651,7 +881,50 @@ export default function MembersPage() {
 
 						{/* Section: Membership */}
 						<div className="space-y-4 pt-2 border-t">
-							<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Membership</h3>
+							<div className="flex flex-wrap items-center gap-2">
+								<h3 className="text-xs font-semibold text-brand-green dark:text-brand-green-400 uppercase tracking-wider font-heading">Membership</h3>
+								{batchLoading && (
+									<span className="text-xs text-muted-foreground">Reading the batch dates...</span>
+								)}
+								{!batchLoading && batchNote && (
+									<span className="text-xs font-medium px-2 py-0.5 rounded-full border border-brand-green-200 bg-brand-green-50 text-brand-green-700 dark:bg-brand-green-900/20 dark:border-brand-green-700 dark:text-brand-green-400">
+										{batchNote}
+									</span>
+								)}
+							</div>
+
+							{/* Which batch the dates come from. Filled in by itself when
+							    MyJKKN knows the learner's batch; picked here when it does
+							    not, which is common — the dates still come from a batch. */}
+							{!editingItem && form.member_category === 'learner' && selectedMyjkknMember && (
+								<div className="space-y-2">
+									<Label className="text-sm font-semibold">Batch</Label>
+									<Select value={chosenBatchId} onValueChange={applyBatch}>
+										<SelectTrigger className={batchMissing ? 'border-amber-400' : ''}>
+											<SelectValue placeholder={
+												collegeBatches.length === 0 ? 'Reading batches from MyJKKN...' : 'Choose the batch'
+											} />
+										</SelectTrigger>
+										<SelectContent>
+											{collegeBatches.map(b => (
+												<SelectItem key={b.id} value={b.id}>
+													{b.label} — {readableDay(b.start)} → {readableDay(b.end)}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+									{batchMissing ? (
+										<p className="text-xs text-amber-700 dark:text-amber-500">
+											MyJKKN has no batch against {selectedMyjkknMember.display_name}, so the dates could not fill
+											themselves — choose their batch here and both dates follow.
+										</p>
+									) : (
+										<p className="text-xs text-muted-foreground">
+											Taken from MyJKKN. Change it and the dates below follow.
+										</p>
+									)}
+								</div>
+							)}
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Start Date <span className="text-destructive">*</span></Label>
@@ -688,7 +961,18 @@ export default function MembersPage() {
 								{saving ? 'Saving...' : (editingItem ? 'Update Member' : 'Create Member')}
 							</Button>
 						</div>
-					</div>
+						</TabsContent>
+
+						{!editingItem && (
+							<TabsContent value="bulk" className="mt-6">
+								<MemberBulkEnrol
+									institutionId={getInstitutionIdForCreate() ?? institutionId}
+									onEnrolled={fetchData}
+									onClose={() => setSheetOpen(false)}
+								/>
+							</TabsContent>
+						)}
+					</Tabs>
 				</SheetContent>
 			</Sheet>
 

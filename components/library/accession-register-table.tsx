@@ -75,6 +75,29 @@ const soften = (value: unknown): string => (value ?? '').toString().trim().toLow
 /** 978-81-239-2565-3 and 9788123925653 are one number printed two ways. */
 const digitsOnly = (value: unknown): string => soften(value).replace(/[^0-9x]/g, '')
 
+/**
+ * Register order: accession numbers, counted rather than spelled.
+ *
+ * Sorted as text, 1000 lands next to 100 and the register reads nothing like
+ * the shelf. Plain numbers are compared as numbers and come first; anything a
+ * college writes with letters in it (COP/2024/12) falls in after them, still in
+ * a sensible order because the comparison itself is number-aware.
+ */
+const byAccession = (a: { accession_number?: string | null }, b: { accession_number?: string | null }): number => {
+	const left = (a.accession_number ?? '').trim()
+	const right = (b.accession_number ?? '').trim()
+
+	const leftNumber = Number(left)
+	const rightNumber = Number(right)
+	const leftIsNumber = left !== '' && Number.isFinite(leftNumber)
+	const rightIsNumber = right !== '' && Number.isFinite(rightNumber)
+
+	if (leftIsNumber && rightIsNumber) return leftNumber - rightNumber
+	if (leftIsNumber) return -1
+	if (rightIsNumber) return 1
+	return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' })
+}
+
 export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDelete, headerActions }: Props) {
 	/** What is being typed. Nothing is searched until the button is pressed. */
 	const [draft, setDraft] = useState<SearchTerms>(NO_TERMS)
@@ -118,6 +141,9 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 	 * containing those two digits — the number asked for was in the list, just
 	 * not where anyone would look. Now the exact number comes first, then the
 	 * numbers beginning with it, then the rest.
+	 *
+	 * Within all of that the register reads in accession order, counting the way
+	 * a person counts: 1000 sits after 999, not between 100 and 10000.
 	 */
 	const filtered = useMemo(() => {
 		const accession = soften(applied.accession)
@@ -135,7 +161,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 			return typeFilter === 'all' || (r.book_type ?? '') === typeFilter
 		})
 
-		if (!accession) return matched
+		if (!accession) return [...matched].sort(byAccession)
 
 		const rank = (row: RegisterRow) => {
 			const value = searchable.get(row.item_id)?.accession ?? ''
@@ -144,7 +170,8 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 			return 2
 		}
 
-		return [...matched].sort((a, b) => rank(a) - rank(b))
+		// Best match first, and inside each group the register's own order
+		return [...matched].sort((a, b) => (rank(a) - rank(b)) || byAccession(a, b))
 	}, [rows, applied, typeFilter, searchable])
 
 	const hasSearch = Boolean(applied.accession || applied.isbn || applied.title)

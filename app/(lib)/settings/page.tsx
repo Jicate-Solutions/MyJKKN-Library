@@ -46,11 +46,12 @@ interface Policy {
 	requires_no_dues: boolean
 }
 
-const CATEGORY_ORDER = ['learner', 'facilitator', 'team_member', 'guest', 'alumni']
+const CATEGORY_ORDER = ['learner', 'facilitator', 'other', 'team_member', 'guest', 'alumni']
 
 const CATEGORY_LABEL: Record<string, string> = {
 	learner: 'Learner',
 	facilitator: 'Facilitator',
+	other: 'Other',
 	team_member: 'Team Member',
 	guest: 'Guest',
 	alumni: 'Alumni',

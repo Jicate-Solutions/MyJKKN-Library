@@ -5,6 +5,8 @@ import type { LibMemberCategory } from '@/types/lib'
 
 interface MemberCategoryBadgeProps {
 	category: LibMemberCategory
+	/** What the librarian typed for an "Other" member — shown instead of "Other". */
+	label?: string | null
 	className?: string
 }
 
@@ -16,6 +18,10 @@ const categoryConfig: Record<LibMemberCategory, { label: string; className: stri
 	facilitator: {
 		label: 'Facilitator',
 		className: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800',
+	},
+	other: {
+		label: 'Other',
+		className: 'bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/20 dark:text-teal-400 dark:border-teal-800',
 	},
 	team_member: {
 		label: 'Team Member',
@@ -31,7 +37,7 @@ const categoryConfig: Record<LibMemberCategory, { label: string; className: stri
 	},
 }
 
-export function MemberCategoryBadge({ category, className }: MemberCategoryBadgeProps) {
+export function MemberCategoryBadge({ category, label, className }: MemberCategoryBadgeProps) {
 	const config = categoryConfig[category] ?? {
 		label: category,
 		className: 'bg-gray-100 text-gray-800 border-gray-200',
@@ -42,7 +48,7 @@ export function MemberCategoryBadge({ category, className }: MemberCategoryBadge
 			variant="outline"
 			className={`text-xs font-medium ${config.className} ${className ?? ''}`}
 		>
-			{config.label}
+			{label?.trim() || config.label}
 		</Badge>
 	)
 }

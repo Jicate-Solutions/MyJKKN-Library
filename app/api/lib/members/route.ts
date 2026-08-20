@@ -59,6 +59,10 @@ export async function POST(request: Request) {
 		if (!body.membership_start_date) {
 			return NextResponse.json({ error: 'membership_start_date is required' }, { status: 400 })
 		}
+		// "Other" without a name is a member nobody can describe later
+		if (body.member_category === 'other' && !body.category_label?.toString().trim()) {
+			return NextResponse.json({ error: 'Type what this member is called' }, { status: 400 })
+		}
 
 		// One MyJKKN person may hold only one membership per institution. The UI hides
 		// people who are already enrolled, but this is the guard that actually enforces
@@ -156,6 +160,12 @@ export async function POST(request: Request) {
 			institution_id: body.institution_id,
 			member_number: memberNumber,
 			member_category: body.member_category,
+			// Only "Other" is named by the librarian; the rest name themselves.
+			// Written only for "Other", so enrolling a learner still works on a
+			// database that has not had the category_label column added yet.
+			...(body.member_category === 'other'
+				? { category_label: body.category_label?.toString().trim() || null }
+				: {}),
 			learner_id: body.learner_id ?? null,
 			facilitator_id: body.facilitator_id ?? null,
 			team_member_id: body.team_member_id ?? null,
@@ -189,6 +199,13 @@ export async function POST(request: Request) {
 			}
 
 			console.error('Error creating member:', error)
+			// The Other category needs one database update to have been run
+			if (error.code === '42703' || error.code === '23514') {
+				return NextResponse.json(
+					{ error: 'This library\'s database has not been updated for the Other category yet — please run the pending database update' },
+					{ status: 400 }
+				)
+			}
 			if (error.code === '23505') {
 				return NextResponse.json({ error: 'Could not assign a member number — please try again' }, { status: 409 })
 			}

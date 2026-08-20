@@ -153,6 +153,7 @@ export function MyJKKNBrowseModal({
 				? student.roll_number || student.register_number || ''
 				: staff.staff_id || staff.staff_code || '',
 			roll_number: isLearner ? extractRollNumber(item as Record<string, any>) : undefined,
+			batch_id: isLearner ? (student.batch_id || undefined) : undefined,
 		})
 		onOpenChange(false)
 	}

@@ -17,6 +17,8 @@ export interface SelectedMember {
 	identifier: string
 	/** Learners only — becomes their library member number */
 	roll_number?: string
+	/** Learners only — the batch they belong to, which carries its start and end dates */
+	batch_id?: string
 }
 
 interface MyJKKNMemberSearchProps {
@@ -178,6 +180,7 @@ export function MyJKKNMemberSearch({
 				? student.roll_number || student.register_number || ''
 				: staff.staff_id || staff.staff_code || '',
 			roll_number: isLearner ? extractRollNumber(item as Record<string, any>) : undefined,
+			batch_id: isLearner ? (student.batch_id || undefined) : undefined,
 		})
 		setQuery('')
 		setShowDropdown(false)

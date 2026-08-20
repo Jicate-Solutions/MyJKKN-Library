@@ -1,13 +1,23 @@
 // types/lib.ts — MyjkknLIB Type Definitions
 
 // ── Member ──────────────────────────────────────────────────────────
-export type LibMemberCategory = 'learner' | 'facilitator' | 'team_member' | 'guest' | 'alumni'
+/**
+ * The form offers three: learner and facilitator come from MyJKKN, and `other`
+ * is everyone else the library lends to, named by the librarian in
+ * `category_label`.
+ *
+ * team_member, guest and alumni are the older codes. Nothing creates them any
+ * more, but they stay in the type so a row saved under one still reads.
+ */
+export type LibMemberCategory = 'learner' | 'facilitator' | 'other' | 'team_member' | 'guest' | 'alumni'
 
 export interface LibMember {
 	id: string
 	institution_id: string
 	member_number: string
 	member_category: LibMemberCategory
+	/** What the librarian typed when the category is `other`. */
+	category_label?: string
 	learner_id?: string
 	facilitator_id?: string
 	team_member_id?: string

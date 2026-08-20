@@ -13,9 +13,10 @@
  * might be a few seconds stale.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
+import { useScanFocus } from '@/hooks/library/use-scan-focus'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -63,6 +64,7 @@ interface ScanResult {
 const CATEGORY_LABELS: Record<string, string> = {
 	learner: 'Learner',
 	facilitator: 'Facilitator',
+	other: 'Other',
 	team_member: 'Staff',
 	guest: 'Guest',
 	alumni: 'Alumni',
@@ -77,7 +79,6 @@ function initials(name: string): string {
 export function PharmacyGateEntry() {
 	const { isReady, institutionId, appendToUrl } = useInstitutionFilter()
 	const { toast } = useToast()
-	const inputRef = useRef<HTMLInputElement>(null)
 
 	const today = istToday()
 
@@ -95,6 +96,9 @@ export function PharmacyGateEntry() {
 	// Scanning always writes to today. Looking at an older day is reading the
 	// register, not standing at the door, so the scan box goes away with it.
 	const isToday = viewDate === today
+
+	// The cursor lives in the scan box whenever the box is there to scan into
+	const { inputRef, focusScanBox } = useScanFocus(isToday && !forbidden && !confirmClose)
 
 	const fetchData = useCallback(async () => {
 		if (!isReady) return
@@ -118,6 +122,9 @@ export function PharmacyGateEntry() {
 
 	useEffect(() => { fetchData() }, [fetchData])
 
+	// The moment a scan is finished with, the box is ready for the next card
+	useEffect(() => { if (!scanning) focusScanBox() }, [scanning, focusScanBox])
+
 	const inside = useMemo(() => visits.filter(v => v.entry_time && !v.exit_time), [visits])
 
 	const filtered = useMemo(() => {
@@ -131,7 +138,7 @@ export function PharmacyGateEntry() {
 
 	const handleScan = async () => {
 		const code = barcode.trim()
-		if (!code) return
+		if (!code || scanning) return
 		if (!institutionId) {
 			toast({ title: 'Select the college first', variant: 'destructive' })
 			return
@@ -162,7 +169,7 @@ export function PharmacyGateEntry() {
 			setBarcode('')
 			setScanning(false)
 			// Straight back to the box — the next student is already at the door
-			inputRef.current?.focus()
+			focusScanBox()
 		}
 	}
 
@@ -259,7 +266,9 @@ export function PharmacyGateEntry() {
 										value={barcode}
 										onChange={e => setBarcode(e.target.value)}
 										onKeyDown={e => { if (e.key === 'Enter') handleScan() }}
-										disabled={scanning}
+										// Held rather than disabled: a disabled box loses the
+										// cursor, and the next card would scan into nothing
+										readOnly={scanning}
 										className="h-11 text-base min-w-0"
 									/>
 									<Button

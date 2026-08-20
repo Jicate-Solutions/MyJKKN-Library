@@ -12,8 +12,9 @@
  * box to think about, not two. Footfall is what inspection asks for.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
+import { useScanFocus } from '@/hooks/library/use-scan-focus'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,7 +49,6 @@ function timeOnly(value: string | null): string {
 export function StandardGateEntry() {
 	const { isReady, institutionId, appendToUrl } = useInstitutionFilter()
 	const { toast } = useToast()
-	const inputRef = useRef<HTMLInputElement>(null)
 
 	const [visits, setVisits] = useState<Visit[]>([])
 	const [loading, setLoading] = useState(true)
@@ -58,6 +58,10 @@ export function StandardGateEntry() {
 	const [lastPerson, setLastPerson] = useState<{ name: string; photo: string | null; direction: 'in' | 'out' } | null>(null)
 
 	const today = new Date().toISOString().split('T')[0]
+
+	// The cursor lives in the scan box, so card after card can be scanned
+	// without anybody reaching for the mouse
+	const { inputRef, focusScanBox } = useScanFocus(!forbidden)
 
 	const fetchData = useCallback(async () => {
 		if (!isReady) return
@@ -81,11 +85,14 @@ export function StandardGateEntry() {
 
 	useEffect(() => { fetchData() }, [fetchData])
 
+	// The moment a scan is finished with, the box is ready for the next card
+	useEffect(() => { if (!scanning) focusScanBox() }, [scanning, focusScanBox])
+
 	const inside = useMemo(() => visits.filter(v => v.entry_time && !v.exit_time), [visits])
 
 	const handleScan = async () => {
 		const code = barcode.trim()
-		if (!code) return
+		if (!code || scanning) return
 		if (!institutionId) {
 			toast({ title: 'Select an institution first', variant: 'destructive' })
 			return
@@ -128,12 +135,12 @@ export function StandardGateEntry() {
 			}
 
 			setBarcode('')
-			inputRef.current?.focus()
+			focusScanBox()
 			fetchData()
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Scan failed'), variant: 'destructive' })
 			setBarcode('')
-			inputRef.current?.focus()
+			focusScanBox()
 		} finally {
 			setScanning(false)
 		}
@@ -168,7 +175,9 @@ export function StandardGateEntry() {
 								value={barcode}
 								onChange={e => setBarcode(e.target.value)}
 								onKeyDown={e => { if (e.key === 'Enter') handleScan() }}
-								disabled={scanning}
+								// Held rather than disabled: a disabled box loses the cursor,
+								// and the next card would scan into nothing
+								readOnly={scanning}
 								className="h-10 text-sm min-w-0"
 							/>
 							<Button
