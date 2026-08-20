@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 
 export async function GET(
 	request: Request,
@@ -59,6 +60,9 @@ export async function PUT(
 		delete body.created_at
 		delete body.created_by
 
+		// The title as it stands, read before it is overwritten
+		const before = await fetchOldValues('lib_catalogue_records', id)
+
 		const { data, error } = await supabase
 			.from('lib_catalogue_records')
 			.update({ ...body, updated_at: new Date().toISOString() })
@@ -103,6 +107,16 @@ export async function PUT(
 			.eq('id', id)
 			.single()
 
+		await logActivity(request, {
+			action: 'update',
+			resource_type: 'catalogue_record',
+			resource_id: '/registry',
+			institution_id: (data?.institution_id as string) ?? guard.institutionId,
+			old_values: before,
+			new_values: data,
+			metadata: { record_id: id, title: data?.title },
+		})
+
 		return NextResponse.json(full ?? data)
 	} catch (error) {
 		console.error('Unexpected error updating catalogue record:', error)
@@ -120,6 +134,9 @@ export async function DELETE(
 		if (!guard.ok) return guard.response
 		const supabase = getSupabaseServer()
 
+		// A deleted title is exactly the thing somebody asks about later
+		const before = await fetchOldValues('lib_catalogue_records', id)
+
 		const { error } = await supabase
 			.from('lib_catalogue_records')
 			.delete()
@@ -135,6 +152,15 @@ export async function DELETE(
 			}
 			return NextResponse.json({ error: 'Failed to delete catalogue record' }, { status: 500 })
 		}
+
+		await logActivity(request, {
+			action: 'delete',
+			resource_type: 'catalogue_record',
+			resource_id: '/registry',
+			institution_id: (before?.institution_id as string) ?? guard.institutionId,
+			old_values: before,
+			metadata: { record_id: id, title: (before?.title as string) ?? null },
+		})
 
 		return NextResponse.json({ success: true })
 	} catch (error) {

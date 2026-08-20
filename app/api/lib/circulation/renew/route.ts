@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { logActivity } from '@/lib/library/activity-log'
 
 export async function POST(request: Request) {
 	try {
@@ -125,6 +126,20 @@ export async function POST(request: Request) {
 			console.error('Error renewing transaction:', updateError)
 			return NextResponse.json({ error: 'Failed to renew' }, { status: 500 })
 		}
+
+		await logActivity(request, {
+			action: 'update',
+			resource_type: 'loan',
+			resource_id: '/circulation',
+			institution_id,
+			new_values: updated,
+			metadata: {
+				renewed: true,
+				transaction_id: updated?.id ?? transaction_id ?? null,
+				new_due_date: newDueDateStr,
+				renewal_count: updated?.renewal_count,
+			},
+		})
 
 		return NextResponse.json({
 			success: true,

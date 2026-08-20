@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { logActivity } from '@/lib/library/activity-log'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
@@ -159,6 +160,15 @@ export async function POST(request: Request) {
 			.select('*, authors:lib_catalogue_authors(id, author_name, author_type, sort_order)')
 			.eq('id', record.id)
 			.single()
+
+		await logActivity(request, {
+			action: 'create',
+			resource_type: 'catalogue_record',
+			resource_id: '/registry',
+			institution_id: body.institution_id,
+			new_values: record,
+			metadata: { record_id: record.id, title: record.title },
+		})
 
 		return NextResponse.json(full ?? record, { status: 201 })
 	} catch (error) {

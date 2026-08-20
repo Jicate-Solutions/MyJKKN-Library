@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { logActivity } from '@/lib/library/activity-log'
 
 interface IncomingLearner {
 	/** MyJKKN id — a learner's profile id, or a staff member's */
@@ -169,6 +170,23 @@ export async function POST(request: Request) {
 			if (isFacilitator && !usesCollegeId) nextSequence++
 			created++
 		}
+
+		// One line for the batch, not one per person: a program of 90 learners is
+		// a single act by a single librarian
+		await logActivity(request, {
+			action: 'file_import',
+			resource_type: 'member',
+			resource_id: '/members',
+			institution_id: institutionId,
+			status: failures.length > 0 ? 'error' : 'success',
+			error_message: failures.length > 0 ? `${failures.length} could not be enrolled` : null,
+			metadata: {
+				category: isFacilitator ? 'facilitator' : 'learner',
+				records_count: created,
+				error_count: failures.length,
+				sent: learners.length,
+			},
+		})
 
 		return NextResponse.json({
 			created,

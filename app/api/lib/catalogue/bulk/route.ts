@@ -23,6 +23,7 @@ import {
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { toSheetDate } from '@/lib/library/sheet-date'
+import { logActivity } from '@/lib/library/activity-log'
 
 /** How many books are in flight at once. Enough to be quick, few enough to be kind to the connection pool. */
 const CONCURRENCY = 8
@@ -341,6 +342,24 @@ export async function POST(request: Request) {
 		}
 
 		failures.sort((a, b) => a.row - b.row)
+
+		// One line per batch the screen sends, so a 2000-row sheet reads as a
+		// handful of uploads rather than two thousand identical entries
+		await logActivity(request, {
+			action: 'file_import',
+			resource_type: 'catalogue_record',
+			resource_id: '/registry',
+			institution_id: institutionId,
+			status: failures.length > 0 ? 'error' : 'success',
+			error_message: failures.length > 0 ? `${failures.length} row(s) were not added` : null,
+			metadata: {
+				records_count: created,
+				error_count: failures.length,
+				new_titles: newTitles,
+				rows_sent: rows.length,
+				first_row: rowOffset + 2,
+			},
+		})
 
 		return NextResponse.json({
 			created,

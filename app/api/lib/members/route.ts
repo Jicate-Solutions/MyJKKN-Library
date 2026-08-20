@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { logActivity } from '@/lib/library/activity-log'
 
 export async function GET(request: Request) {
 	try {
@@ -190,6 +191,14 @@ export async function POST(request: Request) {
 				.single()
 
 			if (!error) {
+				await logActivity(request, {
+					action: 'create',
+					resource_type: 'member',
+					resource_id: '/members',
+					institution_id: body.institution_id,
+					new_values: data,
+					metadata: { member_number: data.member_number, member_category: data.member_category },
+				})
 				return NextResponse.json(data, { status: 201 })
 			}
 
@@ -199,6 +208,15 @@ export async function POST(request: Request) {
 			}
 
 			console.error('Error creating member:', error)
+			await logActivity(request, {
+				action: 'create',
+				resource_type: 'member',
+				resource_id: '/members',
+				institution_id: body.institution_id,
+				status: 'error',
+				error_message: error.message,
+				metadata: { display_name: body.display_name ?? null },
+			})
 			// The Other category needs one database update to have been run
 			if (error.code === '42703' || error.code === '23514') {
 				return NextResponse.json(

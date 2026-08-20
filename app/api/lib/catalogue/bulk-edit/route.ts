@@ -34,6 +34,7 @@ import {
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 import { toSheetDate } from '@/lib/library/sheet-date'
+import { logActivity } from '@/lib/library/activity-log'
 
 /** How many books are changed at once. Same reasoning as the upload route. */
 const CONCURRENCY = 8
@@ -503,6 +504,22 @@ export async function PUT(request: Request) {
 		}
 
 		failures.sort((a, b) => a.row - b.row)
+
+		await logActivity(request, {
+			action: 'file_import',
+			resource_type: 'catalogue_record',
+			resource_id: '/registry',
+			institution_id: institutionId,
+			status: failures.length > 0 ? 'error' : 'success',
+			error_message: failures.length > 0 ? `${failures.length} row(s) were not changed` : null,
+			metadata: {
+				edit: true,
+				records_count: updated,
+				moved_to_another_title: movedOut,
+				error_count: failures.length,
+				rows_sent: rows.length,
+			},
+		})
 
 		return NextResponse.json({
 			updated,

@@ -6,11 +6,14 @@ import { RequireAuth } from '@/components/common/protected-route'
 import { MemberRouteGuard } from '@/components/layout/member-route-guard'
 import { ImpersonationBanner } from '@/components/layout/impersonation-banner'
 import { BottomNavbar } from '@/components/BottomNav'
+import { ActivityTracker } from '@/components/library/activity-tracker'
 
 export default function LibLayout({ children }: { children: React.ReactNode }) {
 	return (
 		<RequireAuth redirectTo="/login">
 			<InstitutionProvider>
+				{/* Records the page being opened. Draws nothing. */}
+				<ActivityTracker />
 				<SidebarProvider>
 					<LibSidebar />
 					<SidebarInset>

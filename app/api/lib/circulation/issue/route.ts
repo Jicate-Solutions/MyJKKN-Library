@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { logActivity } from '@/lib/library/activity-log'
 
 export async function POST(request: Request) {
 	try {
@@ -153,6 +154,15 @@ export async function POST(request: Request) {
 			.eq('member_id', member_id)
 			.eq('item_id', item_id)
 			.eq('hold_status', 'available')
+
+		await logActivity(request, {
+			action: 'create',
+			resource_type: 'loan',
+			resource_id: '/circulation',
+			institution_id,
+			new_values: transaction,
+			metadata: { member_id, item_id, due_date: dueDateStr, loan_period_days: loanPeriodDays },
+		})
 
 		return NextResponse.json(
 			{

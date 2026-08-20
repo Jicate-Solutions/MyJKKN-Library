@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
+import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 import { hasAtLeast } from '@/lib/auth/server-access'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
 
@@ -68,6 +69,12 @@ export async function PUT(request: Request) {
 		}
 
 		const supabase = getSupabaseServer()
+
+		// The rules as they stand, so the log can show what a fine used to be
+		const before = guard.institutionId
+			? await fetchOldValues('lib_institution_settings', guard.institutionId, 'institution_id')
+			: null
+
 		const { data, error } = await supabase
 			.from('lib_institution_settings')
 			.upsert({ ...update, updated_at: new Date().toISOString() }, { onConflict: 'institution_id' })
@@ -84,6 +91,16 @@ export async function PUT(request: Request) {
 			}
 			return NextResponse.json({ error: 'Failed to save settings' }, { status: 500 })
 		}
+
+		await logActivity(request, {
+			action: 'update',
+			resource_type: 'setting',
+			resource_id: '/settings',
+			institution_id: guard.institutionId,
+			old_values: before,
+			new_values: data,
+			metadata: { fields: Object.keys(update).filter(k => k !== 'institution_id') },
+		})
 
 		return NextResponse.json(data)
 	} catch (error) {

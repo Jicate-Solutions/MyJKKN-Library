@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { logActivity } from '@/lib/library/activity-log'
 import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
 
 export async function POST(request: Request) {
@@ -192,6 +193,20 @@ export async function POST(request: Request) {
 					.eq('id', returnedItemId)
 			}
 		}
+
+		await logActivity(request, {
+			action: 'update',
+			resource_type: 'loan',
+			resource_id: '/circulation',
+			institution_id,
+			new_values: updatedTx,
+			metadata: {
+				returned: true,
+				transaction_id: updatedTx?.id ?? transaction_id ?? null,
+				overdue_days: overdueDays,
+				late_charge: chargeRecord?.charge_amount ?? 0,
+			},
+		})
 
 		return NextResponse.json({
 			success: true,

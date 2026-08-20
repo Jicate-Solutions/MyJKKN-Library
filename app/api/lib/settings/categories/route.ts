@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { hasAtLeast } from '@/lib/auth/server-access'
+import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 
 /** The codes lib_members actually stores, so a lookup can never miss. */
 const VALID_CODES = ['learner', 'facilitator', 'other', 'team_member', 'guest', 'alumni']
@@ -84,10 +85,11 @@ export async function POST(request: Request) {
 
 		const supabase = getSupabaseServer()
 
-		// One row per category per institution — update in place when it exists
+		// One row per category per institution — update in place when it exists.
+		// Read in full, so the log can show what the rule was before it changed.
 		const { data: existing } = await supabase
 			.from('lib_member_categories')
-			.select('id')
+			.select('*')
 			.eq('institution_id', guard.institutionId)
 			.eq('category_code', code)
 			.maybeSingle()
@@ -100,6 +102,16 @@ export async function POST(request: Request) {
 			console.error('Error saving member category:', error)
 			return NextResponse.json({ error: 'Failed to save borrowing rule' }, { status: 500 })
 		}
+
+		await logActivity(request, {
+			action: existing ? 'update' : 'create',
+			resource_type: 'borrowing_rule',
+			resource_id: '/settings',
+			institution_id: guard.institutionId,
+			old_values: existing ?? null,
+			new_values: data,
+			metadata: { category_code: code },
+		})
 
 		return NextResponse.json(data, { status: existing ? 200 : 201 })
 	} catch (error) {
@@ -122,12 +134,22 @@ export async function DELETE(request: Request) {
 		}
 
 		const supabase = getSupabaseServer()
+		const before = await fetchOldValues('lib_member_categories', id)
 		const { error } = await supabase.from('lib_member_categories').delete().eq('id', id)
 
 		if (error) {
 			console.error('Error deleting member category:', error)
 			return NextResponse.json({ error: 'Failed to delete borrowing rule' }, { status: 500 })
 		}
+
+		await logActivity(request, {
+			action: 'delete',
+			resource_type: 'borrowing_rule',
+			resource_id: '/settings',
+			institution_id: guard.institutionId,
+			old_values: before,
+			metadata: { category_code: (before?.category_code as string) ?? null },
+		})
 
 		return NextResponse.json({ success: true })
 	} catch (error) {
