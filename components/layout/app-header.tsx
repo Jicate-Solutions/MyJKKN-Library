@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { BellRing } from "lucide-react"
 import { NavUser } from "@/components/layout/nav-user"
 import { InstitutionSelector } from "@/components/layout/institution-selector"
+import { FavouriteStar } from "@/components/library/favourite-star"
 import { useInstitution } from "@/context/institution-context"
 
 // Isolated clock component to prevent re-rendering entire header every second
@@ -92,6 +93,9 @@ export function AppHeader({
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2 relative z-15 ml-auto shrink-0">
+        {/* Stars the page you are on into the sidebar's Favourites. Hidden below
+            sm: there is no sidebar there to put it in, and no room for it */}
+        <FavouriteStar className="hidden sm:flex" />
         {/* Institution Selector - positioned prominently in header */}
         <InstitutionSelector variant="compact" />
         <Separator orientation="vertical" className="hidden md:block h-6 bg-white/30" />

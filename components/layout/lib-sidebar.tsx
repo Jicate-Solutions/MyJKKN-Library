@@ -31,6 +31,7 @@ import {
 	ScanLine,
 	SlidersHorizontal,
 	Layers,
+	ScrollText,
 } from 'lucide-react'
 import {
 	Sidebar,
@@ -53,6 +54,7 @@ import {
 import { ChevronRight } from 'lucide-react'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { isMemberAllowedPage } from '@/lib/auth/member-access'
+import { FavouritesSidebarSection } from '@/components/library/favourites-sidebar-section'
 
 export interface NavItem {
 	title: string
@@ -124,6 +126,7 @@ export const navGroups: NavGroup[] = [
 			{ title: 'Reports Dashboard', url: '/reports', icon: BarChart3 },
 			{ title: 'Library Rules', url: '/settings', icon: SlidersHorizontal },
 			{ title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
+			{ title: 'Activity Log', url: '/activity-log', icon: ScrollText },
 			{ title: 'Staff Access', url: '/access', icon: ShieldCheck },
 		],
 	},
@@ -138,10 +141,17 @@ export const navGroups: NavGroup[] = [
  * two menus can never disagree about who sees what.
  */
 export function visibleNavGroups(role: string | null | undefined, isMember: boolean): NavGroup[] {
+	// The activity log carries names, addresses and whole records, so it stops
+	// at the two roles that answer for the library rather than run its desk
+	const readsTheLog = role === 'super_admin' || role === 'admin'
+
 	const withoutRestricted = navGroups
 		.map(group => ({
 			...group,
-			items: group.items.filter(i => i.url !== '/access' || role === 'super_admin'),
+			items: group.items.filter(i =>
+				(i.url !== '/access' || role === 'super_admin') &&
+				(i.url !== '/activity-log' || readsTheLog)
+			),
 		}))
 		.filter(group => group.items.length > 0)
 
@@ -194,6 +204,8 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 			</SidebarHeader>
 
 			<SidebarContent className="py-4">
+				{/* The pages this person starred, above the full menu */}
+				<FavouritesSidebarSection />
 				{visibleGroups.map((group) => (
 					<Collapsible
 						key={group.label}
