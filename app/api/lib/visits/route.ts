@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -14,21 +15,24 @@ export async function GET(request: Request) {
 		const fromDate = searchParams.get('from_date')
 		const toDate = searchParams.get('to_date')
 
-		let query = supabase
-			.from('lib_member_visits')
-			.select(`
-				*,
-				member:lib_members(id, member_number, display_name, member_category)
-			`)
+		// A big college can see more than a thousand people through the door in
+		// one day, and a footfall figure that silently stopped at a thousand is
+		// exactly the number inspection asks for
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_member_visits')
+				.select(`
+					*,
+					member:lib_members(id, member_number, display_name, member_category)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (memberId) query = query.eq('member_id', memberId)
-		if (fromDate) query = query.gte('visit_date', fromDate)
-		if (toDate) query = query.lte('visit_date', toDate)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (memberId) query = query.eq('member_id', memberId)
+			if (fromDate) query = query.gte('visit_date', fromDate)
+			if (toDate) query = query.lte('visit_date', toDate)
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching visits:', error)

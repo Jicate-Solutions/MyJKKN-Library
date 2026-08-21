@@ -167,6 +167,30 @@ export async function POST(request: Request) {
 			)
 		}
 
+		// The finished register line for the book just entered.
+		//
+		// Without it the page had no way to show the new row except by reading
+		// the whole register again — 27,996 copies and 4,007 titles re-read to
+		// display one line. Two small lookups by id cost almost nothing, and the
+		// title is read back rather than taken from the form because a copy
+		// added to an existing book carries that book's details, not the ones
+		// just typed.
+		const [{ data: catalogue }, { count: totalCopies }] = await Promise.all([
+			supabase
+				.from('lib_catalogue_records')
+				.select(`
+					id, title, subtitle, author, edition, isbn, issn,
+					resource_format, book_type, department, book_location,
+					publisher_name, publication_year, is_reference_only
+				`)
+				.eq('id', recordId as string)
+				.maybeSingle(),
+			supabase
+				.from('lib_items')
+				.select('id', { count: 'exact', head: true })
+				.eq('catalogue_record_id', recordId as string),
+		])
+
 		return NextResponse.json({
 			catalogue_record_id: recordId,
 			title,
@@ -175,6 +199,29 @@ export async function POST(request: Request) {
 			// null when this is the first copy — the desk shows a different message
 			matched_by: existing?.matchedBy ?? null,
 			matched_title: existing?.title ?? null,
+			register_row: {
+				item_id: item.id,
+				accession_number: item.accession_number,
+				copy_number: item.copy_number,
+				status: 'available',
+				is_lendable: !(body.is_reference_only ?? false),
+				accession_date: text(body.accession_date) || istToday(),
+				catalogue_record_id: catalogue?.id ?? null,
+				title: catalogue?.title ?? title,
+				subtitle: catalogue?.subtitle ?? null,
+				author: catalogue?.author ?? null,
+				edition: catalogue?.edition ?? null,
+				isbn: catalogue?.isbn ?? null,
+				issn: catalogue?.issn ?? null,
+				resource_format: catalogue?.resource_format ?? 'other',
+				book_type: catalogue?.book_type ?? null,
+				department: catalogue?.department ?? null,
+				book_location: catalogue?.book_location ?? null,
+				publisher_name: catalogue?.publisher_name ?? null,
+				publication_year: catalogue?.publication_year ?? null,
+				is_reference_only: catalogue?.is_reference_only ?? false,
+				total_copies: totalCopies ?? item.copy_number,
+			},
 		}, { status: 201 })
 	} catch (error) {
 		console.error('Unexpected error accessioning a book:', error)

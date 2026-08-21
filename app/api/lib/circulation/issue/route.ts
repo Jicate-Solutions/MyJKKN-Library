@@ -24,13 +24,42 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'member_id is required' }, { status: 400 })
 		}
 
-		// 1. Check item exists and is available
-		const { data: item, error: itemError } = await supabase
-			.from('lib_items')
-			.select('id, status, is_lendable, institution_id, catalogue_record_id')
-			.eq('id', item_id)
-			.single()
+		// The book, the member, the campus rules and how much they are already
+		// holding are four separate questions that do not depend on each other's
+		// answers, so they are asked together. They used to be asked one after
+		// another, and the desk waited through all four before the first word of
+		// a refusal appeared. The checks below still run in their old order, so
+		// which complaint comes back first has not changed.
+		const [
+			{ data: item, error: itemError },
+			{ data: member, error: memberError },
+			settings,
+			{ count: booksHeld },
+		] = await Promise.all([
+			supabase
+				.from('lib_items')
+				.select('id, status, is_lendable, institution_id, catalogue_record_id')
+				.eq('id', item_id)
+				.single(),
+			supabase
+				.from('lib_members')
+				.select('id, is_active, is_delinquent, member_category, institution_id')
+				.eq('id', member_id)
+				.single(),
+			getInstitutionSettings(institution_id),
+			// The limit is on books held at once, not books borrowed over the
+			// year — returning one frees the slot immediately. An overdue book is
+			// still in the member's hands, so it must count: checking only
+			// 'active' would let someone holding three overdue books take three
+			// more.
+			supabase
+				.from('lib_lending_transactions')
+				.select('*', { count: 'exact', head: true })
+				.eq('member_id', member_id)
+				.in('transaction_status', ['active', 'overdue']),
+		])
 
+		// 1. Check item exists and is available
 		if (itemError || !item) {
 			return NextResponse.json({ error: 'Item not found' }, { status: 404 })
 		}
@@ -48,12 +77,6 @@ export async function POST(request: Request) {
 		}
 
 		// 2. Check member is active and not delinquent
-		const { data: member, error: memberError } = await supabase
-			.from('lib_members')
-			.select('id, is_active, is_delinquent, member_category, institution_id')
-			.eq('id', member_id)
-			.single()
-
 		if (memberError || !member) {
 			return NextResponse.json({ error: 'Member not found' }, { status: 404 })
 		}
@@ -65,7 +88,6 @@ export async function POST(request: Request) {
 		}
 		// Whether unpaid charges stop a member borrowing is a campus decision:
 		// Pharmacy lets them take the next book while a fine is still open.
-		const settings = await getInstitutionSettings(institution_id)
 		if (member.is_delinquent && settings.block_borrowing_when_fine_due) {
 			return NextResponse.json(
 				{ error: 'Member has unpaid late charges — please clear outstanding charges before lending' },
@@ -84,16 +106,7 @@ export async function POST(request: Request) {
 		const loanPeriodDays = body.loan_period_days ?? categoryConfig?.loan_period_days ?? 14
 		const maxItemsAllowed = categoryConfig?.max_items_allowed ?? 3
 
-		// 4. The limit is on books held at once, not books borrowed over the
-		// year — returning one frees the slot immediately. An overdue book is
-		// still in the member's hands, so it must count: checking only 'active'
-		// would let someone holding three overdue books take three more.
-		const { count: booksHeld } = await supabase
-			.from('lib_lending_transactions')
-			.select('*', { count: 'exact', head: true })
-			.eq('member_id', member_id)
-			.in('transaction_status', ['active', 'overdue'])
-
+		// 4. Against the count taken above, alongside the rest
 		if ((booksHeld ?? 0) >= maxItemsAllowed) {
 			return NextResponse.json(
 				{

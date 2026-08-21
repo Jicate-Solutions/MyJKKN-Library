@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -19,7 +20,9 @@ export async function GET(request: Request) {
 
 		const today = new Date().toISOString().split('T')[0]
 
-		let query = supabase
+		// A report that quietly stopped at the thousandth overdue book would
+		// understate what the library is owed
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => supabase
 			.from('lib_lending_transactions')
 			.select(`
 				id,
@@ -54,10 +57,8 @@ export async function GET(request: Request) {
 			.eq('institution_id', institutionId)
 			.lt('due_date', today)
 			.in('transaction_status', ['active', 'overdue'])
-
-		const { data, error } = await query
 			.order('due_date', { ascending: true })
-			.range(0, 9999)
+			.range(range.from, range.to))
 
 		if (error) {
 			console.error('Error fetching overdue report:', error)
@@ -67,7 +68,7 @@ export async function GET(request: Request) {
 		const todayMs = new Date(today).getTime()
 
 		// Enrich with overdue_days and estimated_charge
-		let rows = (data ?? []).map((tx) => {
+		let rows: Record<string, any>[] = (data ?? []).map((tx) => {
 			const dueDateMs = new Date(tx.due_date).getTime()
 			const overdueDays = Math.max(
 				0,
@@ -101,7 +102,7 @@ export async function GET(request: Request) {
 		)
 
 		// Add estimated charge
-		const enriched = rows.map((row) => {
+		const enriched: Record<string, any>[] = rows.map((row) => {
 			const memberCat = (row.member as { member_category?: string } | null)?.member_category ?? ''
 			const chargePerDay = chargeRateMap[memberCat] ?? 1.0
 			const estimatedCharge = row.overdue_days * chargePerDay

@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { getCaller, hasAtLeast, resolveInstitutionScope } from '@/lib/auth/server-access'
 import { istToday } from '@/lib/library/ist-clock'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 /** Midnight in the library, as an instant the database can compare against. */
 function startOfLibraryDay(): string {
@@ -41,11 +42,26 @@ export async function GET(request: Request) {
 			return (query as any).eq('institution_id', scope.institutionId)
 		}
 
+		// The three counts are counts — the database returns the figure, not the
+		// rows. The fourth genuinely needs the rows, because "how many different
+		// people" cannot be counted without seeing who they were, and a busy day
+		// writes far more than the thousand lines a single request returns: read
+		// in one go it counted the newest thousand lines' people and called that
+		// the day's total.
 		const [total, success, errors, people] = await Promise.all([
 			scoped(supabase.from('lib_activity_log').select('*', { count: 'exact', head: true }).gte('created_at', since)),
 			scoped(supabase.from('lib_activity_log').select('*', { count: 'exact', head: true }).gte('created_at', since).eq('status', 'success')),
 			scoped(supabase.from('lib_activity_log').select('*', { count: 'exact', head: true }).gte('created_at', since).eq('status', 'error')),
-			scoped(supabase.from('lib_activity_log').select('user_id').gte('created_at', since).not('user_id', 'is', null).range(0, 9999)),
+			fetchAllRows<{ user_id: string }>(range =>
+				scoped(
+					supabase
+						.from('lib_activity_log')
+						.select('user_id')
+						.gte('created_at', since)
+						.not('user_id', 'is', null)
+						.order('created_at', { ascending: false })
+				).range(range.from, range.to)
+			),
 		])
 
 		// A table that is not there yet reads as a quiet day rather than an error
@@ -58,7 +74,7 @@ export async function GET(request: Request) {
 			// A day with nothing in it has not gone wrong: nothing failed
 			success_rate: todayTotal === 0 ? 100 : Math.round((successCount / todayTotal) * 1000) / 10,
 			today_errors: errors.count ?? 0,
-			unique_users_today: new Set(((people.data ?? []) as { user_id: string }[]).map(r => r.user_id)).size,
+			unique_users_today: new Set(people.data.map(r => r.user_id)).size,
 		})
 	} catch (error) {
 		console.error('Unexpected error reading activity stats:', error)

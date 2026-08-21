@@ -52,7 +52,14 @@ interface Visit {
 interface ScanResult {
 	direction: 'in' | 'out'
 	at: string | null
+	visit?: {
+		id: string | null
+		visit_date: string
+		entry_time: string | null
+		exit_time: string | null
+	}
 	member: {
+		id: string
 		member_number: string
 		display_name: string | null
 		member_category: string
@@ -127,6 +134,40 @@ export function PharmacyGateEntry() {
 
 	const inside = useMemo(() => visits.filter(v => v.entry_time && !v.exit_time), [visits])
 
+	/**
+	 * Puts one scan's result into the register on screen.
+	 *
+	 * An exit closes the line already there; an entry starts a new one at the
+	 * top, where the day's newest visit belongs. The whole day used to be read
+	 * again after every scan, which is a round trip the student at the door waits
+	 * through for a line we already have in full.
+	 */
+	const mergeScan = useCallback((result: ScanResult) => {
+		const visitId = result.visit?.id
+		if (!visitId) return
+
+		setVisits(prev => {
+			if (result.direction === 'out') {
+				return prev.map(v => (v.id === visitId ? { ...v, exit_time: result.visit?.exit_time ?? result.at } : v))
+			}
+
+			const line: Visit = {
+				id: visitId,
+				member_id: result.member.id,
+				visit_date: result.visit?.visit_date ?? today,
+				entry_time: result.visit?.entry_time ?? result.at,
+				exit_time: null,
+				member: {
+					id: result.member.id,
+					member_number: result.member.member_number,
+					display_name: result.member.display_name,
+					member_category: result.member.member_category,
+				},
+			}
+			return [line, ...prev.filter(v => v.id !== line.id)]
+		})
+	}, [today])
+
 	const filtered = useMemo(() => {
 		const term = search.trim().toLowerCase()
 		if (!term) return visits
@@ -161,7 +202,10 @@ export function PharmacyGateEntry() {
 					description: `${data.member.display_name ?? data.member.member_number} was let in, but their membership needs renewing.`,
 				})
 			}
-			fetchData()
+
+			// Scanning always writes to today, so a scan changes nothing on screen
+			// while an older day is being read
+			if (isToday) mergeScan(data)
 		} catch (err) {
 			setLast(null)
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Scan failed'), variant: 'destructive' })
@@ -182,7 +226,9 @@ export function PharmacyGateEntry() {
 			})
 			const data = await res.json()
 			if (!res.ok) throw new Error(data.error || 'Could not mark the exit')
-			fetchData()
+
+			// The one line that changed, stamped with the time the server used
+			setVisits(prev => prev.map(v => (v.id === visitId ? { ...v, exit_time: data.exit_time } : v)))
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Failed'), variant: 'destructive' })
 		}
@@ -202,7 +248,12 @@ export function PharmacyGateEntry() {
 				title: `✅ ${data.closed} marked out at ${formatClockTime(data.exit_time)}`,
 				className: 'bg-green-50 border-green-200 text-green-800',
 			})
-			fetchData()
+
+			// Everyone who was still inside is now out, at the closing time the
+			// server stamped — exactly what reading the day again would show
+			setVisits(prev => prev.map(v =>
+				v.entry_time && !v.exit_time ? { ...v, exit_time: data.exit_time } : v
+			))
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Failed'), variant: 'destructive' })
 		} finally {

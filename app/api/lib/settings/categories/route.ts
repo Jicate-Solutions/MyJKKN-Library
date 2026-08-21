@@ -33,7 +33,10 @@ export async function GET(request: Request) {
 
 		if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
 
-		const { data, error } = await query.range(0, 9999)
+		// Six categories per college, and the six are fixed above — this is the
+		// one list in the system that genuinely cannot approach the thousand-row
+		// ceiling, so it is read in one go on purpose.
+		const { data, error } = await query.range(0, 999)
 		if (error) {
 			console.error('Error listing member categories:', error)
 			return NextResponse.json({ error: 'Failed to load borrowing rules' }, { status: 500 })

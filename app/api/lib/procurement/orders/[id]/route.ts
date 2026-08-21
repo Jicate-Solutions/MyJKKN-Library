@@ -97,3 +97,62 @@ export async function PUT(
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 	}
 }
+
+/**
+ * Deleting one order: DELETE /api/lib/procurement/orders/[id]
+ *
+ * The Delete option on the orders list has always called this; nothing was
+ * behind it. An order that has been placed with a supplier, or that has any of
+ * its books already in, is not deleted — cancelling it is the way to close it,
+ * and it keeps what was ordered on record. A draft nobody sent may simply go.
+ */
+export async function DELETE(
+	request: Request,
+	{ params }: { params: Promise<{ id: string }> }
+) {
+	try {
+		const { id } = await params
+		const guard = await guardRecord(request, 'lib_procurement_orders', id)
+		if (!guard.ok) return guard.response
+		const supabase = getSupabaseServer()
+
+		const { data: existing } = await supabase
+			.from('lib_procurement_orders')
+			.select('order_status')
+			.eq('id', id)
+			.maybeSingle()
+
+		if (!existing) {
+			return NextResponse.json({ error: 'Procurement order not found' }, { status: 404 })
+		}
+
+		if (existing.order_status !== 'draft' && existing.order_status !== 'cancelled') {
+			return NextResponse.json(
+				{ error: `This order is ${existing.order_status.replace('_', ' ')} — cancel it instead of deleting it` },
+				{ status: 400 }
+			)
+		}
+
+		// The order's own lines go with it — lib_procurement_items cascades
+		const { error } = await supabase
+			.from('lib_procurement_orders')
+			.delete()
+			.eq('id', id)
+
+		if (error) {
+			console.error('Error deleting procurement order:', error)
+			if (error.code === '23503') {
+				return NextResponse.json(
+					{ error: 'Cannot delete — something else refers to this order' },
+					{ status: 400 }
+				)
+			}
+			return NextResponse.json({ error: 'Failed to delete procurement order' }, { status: 500 })
+		}
+
+		return NextResponse.json({ success: true })
+	} catch (error) {
+		console.error('Unexpected error deleting procurement order:', error)
+		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+	}
+}

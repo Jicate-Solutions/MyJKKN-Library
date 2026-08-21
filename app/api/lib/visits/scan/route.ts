@@ -52,6 +52,14 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: `No member found for "${barcode}"` }, { status: 404 })
 		}
 
+		// The face is wanted at the same time as the name, and MyJKKN is slower
+		// than our own tables, so it is asked for now and collected at the end —
+		// it travels alongside the visit being written instead of after it. The
+		// reader never throws, so nothing here can fail because of it.
+		const photoRequest = member.member_category === 'learner'
+			? fetchLearnerPhoto(member.learner_id)
+			: Promise.resolve(null)
+
 		const visitDate = istToday()
 		const now = istTimeNow()
 
@@ -119,11 +127,10 @@ export async function POST(request: Request) {
 			entryTime = opened.entry_time
 		}
 
-		// Only after the visit is safely recorded — the face on the screen is
-		// worth waiting a moment for, but never worth losing an entry over.
-		const photo = member.member_category === 'learner'
-			? await fetchLearnerPhoto(member.learner_id)
-			: null
+		// Collected only now the visit is safely recorded — the face on the
+		// screen is worth waiting a moment for, but never worth losing an entry
+		// over. By this point it has usually already arrived.
+		const photo = await photoRequest
 
 		return NextResponse.json({
 			direction,

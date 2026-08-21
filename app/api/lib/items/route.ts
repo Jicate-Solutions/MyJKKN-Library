@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -14,26 +15,36 @@ export async function GET(request: Request) {
 		const status = searchParams.get('status')
 		const search = searchParams.get('search')
 
-		let query = supabase
-			.from('lib_items')
-			.select(`
+		// Asked for one title's copies, every row would carry the same parent
+		// title back — the database rebuilding it once per copy, a hundred times
+		// over for a set text. The caller who filtered by title already has it.
+		const columns = catalogueRecordId
+			? `
+				*,
+				location:lib_locations(id, location_code, location_name)
+			`
+			: `
 				*,
 				catalogue_record:lib_catalogue_records(id, title, isbn, call_number, resource_format),
 				location:lib_locations(id, location_code, location_name)
-			`)
+			`
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (catalogueRecordId) query = query.eq('catalogue_record_id', catalogueRecordId)
-		if (status) query = query.eq('status', status)
-		if (search) {
-			query = query.or(
-				`accession_number.ilike.%${search}%,barcode.ilike.%${search}%`
-			)
-		}
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_items')
+				.select(columns)
 
-		const { data, error } = await query
-			.order('accession_number', { ascending: true })
-			.range(0, 9999)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (catalogueRecordId) query = query.eq('catalogue_record_id', catalogueRecordId)
+			if (status) query = query.eq('status', status)
+			if (search) {
+				query = query.or(
+					`accession_number.ilike.%${search}%,barcode.ilike.%${search}%`
+				)
+			}
+
+			return query.order('accession_number', { ascending: true }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching items:', error)

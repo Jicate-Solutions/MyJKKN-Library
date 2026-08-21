@@ -28,6 +28,11 @@ export type GuardResult =
 	| { ok: true; caller: Caller; institutionId: string | null }
 	| { ok: false; response: NextResponse }
 
+/** Same as GuardResult, but carrying the row the guard had to read anyway. */
+export type GuardRowResult<T> =
+	| { ok: true; caller: Caller; institutionId: string | null; row: T }
+	| { ok: false; response: NextResponse }
+
 function deny(error: string, status: number): { ok: false; response: NextResponse } {
 	return { ok: false, response: NextResponse.json({ error }, { status }) }
 }
@@ -158,4 +163,63 @@ export async function guardRecord(
 
 	noteIfImpersonated(caller, request, caller.institutionId)
 	return { ok: true, caller, institutionId: caller.institutionId }
+}
+
+/**
+ * The same guard, for a route that goes on to read the very row being guarded.
+ *
+ * `guardRecord` fetches a row's `institution_id` to check scope, and the route
+ * that called it then fetches the same row again in full — two queries against
+ * one row, on every detail page load. This reads it once, checks the scope on
+ * what came back, and hands the row to the route.
+ *
+ * `columns` must include `institution_id` (`*` does), because that is what the
+ * check is made against. Out-of-scope answers 404, exactly as `guardRecord`
+ * does, so the URL still cannot be used to probe which ids exist elsewhere.
+ */
+export async function guardRecordRow<T extends { institution_id: string | null }>(
+	request: Request,
+	table: string,
+	recordId: string,
+	columns: string
+): Promise<GuardRowResult<T>> {
+	const { caller, error, status } = await getCaller(request)
+	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
+
+	const blocked = denyIfMemberBlocked(caller, request)
+	if (blocked) return blocked
+
+	const supabase = getSupabaseServer()
+	const { data: row, error: readError } = await supabase
+		.from(table)
+		.select(columns)
+		.eq('id', recordId)
+		.maybeSingle()
+
+	if (readError) {
+		console.error(`Error reading ${table} for the record guard:`, readError.message)
+		return deny('Failed to read the record', 500)
+	}
+
+	if (!row) return deny('Not found', 404)
+
+	// The columns are given by the caller, so the client cannot type the row
+	const record = row as unknown as T
+
+	// Spans every institution: a super admin, or an admin overseeing all colleges
+	if (caller.isSuperAdmin || (caller.role === 'admin' && !caller.institutionId)) {
+		noteIfImpersonated(caller, request, null)
+		return { ok: true, caller, institutionId: null, row: record }
+	}
+
+	if (!caller.institutionId) {
+		return deny('Your account is not linked to an institution', 403)
+	}
+
+	if (record.institution_id !== caller.institutionId) {
+		return deny('Not found', 404)
+	}
+
+	noteIfImpersonated(caller, request, caller.institutionId)
+	return { ok: true, caller, institutionId: caller.institutionId, row: record }
 }

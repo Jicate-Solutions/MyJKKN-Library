@@ -16,6 +16,27 @@ import { getCaller, hasAtLeast, resolveInstitutionScope } from '@/lib/auth/serve
 /** Deep enough to have seen every kind of action; shallow enough to stay quick. */
 const SCAN_ROWS = 20000
 
+/**
+ * How long one campus's dropdown contents are reused.
+ *
+ * Filling these two lists means scanning up to twenty thousand rows, and it ran
+ * on every visit to the page and every switch of college — for a pair of lists
+ * that gains an entry perhaps twice a year, when a new kind of action is first
+ * written. Ten minutes keeps the scan rare while still picking up a new action
+ * the same session it appears.
+ *
+ * Kept per institution, like every other cache here: one college's list is
+ * never handed to another. The key for "all seven" is separate again.
+ */
+const FILTERS_TTL_MS = 10 * 60 * 1000
+
+interface FilterOptions {
+	actions: string[]
+	resource_types: string[]
+}
+
+const filtersCache = new Map<string, { options: FilterOptions; expiresAt: number }>()
+
 export async function GET(request: Request) {
 	try {
 		const { caller, error, status } = await getCaller(request)
@@ -32,6 +53,12 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: scope.error }, { status: scope.status ?? 403 })
 		}
 
+		const cacheKey = scope.institutionId ?? 'all'
+		const cached = filtersCache.get(cacheKey)
+		if (cached && cached.expiresAt > Date.now()) {
+			return NextResponse.json(cached.options)
+		}
+
 		const supabase = getSupabaseServer()
 		let query = supabase
 			.from('lib_activity_log')
@@ -42,7 +69,8 @@ export async function GET(request: Request) {
 
 		const { data, error: readError } = await query.range(0, SCAN_ROWS - 1)
 		if (readError) {
-			// Nothing to offer yet is a perfectly good answer
+			// Nothing to offer yet is a perfectly good answer — and it is not
+			// remembered, so the dropdowns fill as soon as the log does
 			return NextResponse.json({ actions: [], resource_types: [] })
 		}
 
@@ -53,10 +81,14 @@ export async function GET(request: Request) {
 			if (row.resource_type) resources.add(row.resource_type)
 		}
 
-		return NextResponse.json({
+		const options: FilterOptions = {
 			actions: [...actions].sort(),
 			resource_types: [...resources].sort(),
-		})
+		}
+
+		filtersCache.set(cacheKey, { options, expiresAt: Date.now() + FILTERS_TTL_MS })
+
+		return NextResponse.json(options)
 	} catch (error) {
 		console.error('Unexpected error reading activity filters:', error)
 		return NextResponse.json({ actions: [], resource_types: [] })

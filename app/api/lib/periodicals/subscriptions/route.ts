@@ -1,6 +1,41 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
+
+/**
+ * The columns this list and its edit sheet actually use.
+ *
+ * `*` also carried the subscription's credentials fields, which nothing on this
+ * screen reads. The budget head used to be joined here too — many subscriptions
+ * share one, so the database rebuilt that same parent row once per subscription
+ * for a value no page under `app/(lib)/periodicals` ever renders.
+ */
+const LIST_COLUMNS = `
+	id,
+	institution_id,
+	catalogue_record_id,
+	supplier_id,
+	subscription_number,
+	subscription_type,
+	frequency,
+	fiscal_year,
+	start_date,
+	end_date,
+	subscription_cost,
+	currency_code,
+	start_volume,
+	start_issue,
+	expected_issues,
+	received_issues,
+	access_url,
+	subscription_status,
+	is_gratis,
+	created_at,
+	updated_at,
+	catalogue_record:lib_catalogue_records(id, title, issn, resource_format),
+	supplier:lib_suppliers(id, supplier_code, supplier_name)
+`
 
 export async function GET(request: Request) {
 	try {
@@ -14,25 +49,17 @@ export async function GET(request: Request) {
 		const fiscalYear = searchParams.get('fiscal_year')
 		const search = searchParams.get('search')
 
-		let query = supabase
-			.from('lib_periodical_subscriptions')
-			.select(`
-				*,
-				catalogue_record:lib_catalogue_records(id, title, issn, resource_format),
-				supplier:lib_suppliers(id, supplier_code, supplier_name),
-				budget_head:lib_budget_heads(id, budget_head_code, budget_head_name)
-			`)
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_periodical_subscriptions')
+				.select(LIST_COLUMNS)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (subscriptionStatus) query = query.eq('subscription_status', subscriptionStatus)
-		if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
-		if (search) {
-			// Search by catalogue record title via filter after fetch — handled below
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (subscriptionStatus) query = query.eq('subscription_status', subscriptionStatus)
+			if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching periodical subscriptions:', error)

@@ -13,7 +13,7 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
 import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 import { hasAtLeast } from '@/lib/auth/server-access'
-import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { getInstitutionSettings, invalidateInstitutionSettings } from '@/lib/library/institution-settings'
 
 const EDITABLE = [
 	'fine_grace_days',
@@ -91,6 +91,10 @@ export async function PUT(request: Request) {
 			}
 			return NextResponse.json({ error: 'Failed to save settings' }, { status: 500 })
 		}
+
+		// The desk reads these rules from a short-lived copy; clear it so the
+		// new grace period or fine cap applies to the very next issue.
+		invalidateInstitutionSettings(guard.institutionId)
 
 		await logActivity(request, {
 			action: 'update',

@@ -75,8 +75,8 @@ export default function OrdersPage() {
 		try {
 			setLoading(true)
 			const [ordersRes, suppliersRes] = await Promise.all([
-				fetch(appendToUrl('/api/lib/acquisition/orders')),
-				fetch(appendToUrl('/api/lib/acquisition/suppliers')),
+				fetch(appendToUrl('/api/lib/procurement/orders')),
+				fetch(appendToUrl('/api/lib/procurement/suppliers')),
 			])
 			if (!ordersRes.ok) throw new Error('Failed to fetch orders')
 			const [ordersData, suppliersData] = await Promise.all([ordersRes.json(), suppliersRes.json()])
@@ -148,7 +148,7 @@ export default function OrdersPage() {
 				expected_delivery_date: form.expected_delivery_date || undefined,
 				notes: form.notes || undefined,
 			}
-			const url = editingItem ? `/api/lib/acquisition/orders/${editingItem.id}` : '/api/lib/acquisition/orders'
+			const url = editingItem ? `/api/lib/procurement/orders/${editingItem.id}` : '/api/lib/procurement/orders'
 			const res = await fetch(url, {
 				method: editingItem ? 'PUT' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -191,8 +191,8 @@ export default function OrdersPage() {
 	const handleDelete = async () => {
 		if (!deleteTarget) return
 		try {
-			const res = await fetch(`/api/lib/acquisition/orders/${deleteTarget.id}`, { method: 'DELETE' })
-			if (!res.ok) throw new Error('Delete failed')
+			const res = await fetch(`/api/lib/procurement/orders/${deleteTarget.id}`, { method: 'DELETE' })
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Delete failed')
 			setOrders(prev => prev.filter(x => x.id !== deleteTarget.id))
 			toast({ title: '✅ Order deleted', className: 'bg-green-50 border-green-200 text-green-800' })
 		} catch (err) {

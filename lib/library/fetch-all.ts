@@ -28,6 +28,17 @@ const PAGE_SIZE = 1000
  */
 const MAX_PAGES = 200
 
+/**
+ * How many slices are asked for together once we know there is more than one.
+ *
+ * Waiting for each thousand before asking for the next made a register of five
+ * thousand books five round trips deep — the librarian watched a spinner for
+ * the sum of them. They do not depend on each other, so after the first slice
+ * comes back full they are fetched side by side and stitched together in order.
+ * The result is byte for byte what walking them one at a time produced.
+ */
+const PARALLEL_PAGES = 4
+
 export interface RowRange {
 	from: number
 	to: number
@@ -41,20 +52,45 @@ interface PageResult<T> {
 export async function fetchAllRows<T>(
 	page: (range: RowRange) => PromiseLike<PageResult<T>>
 ): Promise<{ data: T[]; error: unknown }> {
-	const rows: T[] = []
-
-	for (let index = 0; index < MAX_PAGES; index++) {
+	const slice = (index: number) => {
 		const from = index * PAGE_SIZE
-		const { data, error } = await page({ from, to: from + PAGE_SIZE - 1 })
+		return page({ from, to: from + PAGE_SIZE - 1 })
+	}
 
-		if (error) return { data: rows, error }
+	// The first slice on its own. Most tables here fit inside one, and those
+	// must not pay for slices nobody needed — so nothing else is asked for
+	// until this one comes back full.
+	const first = await slice(0)
+	if (first.error) return { data: [], error: first.error }
 
-		const batch = data ?? []
-		rows.push(...batch)
+	const rows: T[] = [...(first.data ?? [])]
+	if (rows.length < PAGE_SIZE) return { data: rows, error: null }
 
-		// A page that came back short is the last one. An exactly-full page might
-		// be the last too, in which case the next request simply returns nothing.
-		if (batch.length < PAGE_SIZE) break
+	for (let index = 1; index < MAX_PAGES; index += PARALLEL_PAGES) {
+		const wanted = Math.min(PARALLEL_PAGES, MAX_PAGES - index)
+		const batch = await Promise.all(
+			Array.from({ length: wanted }, (_, offset) => slice(index + offset))
+		)
+
+		let done = false
+		for (const result of batch) {
+			// Stop at the first failure, keeping the rows already in hand, exactly
+			// as walking the slices one at a time did.
+			if (result.error) return { data: rows, error: result.error }
+
+			const slicedRows = result.data ?? []
+			rows.push(...slicedRows)
+
+			// A slice that came back short is the last one — the slices asked for
+			// after it in this same batch are past the end, so they are dropped
+			// rather than appended.
+			if (slicedRows.length < PAGE_SIZE) {
+				done = true
+				break
+			}
+		}
+
+		if (done) break
 	}
 
 	return { data: rows, error: null }

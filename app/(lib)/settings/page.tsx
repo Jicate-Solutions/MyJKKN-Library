@@ -122,23 +122,35 @@ export default function LibrarySettingsPage() {
 		try {
 			setSaving(true)
 
-			for (const rule of rules) {
+			// Six category rules and the policy row, all independent of each other.
+			// Saved one after another this was seven round trips deep; sent
+			// together it is as slow as the slowest one.
+			const saves: Promise<void>[] = rules.map(async rule => {
 				const res = await fetch('/api/lib/settings/categories', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ ...rule, institution_id: institutionId }),
 				})
 				if (!res.ok) throw new Error((await res.json()).error || 'Failed to save borrowing rules')
-			}
+			})
 
 			if (policy) {
-				const res = await fetch('/api/lib/settings', {
-					method: 'PUT',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ ...policy, institution_id: institutionId }),
-				})
-				if (!res.ok) throw new Error((await res.json()).error || 'Failed to save policy')
+				saves.push((async () => {
+					const res = await fetch('/api/lib/settings', {
+						method: 'PUT',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ ...policy, institution_id: institutionId }),
+					})
+					if (!res.ok) throw new Error((await res.json()).error || 'Failed to save policy')
+				})())
 			}
+
+			// Every save is waited for even if one fails, so a single bad row
+			// cannot leave the others' outcome unknown; the first failure is what
+			// the librarian is told about.
+			const outcomes = await Promise.allSettled(saves)
+			const failed = outcomes.find(o => o.status === 'rejected')
+			if (failed && failed.status === 'rejected') throw failed.reason
 
 			toast({
 				title: '✅ Rules saved',

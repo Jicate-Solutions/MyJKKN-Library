@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import { MemberProfileCell } from '@/components/library/member-profile-cell'
+import type { MyjkknProfile } from '@/lib/library/myjkkn-profile'
 import { MyJKKNMemberSearch, type SelectedMember } from '@/components/library/myjkkn-member-search'
 import { MyJKKNBrowseModal } from '@/components/library/myjkkn-browse-modal'
 import { MemberBulkEnrol } from '@/components/library/member-bulk-enrol'
@@ -59,6 +60,16 @@ const dayOnly = (value: unknown): string => {
 const readableDay = (value: string): string => {
 	const [year, month, day] = value.split('-')
 	return year && month && day ? `${day}-${month}-${year}` : value
+}
+
+/**
+ * How one member is looked up in MyJKKN, or '' when they are not a MyJKKN
+ * person at all — a guest, an alumnus, someone typed in by hand.
+ */
+const profileKeyOf = (member: LibMember): string => {
+	if (member.member_category === 'learner' && member.learner_id) return `learner:${member.learner_id}`
+	if (member.member_category === 'facilitator' && member.facilitator_id) return `facilitator:${member.facilitator_id}`
+	return ''
 }
 
 /**
@@ -131,6 +142,12 @@ export default function MembersPage() {
 	const [collegeBatches, setCollegeBatches] = useState<BatchOption[]>([])
 	const [chosenBatchId, setChosenBatchId] = useState<string>('')
 	const [batchMissing, setBatchMissing] = useState(false)
+	// MyJKKN names and photos, keyed "learner:<id>" / "facilitator:<id>". A key
+	// present with the value null means MyJKKN was asked and had nothing.
+	const [profiles, setProfiles] = useState<Record<string, MyjkknProfile | null>>({})
+	const [profilesLoading, setProfilesLoading] = useState<Set<string>>(new Set())
+	/** Keys already asked about, so an in-flight request is never repeated. */
+	const requestedProfiles = useRef<Set<string>>(new Set())
 	const { currentMyJKKNInstitutionIds } = useInstitution()
 
 	const fetchData = useCallback(async () => {
@@ -240,6 +257,76 @@ export default function MembersPage() {
 		? filtered.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
 		: filtered
 	const colCount = mustSelectInstitution ? 7 : 6
+
+	/** Who on this page stands for a person MyJKKN knows, and under what key. */
+	const profileKeys = useMemo(() => {
+		const keys = new Map<string, { kind: 'learner' | 'facilitator'; id: string }>()
+		for (const member of paginated) {
+			const key = profileKeyOf(member)
+			if (!key) continue
+			const [kind, id] = key.split(':')
+			keys.set(key, { kind: kind as 'learner' | 'facilitator', id })
+		}
+		return keys
+	}, [paginated])
+
+	// Names and photos for everyone on this page, in one request.
+	//
+	// Every row used to ask for its own, so a page of fifty rows opened fifty
+	// calls to MyJKKN at the same moment and "All" on a large college opened
+	// hundreds. What has already been answered is never asked again, so paging
+	// back and forth costs nothing.
+	useEffect(() => {
+		// Asked-for keys are noted before the request goes out, not after it comes
+		// back: this effect re-runs on any render, and without it a second render
+		// while the first call was still in flight would ask for the same people
+		// all over again.
+		const missing = [...profileKeys.entries()].filter(
+			([key]) => !(key in profiles) && !requestedProfiles.current.has(key)
+		)
+		if (missing.length === 0) return
+
+		let cancelled = false
+		for (const [key] of missing) requestedProfiles.current.add(key)
+		setProfilesLoading(prev => {
+			const next = new Set(prev)
+			for (const [key] of missing) next.add(key)
+			return next
+		})
+
+		const load = async () => {
+			try {
+				const res = await fetch('/api/lib/members/profiles', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ people: missing.map(([, person]) => person) }),
+				})
+				if (!res.ok) throw new Error('profiles unavailable')
+				const json = await res.json()
+				if (cancelled) return
+				setProfiles(prev => ({ ...prev, ...(json.profiles ?? {}) }))
+			} catch {
+				// The table falls back to the name the library stored, and stops
+				// waiting — recorded as "asked, nothing came back"
+				if (cancelled) return
+				setProfiles(prev => {
+					const next = { ...prev }
+					for (const [key] of missing) next[key] = null
+					return next
+				})
+			} finally {
+				if (cancelled) return
+				setProfilesLoading(prev => {
+					const next = new Set(prev)
+					for (const [key] of missing) next.delete(key)
+					return next
+				})
+			}
+		}
+
+		load()
+		return () => { cancelled = true }
+	}, [profileKeys, profiles])
 
 	const resetForm = () => {
 		setForm(defaultForm)
@@ -593,6 +680,8 @@ export default function MembersPage() {
 														learnerId={m.learner_id}
 														facilitatorId={m.facilitator_id}
 														fallbackName={m.display_name}
+														profile={profiles[profileKeyOf(m)] ?? null}
+														loading={profilesLoading.has(profileKeyOf(m))}
 													/>
 												</TableCell>
 												<TableCell><MemberCategoryBadge category={m.member_category} label={m.category_label} /></TableCell>

@@ -203,6 +203,80 @@ async function syncNameFromParent(
 }
 
 /**
+ * How long a resolved caller is reused before being worked out again.
+ *
+ * Answering "who is this" costs a round trip to MyJKKN to validate the token —
+ * measured at 1.0–2.9 seconds — plus two Supabase reads. Every `/api/lib/*`
+ * route starts with it, and opening one page fires five of them at once (the
+ * institution list, the caller's role, favourites, the activity line, and the
+ * page's own data), so the desk paid that toll five times over before anything
+ * appeared. A gate scan paid it three times in a row, which is most of the ten
+ * seconds a scan was taking.
+ *
+ * So the answer is held briefly and shared. The rules themselves are untouched
+ * — the same validation, the same role resolution, the same institution scope,
+ * just not repeated for every request in the same breath. The two changes that
+ * must not wait, a role change and a deactivation, push the affected user out
+ * of here the moment they are made, so they still take effect at once.
+ */
+const CALLER_TTL_MS = 60_000
+
+/** Refusals are held far more briefly — just long enough to absorb one burst. */
+const REFUSAL_TTL_MS = 10_000
+
+/** Well above the number of people signed in at once; keeps the map bounded. */
+const MAX_CACHED_CALLERS = 500
+
+interface CachedCaller {
+	result: AccessResult
+	expiresAt: number
+	/** Who this entry describes, so a role change can drop it by hand. */
+	userId: string | null
+}
+
+const callerCache = new Map<string, CachedCaller>()
+
+/**
+ * Resolutions already under way, keyed the same as the cache.
+ *
+ * The five requests a page opens with arrive together, so without this they
+ * would all miss the empty cache and each start their own validation. Sharing
+ * the one promise turns that burst into a single round trip.
+ */
+const callerInFlight = new Map<string, Promise<AccessResult>>()
+
+/** Drops entries that have expired, and if still crowded, the whole lot. */
+function pruneCallerCache(): void {
+	if (callerCache.size < MAX_CACHED_CALLERS) return
+
+	const now = Date.now()
+	for (const [key, entry] of callerCache) {
+		if (entry.expiresAt <= now) callerCache.delete(key)
+	}
+
+	// Still full of live entries — start over rather than grow without limit.
+	// The cost is one extra validation each for the people signed in.
+	if (callerCache.size >= MAX_CACHED_CALLERS) callerCache.clear()
+}
+
+/**
+ * Forgets what is known about one user, or about everyone.
+ *
+ * Called wherever a role is granted or an account is switched off, so that
+ * change is felt on the very next request rather than up to a minute later.
+ */
+export function invalidateCaller(userId?: string | null): void {
+	if (!userId) {
+		callerCache.clear()
+		return
+	}
+
+	for (const [key, entry] of callerCache) {
+		if (entry.userId === userId) callerCache.delete(key)
+	}
+}
+
+/**
  * Identifies the caller.
  *
  * When a super admin has picked someone to view as, the returned caller IS
@@ -214,6 +288,37 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 	const token = readToken(request)
 	if (!token) return { caller: null, error: 'Not signed in', status: 401 }
 
+	// Viewing as someone else gives a different caller for the same token, so it
+	// has to be part of the key or a super admin would be served their own row.
+	const viewAsId = readCookie(request, IMPERSONATION_COOKIE)
+	const key = `${token}|${viewAsId ?? ''}`
+
+	const cached = callerCache.get(key)
+	if (cached && cached.expiresAt > Date.now()) return cached.result
+
+	const running = callerInFlight.get(key)
+	if (running) return running
+
+	const work = resolveCaller(token, viewAsId)
+		.then(result => {
+			pruneCallerCache()
+			callerCache.set(key, {
+				result,
+				expiresAt: Date.now() + (result.caller ? CALLER_TTL_MS : REFUSAL_TTL_MS),
+				userId: result.caller?.userId ?? null,
+			})
+			return result
+		})
+		.finally(() => {
+			callerInFlight.delete(key)
+		})
+
+	callerInFlight.set(key, work)
+	return work
+}
+
+/** The work getCaller used to do inline, unchanged apart from being callable. */
+async function resolveCaller(token: string, viewAsId: string | null): Promise<AccessResult> {
 	const identity = await resolveIdentity(token)
 	if (!identity) return { caller: null, error: 'Session expired — please sign in again', status: 401 }
 
@@ -234,7 +339,6 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 
 	// Only a super admin can be viewing as someone else. If anyone else has the
 	// cookie it is ignored outright rather than trusted.
-	const viewAsId = readCookie(request, IMPERSONATION_COOKIE)
 	if (viewAsId && realCaller.isSuperAdmin && viewAsId !== realCaller.userId) {
 		const { data: target } = await supabase
 			.from('users')

@@ -17,11 +17,17 @@ export async function fetchCharges(institutionId: string): Promise<LibLateCharge
 	return res.json()
 }
 
+/**
+ * Collecting and waiving both go to the one charge, as a change to its payment
+ * status. They used to be posted to `/pay` and `/waive`, which were never
+ * built — so both buttons on the Late Charges screen answered 404 and the
+ * librarian was told "Action failed" with nothing else wrong.
+ */
 export async function collectPayment(id: string, data: LibPaymentPayload): Promise<LibLateCharge> {
-	const res = await fetch(`/api/lib/charges/${id}/pay`, {
-		method: 'POST',
+	const res = await fetch(`/api/lib/charges/${id}`, {
+		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(data),
+		body: JSON.stringify({ ...data, payment_status: 'paid' }),
 	})
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}))
@@ -31,10 +37,10 @@ export async function collectPayment(id: string, data: LibPaymentPayload): Promi
 }
 
 export async function waiveCharge(id: string, data: LibWaivePayload): Promise<LibLateCharge> {
-	const res = await fetch(`/api/lib/charges/${id}/waive`, {
-		method: 'POST',
+	const res = await fetch(`/api/lib/charges/${id}`, {
+		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(data),
+		body: JSON.stringify({ ...data, payment_status: 'waived' }),
 	})
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}))

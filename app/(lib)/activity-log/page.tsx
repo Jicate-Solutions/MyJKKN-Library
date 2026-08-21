@@ -37,6 +37,13 @@ interface LogUser {
 	full_name: string | null
 }
 
+/**
+ * One line as the table receives it.
+ *
+ * The four heavy fields at the bottom are not in the list response — they are
+ * fetched for a single line when its detail sheet is opened, so a page of five
+ * hundred lines no longer carries fifteen hundred JSON blobs nobody looks at.
+ */
 interface LogRow {
 	id: string
 	institution_id: string | null
@@ -45,15 +52,17 @@ interface LogRow {
 	action: string
 	resource_type: string | null
 	resource_id: string | null
-	old_values: Record<string, unknown> | null
-	new_values: Record<string, unknown> | null
 	ip_address: string | null
-	user_agent: string | null
 	status: string
 	error_message: string | null
-	metadata: Record<string, unknown> | null
 	created_at: string
 	users: LogUser | null
+	/** Pulled out of `metadata` by the database — names someone whose account is gone. */
+	user_email: string | null
+	old_values?: Record<string, unknown> | null
+	new_values?: Record<string, unknown> | null
+	metadata?: Record<string, unknown> | null
+	user_agent?: string | null
 }
 
 interface Stats {
@@ -95,7 +104,7 @@ function stampParts(value: string): { day: string; time: string } {
 }
 
 function personOf(row: LogRow): { name: string; email: string } {
-	const fallbackEmail = (row.metadata?.user_email as string | undefined) ?? ''
+	const fallbackEmail = row.user_email ?? ''
 	return {
 		name: row.users?.full_name ?? row.users?.email ?? (fallbackEmail || '—'),
 		email: row.users?.email ?? fallbackEmail,
@@ -141,6 +150,7 @@ export default function ActivityLogPage() {
 	const [totalPages, setTotalPages] = useState(1)
 
 	const [detail, setDetail] = useState<LogRow | null>(null)
+	const [detailLoading, setDetailLoading] = useState(false)
 	const [exporting, setExporting] = useState(false)
 
 	const hasFilters = actionFilter !== ANY || resourceFilter !== ANY || statusFilter !== ANY || !!fromDate || !!toDate || !!search
@@ -216,6 +226,34 @@ export default function ActivityLogPage() {
 			.catch(() => undefined)
 		return () => { cancelled = true }
 	}, [isReady, appendToUrl, institutionId])
+
+	/**
+	 * Opens one line in full.
+	 *
+	 * The sheet appears at once with what the table already holds, and the three
+	 * snapshots — before, after, extra detail — arrive a moment later from
+	 * /api/lib/logs/[id]. They are the part that is worth not carrying for every
+	 * line of every page.
+	 */
+	const openDetail = useCallback(async (row: LogRow) => {
+		setDetail(row)
+		if (row.old_values !== undefined) return
+
+		try {
+			setDetailLoading(true)
+			const res = await fetch(`/api/lib/logs/${row.id}`)
+			if (!res.ok) throw new Error('Could not read that line')
+			const full = await res.json()
+
+			// Merged onto whichever line is open now — a second click while this
+			// was in flight must not have its sheet overwritten by the first
+			setDetail(current => (current && current.id === row.id ? { ...current, ...full } : current))
+		} catch {
+			toast({ title: 'Could not read the rest of that line', variant: 'destructive' })
+		} finally {
+			setDetailLoading(false)
+		}
+	}, [toast])
 
 	/** Any change of question starts again at the first page. */
 	const changeFilter = (apply: () => void) => {
@@ -461,7 +499,7 @@ export default function ActivityLogPage() {
 													</TableCell>
 													<TableCell className="text-xs font-mono text-muted-foreground hidden lg:table-cell">{row.ip_address ?? '—'}</TableCell>
 													<TableCell className="text-center">
-														<Button variant="ghost" size="icon" className="h-7 w-7 p-0" onClick={() => setDetail(row)}>
+														<Button variant="ghost" size="icon" className="h-7 w-7 p-0" onClick={() => openDetail(row)}>
 															<Eye className="h-4 w-4" />
 														</Button>
 													</TableCell>
@@ -540,9 +578,18 @@ export default function ActivityLogPage() {
 								</div>
 							)}
 
-							<Snapshot title="Before" value={detail.old_values} />
-							<Snapshot title="After" value={detail.new_values} />
-							<Snapshot title="Extra detail" value={detail.metadata} />
+							{detailLoading && detail.old_values === undefined ? (
+								<div className="flex items-center gap-2 text-xs text-muted-foreground">
+									<RefreshCw className="h-3.5 w-3.5 animate-spin" />
+									Reading the rest of this line...
+								</div>
+							) : (
+								<>
+									<Snapshot title="Before" value={detail.old_values} />
+									<Snapshot title="After" value={detail.new_values} />
+									<Snapshot title="Extra detail" value={detail.metadata} />
+								</>
+							)}
 
 							{detail.user_agent && (
 								<div className="space-y-1.5">

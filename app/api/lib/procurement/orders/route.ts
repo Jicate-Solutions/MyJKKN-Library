@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -14,23 +15,25 @@ export async function GET(request: Request) {
 		const supplierId = searchParams.get('supplier_id')
 		const fiscalYear = searchParams.get('fiscal_year')
 
-		let query = supabase
-			.from('lib_procurement_orders')
-			.select(`
-				*,
-				supplier:lib_suppliers(id, supplier_code, supplier_name, contact_person),
-				budget_head:lib_budget_heads(id, budget_head_code, budget_head_name),
-				items:lib_procurement_items(id, title, isbn, quantity_ordered, quantity_received, item_status, unit_price, total_price)
-			`)
+		// The supplier is the only join this list shows. The order lines used to
+		// be pulled in too, which made the database rebuild the same order row
+		// once per line ordered, and the budget head likewise — neither is
+		// rendered anywhere on the orders screen.
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_procurement_orders')
+				.select(`
+					*,
+					supplier:lib_suppliers(id, supplier_code, supplier_name, contact_person)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (orderStatus) query = query.eq('order_status', orderStatus)
-		if (supplierId) query = query.eq('supplier_id', supplierId)
-		if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (orderStatus) query = query.eq('order_status', orderStatus)
+			if (supplierId) query = query.eq('supplier_id', supplierId)
+			if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
 
-		const { data, error } = await query
-			.order('order_date', { ascending: false })
-			.range(0, 9999)
+			return query.order('order_date', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching procurement orders:', error)

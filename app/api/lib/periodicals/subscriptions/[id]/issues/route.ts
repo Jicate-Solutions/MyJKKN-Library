@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { guardCollection, guardWrite, guardRecord, guardRecordRow } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(
 	request: Request,
@@ -12,15 +13,19 @@ export async function GET(
 		if (!guard.ok) return guard.response
 		const supabase = getSupabaseServer()
 
-		const { data, error } = await supabase
-			.from('lib_periodical_issues')
-			.select(`
-				*,
-				item:lib_items(id, accession_number, barcode, status)
-			`)
-			.eq('subscription_id', id)
-			.order('issue_date', { ascending: false })
-			.range(0, 9999)
+		// A weekly running for twenty years is past a thousand issues, and a
+		// single request stops there without saying so
+		const { data, error } = await fetchAllRows<Record<string, any>>(range =>
+			supabase
+				.from('lib_periodical_issues')
+				.select(`
+					*,
+					item:lib_items(id, accession_number, barcode, status)
+				`)
+				.eq('subscription_id', id)
+				.order('issue_date', { ascending: false })
+				.range(range.from, range.to)
+		)
 
 		if (error) {
 			console.error('Error fetching periodical issues:', error)
@@ -42,23 +47,28 @@ export async function POST(
 		const { id: subscriptionId } = await params
 		const supabase = getSupabaseServer()
 		const body = await request.json()
-		const guard = await guardRecord(request, 'lib_periodical_subscriptions', subscriptionId)
+
+		// The guard reads the subscription this issue belongs to, so the route
+		// does not read the same row again straight afterwards
+		const guard = await guardRecordRow<{
+			id: string
+			institution_id: string | null
+			catalogue_record_id: string | null
+			received_issues: number | null
+			expected_issues: number | null
+		}>(
+			request,
+			'lib_periodical_subscriptions',
+			subscriptionId,
+			'id, catalogue_record_id, institution_id, received_issues, expected_issues'
+		)
 		if (!guard.ok) return guard.response
 
 		if (!body.institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
 		}
 
-		// Verify subscription exists
-		const { data: subscription, error: subError } = await supabase
-			.from('lib_periodical_subscriptions')
-			.select('id, catalogue_record_id, institution_id, received_issues, expected_issues')
-			.eq('id', subscriptionId)
-			.single()
-
-		if (subError || !subscription) {
-			return NextResponse.json({ error: 'Subscription not found' }, { status: 404 })
-		}
+		const subscription = guard.row
 
 		const { data: issue, error: issueError } = await supabase
 			.from('lib_periodical_issues')

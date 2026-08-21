@@ -95,9 +95,21 @@ export async function updateHold(id: string, data: Partial<LibHold>): Promise<Li
 	return res.json()
 }
 
-export async function cancelHold(id: string): Promise<{ success: boolean }> {
+/**
+ * Cancelling a hold marks it cancelled; it does not delete it.
+ *
+ * A queue that forgets the reservations it turned away cannot answer "why did
+ * this book never reach me?", so the line stays and its status changes — which
+ * also frees the copy that was being held, as the route does on the way through.
+ *
+ * This used to send DELETE, and no DELETE handler exists on that route: the
+ * Cancel Hold button answered 405 every time it was pressed.
+ */
+export async function cancelHold(id: string, reason = 'Cancelled at the desk'): Promise<LibHold> {
 	const res = await fetch(`/api/lib/circulation/holds/${id}`, {
-		method: 'DELETE',
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ hold_status: 'cancelled', cancellation_reason: reason }),
 	})
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}))

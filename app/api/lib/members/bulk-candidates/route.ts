@@ -19,6 +19,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 const MYJKKN_API_URL = process.env.MYJKKN_API_URL || 'https://www.jkkn.ai/api'
 const MYJKKN_API_KEY = process.env.MYJKKN_API_KEY || ''
@@ -205,12 +206,15 @@ export async function GET(request: Request) {
 				.map(([id, name]) => ({ id, name }))
 				.sort((a, b) => a.name.localeCompare(b.name))
 
-			const { data: staffMembers } = await supabase
-				.from('lib_members')
-				.select('facilitator_id, member_number')
-				.eq('institution_id', institutionId)
-				.not('facilitator_id', 'is', null)
-				.range(0, 9999)
+			const { data: staffMembers } = await fetchAllRows<{ facilitator_id: string; member_number: string }>(
+				range => supabase
+					.from('lib_members')
+					.select('facilitator_id, member_number')
+					.eq('institution_id', institutionId)
+					.not('facilitator_id', 'is', null)
+					.order('member_number', { ascending: true })
+					.range(range.from, range.to)
+			)
 
 			const alreadyStaff = new Map(
 				(staffMembers || []).map(m => [m.facilitator_id as string, m.member_number as string])
@@ -307,12 +311,19 @@ export async function GET(request: Request) {
 
 		// Who is already enrolled here. Scoped to this institution: the same
 		// person may hold a membership at another JKKN library.
-		const { data: members } = await supabase
-			.from('lib_members')
-			.select('learner_id, member_number')
-			.eq('institution_id', institutionId)
-			.not('learner_id', 'is', null)
-			.range(0, 9999)
+		//
+		// Read in slices: a college with more than a thousand learner members
+		// would otherwise not see the rest of them here, and every one of those
+		// would be offered for enrolment a second time.
+		const { data: members } = await fetchAllRows<{ learner_id: string; member_number: string }>(
+			range => supabase
+				.from('lib_members')
+				.select('learner_id, member_number')
+				.eq('institution_id', institutionId)
+				.not('learner_id', 'is', null)
+				.order('member_number', { ascending: true })
+				.range(range.from, range.to)
+		)
 
 		const enrolled = new Map((members || []).map(m => [m.learner_id as string, m.member_number as string]))
 

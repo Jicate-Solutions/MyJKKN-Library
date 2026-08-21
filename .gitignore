@@ -58,6 +58,8 @@ certificates
 
 # personal reference — never push
 /today-work/
+# performance audit output — internal timings, one file a day, repo is public
+/page-performace-report/
 # requirement docs — hold the librarian's name and internal notes, repo is public
 /LIBRARY-REQUIREMENTS.md
 /LIBRARY-REQUIREMENTS-PHARMACY.md

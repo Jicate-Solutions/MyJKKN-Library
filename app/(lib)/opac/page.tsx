@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import {
-	Search, BookOpen, RefreshCw, ChevronLeft, ChevronRight,
+	Search, BookOpen, RefreshCw, ChevronLeft, ChevronRight, LayoutGrid, List,
 } from 'lucide-react'
 import type { LibCatalogueRecord, LibResourceFormat } from '@/types/lib'
 
@@ -21,6 +21,71 @@ const FORMATS: LibResourceFormat[] = [
 
 const LANGUAGES = ['English', 'Tamil', 'Hindi', 'Sanskrit', 'French', 'German', 'Other'] as const
 
+/** A result carries the accession numbers of its copies, which a record alone does not. */
+type OPACResult = LibCatalogueRecord & { accession_numbers?: string[] }
+
+/**
+ * Whether a field is worth putting on the card.
+ *
+ * Much of this catalogue was typed in from paper registers, where an unknown
+ * ISBN or edition was written as "0" or "-". Printing "ISBN: 0" back at a
+ * reader tells them nothing, so those stand for empty here.
+ */
+function shown(value: unknown): string | null {
+	if (value === null || value === undefined) return null
+	const text = String(value).trim()
+	if (!text || text === '-' || text === '—' || text === '0') return null
+	return text
+}
+
+/** How many accession numbers fit before a card stops being readable. */
+const ACCESSIONS_SHOWN = 6
+
+/** A row has the width for more of them than a card does. */
+const ACCESSIONS_SHOWN_LIST = 12
+
+/** Cards side by side, or one book per line. */
+type ViewMode = 'grid' | 'list'
+
+/**
+ * The labelled lines for one book, in the order a catalogue card reads.
+ *
+ * Both views show the same facts — the list simply has the width to lay them
+ * out across the page instead of down it — so the labelling lives here once
+ * rather than being written out twice and drifting apart.
+ */
+function bibliographicDetails(r: OPACResult): Array<[string, string]> {
+	const authorNames = r.authors && r.authors.length > 0
+		? r.authors.map(a => a.author_name).join(', ')
+		: shown(r.author)
+
+	const details: Array<[string, string]> = []
+	const add = (label: string, value: unknown) => {
+		const text = shown(value)
+		if (text) details.push([label, text])
+	}
+
+	add('Author', authorNames)
+	add('Publisher', r.publisher_name)
+	add('Place', r.publisher_place)
+	add('Year', r.publication_year)
+	add('Edition', r.edition)
+	add('Volume', r.volume_number)
+	add('Series', r.series_title)
+	add('ISBN', r.isbn)
+	add('ISSN', r.issn)
+	add('Call Number', r.call_number)
+	add('Classification', r.classification_number)
+	add('Language', r.language)
+	add('Pages', r.pages)
+	add('Department', r.department)
+	add('Book Type', r.book_type)
+	add('Shelf', r.book_location)
+	add('Subjects', r.subject_headings?.join(', '))
+
+	return details
+}
+
 export default function OPACPage() {
 	const { appendToUrl } = useInstitutionFilter()
 	const { toast } = useToast()
@@ -29,31 +94,31 @@ export default function OPACPage() {
 	const [formatFilter, setFormatFilter] = useState<string>('all')
 	const [languageFilter, setLanguageFilter] = useState<string>('all')
 	const [availabilityFilter, setAvailabilityFilter] = useState<string>('all')
-	const [results, setResults] = useState<LibCatalogueRecord[]>([])
+	const [results, setResults] = useState<OPACResult[]>([])
 	const [loading, setLoading] = useState(false)
 	const [searched, setSearched] = useState(false)
 	const [currentPage, setCurrentPage] = useState(1)
 	const [itemsPerPage, setItemsPerPage] = useState(12)
+	const [viewMode, setViewMode] = useState<ViewMode>('grid')
 
 	const handleSearch = useCallback(async () => {
 		if (!query.trim() && formatFilter === 'all' && languageFilter === 'all') return
 		try {
 			setLoading(true)
+			// The search endpoint, not the plain catalogue list: it looks through
+			// author, publisher, ISBN and the accession number as well as the
+			// title, and it counts the copies. The list route knows none of that,
+			// which is why every book used to read "Not available — 0 copies".
 			const params = new URLSearchParams()
-			if (query.trim()) params.set('search', query.trim())
+			if (query.trim()) params.set('q', query.trim())
 			if (formatFilter !== 'all') params.set('resource_format', formatFilter)
 			if (languageFilter !== 'all') params.set('language', languageFilter)
-			const url = appendToUrl(`/api/lib/catalogue?${params}`)
+			if (availabilityFilter !== 'all') params.set('availability', availabilityFilter)
+			const url = appendToUrl(`/api/lib/catalogue/search?${params}`)
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Search failed')
-			const data = await res.json()
-			let filtered: LibCatalogueRecord[] = data
-			if (availabilityFilter === 'available') {
-				filtered = data.filter((r: LibCatalogueRecord) => (r.available_count ?? 0) > 0)
-			} else if (availabilityFilter === 'unavailable') {
-				filtered = data.filter((r: LibCatalogueRecord) => (r.available_count ?? 0) === 0)
-			}
-			setResults(filtered)
+			const body = await res.json()
+			setResults(body.data ?? [])
 			setSearched(true)
 			setCurrentPage(1)
 		} catch {
@@ -100,7 +165,7 @@ export default function OPACPage() {
 								<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
 								<Input
 									className="pl-10 h-12 text-base"
-									placeholder="Search by title, author, ISBN, keyword..."
+									placeholder="Search by title, author, accession number, ISBN, publisher..."
 									value={query}
 									onChange={e => setQuery(e.target.value)}
 									onKeyDown={handleKeyDown}
@@ -150,7 +215,7 @@ export default function OPACPage() {
 					<div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
 						<BookOpen className="h-14 w-14 opacity-20" />
 						<p className="text-base">Enter a search term to browse the catalogue</p>
-						<p className="text-sm">You can search by title, author, subject, ISBN or keyword</p>
+						<p className="text-sm">You can search by title, author, accession number, ISBN, publisher, call number or subject</p>
 					</div>
 				)}
 
@@ -171,6 +236,39 @@ export default function OPACPage() {
 							</p>
 							{results.length > 0 && (
 								<div className="flex items-center gap-2">
+									{/* Cards to browse by, or lines to scan down */}
+									<div className="flex items-center rounded-md border p-0.5">
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button
+													variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+													size="icon"
+													className="h-6 w-6 p-0"
+													onClick={() => setViewMode('grid')}
+													aria-label="Grid view"
+													aria-pressed={viewMode === 'grid'}
+												>
+													<LayoutGrid className="h-3.5 w-3.5" />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent>Grid view</TooltipContent>
+										</Tooltip>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button
+													variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+													size="icon"
+													className="h-6 w-6 p-0"
+													onClick={() => setViewMode('list')}
+													aria-label="List view"
+													aria-pressed={viewMode === 'list'}
+												>
+													<List className="h-3.5 w-3.5" />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent>List view</TooltipContent>
+										</Tooltip>
+									</div>
 									<span className="text-xs text-muted-foreground hidden sm:inline">Per page</span>
 									<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>
 										<SelectTrigger className="h-7 w-[70px] text-xs"><SelectValue /></SelectTrigger>
@@ -190,60 +288,168 @@ export default function OPACPage() {
 							</div>
 						) : (
 							<>
-								{/* Desktop: card grid */}
-								<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-									{paginated.map(r => (
-										<Card key={r.id} className="hover:shadow-md transition-shadow">
-											<CardContent className="p-4 space-y-2.5">
-												<div className="flex items-start justify-between gap-2">
-													<div className="flex-1 min-w-0">
-														<p className="font-semibold text-sm leading-tight line-clamp-2">{r.title}</p>
-														{r.subtitle && (
-															<p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{r.subtitle}</p>
+								{/* Cards, three across */}
+								{viewMode === 'grid' && (
+									<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+										{paginated.map(r => {
+											// Every line says what it is. Only the title stands on
+											// its own, the way it does on the spine of the book.
+											const details = bibliographicDetails(r)
+											const accessions = r.accession_numbers ?? []
+
+											return (
+												<Card key={r.id} className="hover:shadow-md transition-shadow">
+													<CardContent className="p-4 space-y-2.5">
+														<div className="flex items-start justify-between gap-2">
+															<div className="flex-1 min-w-0">
+																<p className="font-semibold text-sm leading-tight line-clamp-2">{r.title}</p>
+																{shown(r.subtitle) && (
+																	<p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+																		<span className="font-medium">Subtitle:</span> {r.subtitle}
+																	</p>
+																)}
+															</div>
+															<Badge variant="secondary" className="text-[10px] capitalize shrink-0">
+																{r.resource_format}
+															</Badge>
+														</div>
+
+														{details.length > 0 && (
+															<dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+																{details.map(([label, value]) => (
+																	<div key={label} className="contents">
+																		<dt className="text-muted-foreground whitespace-nowrap">{label}:</dt>
+																		<dd className="min-w-0 break-words">{value}</dd>
+																	</div>
+																))}
+															</dl>
 														)}
-													</div>
-													<Badge variant="secondary" className="text-[10px] capitalize shrink-0">
-														{r.resource_format}
-													</Badge>
-												</div>
 
-												{r.authors && r.authors.length > 0 && (
-													<p className="text-xs text-muted-foreground line-clamp-1">
-														{r.authors.map(a => a.author_name).join(', ')}
-													</p>
-												)}
+														{accessions.length > 0 && (
+															<div className="text-xs">
+																<span className="text-muted-foreground">Accession No:</span>{' '}
+																<span className="font-mono">
+																	{accessions.slice(0, ACCESSIONS_SHOWN).join(', ')}
+																</span>
+																{accessions.length > ACCESSIONS_SHOWN && (
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<span className="text-muted-foreground cursor-default">
+																				{' '}+{accessions.length - ACCESSIONS_SHOWN} more
+																			</span>
+																		</TooltipTrigger>
+																		<TooltipContent className="max-w-xs">
+																			<span className="font-mono text-xs">{accessions.join(', ')}</span>
+																		</TooltipContent>
+																	</Tooltip>
+																)}
+															</div>
+														)}
 
-												<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-													{r.publisher_name && <span className="truncate max-w-[140px]">{r.publisher_name}</span>}
-													{r.publication_year && <span>{r.publication_year}</span>}
-													{r.call_number && (
-														<Tooltip>
-															<TooltipTrigger asChild>
-																<span className="font-mono bg-muted px-1 rounded text-[10px] cursor-default">{r.call_number}</span>
-															</TooltipTrigger>
-															<TooltipContent>Call Number</TooltipContent>
-														</Tooltip>
-													)}
-												</div>
+														<div className="flex items-center justify-between pt-1 border-t">
+															{(r.available_count ?? 0) > 0 ? (
+																<Badge variant="outline" className="text-[11px] bg-green-50 text-green-700 border-green-200">
+																	{r.available_count} available
+																</Badge>
+															) : (
+																<Badge variant="outline" className="text-[11px] bg-red-50 text-red-700 border-red-200">
+																	Not available
+																</Badge>
+															)}
+															<span className="text-xs text-muted-foreground">
+																{r.item_count ?? 0} cop{(r.item_count ?? 0) !== 1 ? 'ies' : 'y'}
+															</span>
+														</div>
+													</CardContent>
+												</Card>
+											)
+										})}
+									</div>
+								)}
 
-												<div className="flex items-center justify-between pt-1 border-t">
-													{(r.available_count ?? 0) > 0 ? (
-														<Badge variant="outline" className="text-[11px] bg-green-50 text-green-700 border-green-200">
-															{r.available_count} available
-														</Badge>
-													) : (
-														<Badge variant="outline" className="text-[11px] bg-red-50 text-red-700 border-red-200">
-															Not available
-														</Badge>
-													)}
-													<span className="text-xs text-muted-foreground">
-														{r.item_count ?? 0} cop{(r.item_count ?? 0) !== 1 ? 'ies' : 'y'}
-													</span>
-												</div>
-											</CardContent>
-										</Card>
-									))}
-								</div>
+								{/* One book per line — the same facts laid across the page
+								    instead of down it, so more books fit on the screen at
+								    once and the eye can run down the titles */}
+								{viewMode === 'list' && (
+									<div className="flex flex-col gap-2">
+										{paginated.map(r => {
+											const details = bibliographicDetails(r)
+											const accessions = r.accession_numbers ?? []
+
+											return (
+												<Card key={r.id} className="hover:shadow-md transition-shadow">
+													<CardContent className="p-3 sm:p-4">
+														<div className="flex flex-col sm:flex-row sm:items-start gap-3">
+															<div className="flex-1 min-w-0 space-y-1.5">
+																<div className="flex items-start gap-2">
+																	<p className="font-semibold text-sm leading-tight flex-1 min-w-0">{r.title}</p>
+																	<Badge variant="secondary" className="text-[10px] capitalize shrink-0">
+																		{r.resource_format}
+																	</Badge>
+																</div>
+
+																{shown(r.subtitle) && (
+																	<p className="text-xs text-muted-foreground">
+																		<span className="font-medium">Subtitle:</span> {r.subtitle}
+																	</p>
+																)}
+
+																{details.length > 0 && (
+																	<dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+																		{details.map(([label, value]) => (
+																			<div key={label} className="flex gap-1 min-w-0">
+																				<dt className="text-muted-foreground whitespace-nowrap">{label}:</dt>
+																				<dd className="min-w-0 break-words">{value}</dd>
+																			</div>
+																		))}
+																	</dl>
+																)}
+
+																{accessions.length > 0 && (
+																	<div className="text-xs">
+																		<span className="text-muted-foreground">Accession No:</span>{' '}
+																		<span className="font-mono">
+																			{accessions.slice(0, ACCESSIONS_SHOWN_LIST).join(', ')}
+																		</span>
+																		{accessions.length > ACCESSIONS_SHOWN_LIST && (
+																			<Tooltip>
+																				<TooltipTrigger asChild>
+																					<span className="text-muted-foreground cursor-default">
+																						{' '}+{accessions.length - ACCESSIONS_SHOWN_LIST} more
+																					</span>
+																				</TooltipTrigger>
+																				<TooltipContent className="max-w-md">
+																					<span className="font-mono text-xs">{accessions.join(', ')}</span>
+																				</TooltipContent>
+																			</Tooltip>
+																		)}
+																	</div>
+																)}
+															</div>
+
+															{/* Availability sits at the end of the line, where
+															    the eye can run straight down it */}
+															<div className="flex sm:flex-col items-center sm:items-end gap-2 sm:gap-1 shrink-0 sm:w-[130px] sm:border-l sm:pl-3">
+																{(r.available_count ?? 0) > 0 ? (
+																	<Badge variant="outline" className="text-[11px] bg-green-50 text-green-700 border-green-200">
+																		{r.available_count} available
+																	</Badge>
+																) : (
+																	<Badge variant="outline" className="text-[11px] bg-red-50 text-red-700 border-red-200">
+																		Not available
+																	</Badge>
+																)}
+																<span className="text-xs text-muted-foreground">
+																	{r.item_count ?? 0} cop{(r.item_count ?? 0) !== 1 ? 'ies' : 'y'}
+																</span>
+															</div>
+														</div>
+													</CardContent>
+												</Card>
+											)
+										})}
+									</div>
+								)}
 
 								{/* Pagination */}
 								{totalPages > 1 && (

@@ -15,13 +15,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
+import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import {
 	Newspaper, CheckCircle2, AlertCircle, Gift,
 	MoreHorizontal, Edit, Trash2, Search, RefreshCw,
 	PlusCircle, ChevronLeft, ChevronRight, ExternalLink,
 } from 'lucide-react'
 import Link from 'next/link'
-import type { LibPeriodicalSubscription, LibSubscriptionStatus } from '@/types/lib'
+import type { LibCatalogueRecord, LibPeriodicalSubscription, LibSubscriptionStatus } from '@/types/lib'
 
 const STATUS_COLORS: Record<LibSubscriptionStatus, string> = {
 	active: 'bg-green-50 text-green-700 border-green-200',
@@ -80,12 +81,15 @@ export default function PeriodicalSubscriptionsPage() {
 	const [errors, setErrors] = useState<Record<string, string>>({})
 	const [currentPage, setCurrentPage] = useState(1)
 	const [itemsPerPage, setItemsPerPage] = useState(10)
+	const [titles, setTitles] = useState<LibCatalogueRecord[]>([])
+	const [titlesLoaded, setTitlesLoaded] = useState(false)
+	const [titlesLoading, setTitlesLoading] = useState(false)
 
 	const fetchData = useCallback(async () => {
 		if (!isReady) return
 		try {
 			setLoading(true)
-			const url = appendToUrl('/api/lib/periodicals')
+			const url = appendToUrl('/api/lib/periodicals/subscriptions')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
@@ -97,8 +101,29 @@ export default function PeriodicalSubscriptionsPage() {
 		}
 	}, [isReady, appendToUrl, toast])
 
+	// The periodical titles a subscription can point at. Loaded when the form is
+	// first opened rather than with the page, because the list is only ever
+	// needed inside the sheet.
+	const loadTitles = useCallback(async () => {
+		if (!isReady || titlesLoaded || titlesLoading) return
+		try {
+			setTitlesLoading(true)
+			const res = await fetch(appendToUrl('/api/lib/catalogue?resource_format=periodical'))
+			if (!res.ok) throw new Error('Failed to fetch')
+			const data = await res.json()
+			setTitles(Array.isArray(data) ? data : [])
+			setTitlesLoaded(true)
+		} catch {
+			toast({ title: 'Failed to load periodical titles', variant: 'destructive' })
+		} finally {
+			setTitlesLoading(false)
+		}
+	}, [isReady, titlesLoaded, titlesLoading, appendToUrl, toast])
+
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
+	// Switching institution makes the loaded titles the wrong college's.
+	useEffect(() => { setTitles([]); setTitlesLoaded(false) }, [appendToUrl])
 
 	const scorecardData = useMemo(() => ({
 		total: subscriptions.length,
@@ -124,6 +149,25 @@ export default function PeriodicalSubscriptionsPage() {
 		return opts
 	}, [filtered.length])
 
+	const titleOptions = useMemo<SearchableSelectOption[]>(() => {
+		const opts = titles.map(t => ({
+			value: t.id,
+			label: t.title,
+			description: [
+				t.issn ? `ISSN: ${t.issn}` : null,
+				t.publisher_name || null,
+				t.call_number ? `Call no: ${t.call_number}` : null,
+			].filter(Boolean).join(' · ') || undefined,
+		}))
+		// A subscription being edited may point at a record the catalogue filter
+		// does not return; keep it selectable so editing never silently drops it.
+		const current = editingItem?.catalogue_record
+		if (current && !opts.some(o => o.value === current.id)) {
+			opts.unshift({ value: current.id, label: current.title, description: current.issn ? `ISSN: ${current.issn}` : undefined })
+		}
+		return opts
+	}, [titles, editingItem])
+
 	const effectivePerPage = itemsPerPage > filtered.length ? filtered.length : itemsPerPage
 	const totalPages = Math.max(1, Math.ceil(filtered.length / effectivePerPage))
 	const paginated = effectivePerPage > 0
@@ -139,6 +183,7 @@ export default function PeriodicalSubscriptionsPage() {
 
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
+		if (!form.catalogue_record_id) e.catalogue_record_id = 'Periodical title is required'
 		if (!form.fiscal_year.trim()) e.fiscal_year = 'Fiscal year is required'
 		setErrors(e)
 		return Object.keys(e).length === 0
@@ -159,7 +204,7 @@ export default function PeriodicalSubscriptionsPage() {
 				end_date: form.end_date || undefined,
 				access_url: form.access_url || undefined,
 			}
-			const url = editingItem ? `/api/lib/periodicals/subscriptions/${editingItem.id}` : '/api/lib/periodicals'
+			const url = editingItem ? `/api/lib/periodicals/subscriptions/${editingItem.id}` : '/api/lib/periodicals/subscriptions'
 			const res = await fetch(url, {
 				method: editingItem ? 'PUT' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -187,6 +232,7 @@ export default function PeriodicalSubscriptionsPage() {
 	}
 
 	const handleEdit = (s: LibPeriodicalSubscription) => {
+		loadTitles()
 		setEditingItem(s)
 		setForm({
 			catalogue_record_id: s.catalogue_record_id,
@@ -279,7 +325,7 @@ export default function PeriodicalSubscriptionsPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} subscription{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
-								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
+								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); loadTitles(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Subscription</span>
 									<span className="sm:hidden">Add</span>
@@ -499,6 +545,21 @@ export default function PeriodicalSubscriptionsPage() {
 						{/* Section: Subscription Info */}
 						<div className="space-y-4">
 							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Subscription Info</h3>
+							<div className="space-y-2">
+								<Label className="text-sm font-semibold">Periodical Title <span className="text-red-500">*</span></Label>
+								<SearchableSelect
+									value={form.catalogue_record_id}
+									onValueChange={v => setForm(f => ({ ...f, catalogue_record_id: v }))}
+									options={titleOptions}
+									loading={titlesLoading}
+									loadingText="Loading titles..."
+									placeholder="Select the periodical..."
+									searchPlaceholder="Search by title, ISSN or publisher..."
+									emptyText="No periodical titles yet — add one under Knowledge Registry with format 'Periodical'."
+									error={!!errors.catalogue_record_id}
+								/>
+								{errors.catalogue_record_id && <p className="text-xs text-red-500">{errors.catalogue_record_id}</p>}
+							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Subscription Number</Label>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -39,28 +40,40 @@ export async function GET(request: Request) {
 			}
 		}
 
-		// Fetch transactions in date range
-		const { data: transactions, error: txError } = await supabase
-			.from('lib_lending_transactions')
-			.select('id, issued_at, returned_at, transaction_status, due_date, member_id')
-			.eq('institution_id', institutionId)
-			.gte('issued_at', `${startDate}T00:00:00Z`)
-			.lte('issued_at', `${endDate}T23:59:59Z`)
-			.range(0, 9999)
+		// Loans and footfall over the same stretch of dates — two independent
+		// reads, so the report waits for the longer of them rather than for both
+		// end to end.
+		//
+		// Both are read in slices: a year of loans, and a year of footfall at a
+		// college that sees a few hundred students a day, are well past the
+		// thousand rows a single request returns — and a summary built from a
+		// truncated read is wrong in the direction nobody notices.
+		const [
+			{ data: transactions, error: txError },
+			{ data: visits },
+		] = await Promise.all([
+			fetchAllRows<Record<string, any>>(range => supabase
+				.from('lib_lending_transactions')
+				.select('id, issued_at, returned_at, transaction_status, due_date, member_id')
+				.eq('institution_id', institutionId)
+				.gte('issued_at', `${startDate}T00:00:00Z`)
+				.lte('issued_at', `${endDate}T23:59:59Z`)
+				.order('issued_at', { ascending: true })
+				.range(range.from, range.to)),
+			fetchAllRows<Record<string, any>>(range => supabase
+				.from('lib_member_visits')
+				.select('id, visit_date')
+				.eq('institution_id', institutionId)
+				.gte('visit_date', startDate!)
+				.lte('visit_date', endDate!)
+				.order('visit_date', { ascending: true })
+				.range(range.from, range.to)),
+		])
 
 		if (txError) {
 			console.error('Error fetching circulation data:', txError)
 			return NextResponse.json({ error: 'Failed to fetch circulation data' }, { status: 500 })
 		}
-
-		// Fetch visits in date range
-		const { data: visits } = await supabase
-			.from('lib_member_visits')
-			.select('id, visit_date')
-			.eq('institution_id', institutionId)
-			.gte('visit_date', startDate!)
-			.lte('visit_date', endDate!)
-			.range(0, 9999)
 
 		const txData = transactions ?? []
 		const visitData = visits ?? []

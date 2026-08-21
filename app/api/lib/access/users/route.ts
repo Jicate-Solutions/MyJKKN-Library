@@ -14,9 +14,11 @@ import {
 	getCaller,
 	canAssignRole,
 	resolveInstitutionScope,
+	invalidateCaller,
 	ASSIGNABLE_ROLES,
 	type LibraryRole,
 } from '@/lib/auth/server-access'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -35,14 +37,16 @@ export async function GET(request: Request) {
 
 		const supabase = getSupabaseServer()
 
-		let query = supabase
-			.from('users')
-			.select('id, email, full_name, role, is_super_admin, is_active, institution_id, last_login')
-			.order('full_name', { ascending: true })
+		const { data: users, error: usersError } = await fetchAllRows<{ id: string; [field: string]: any }>(range => {
+			let query = supabase
+				.from('users')
+				.select('id, email, full_name, role, is_super_admin, is_active, institution_id, last_login')
+				.order('full_name', { ascending: true })
 
-		if (scope.institutionId) query = query.eq('institution_id', scope.institutionId)
+			if (scope.institutionId) query = query.eq('institution_id', scope.institutionId)
 
-		const { data: users, error: usersError } = await query.range(0, 9999)
+			return query.range(range.from, range.to)
+		})
 		if (usersError) {
 			console.error('Error listing staff accounts:', usersError)
 			return NextResponse.json({ error: 'Failed to load staff accounts' }, { status: 500 })
@@ -117,11 +121,21 @@ export async function POST(request: Request) {
 
 		const supabase = getSupabaseServer()
 
-		const { data: target } = await supabase
-			.from('users')
-			.select('id, email, full_name, institution_id, is_super_admin, role')
-			.eq('id', targetUserId)
-			.maybeSingle()
+		// Who is being changed, and which role they are being given. Independent
+		// questions, so they are asked together. The checks below still run in
+		// their old order, so the same refusal comes back first as before.
+		const [{ data: target }, { data: roleRow }] = await Promise.all([
+			supabase
+				.from('users')
+				.select('id, email, full_name, institution_id, is_super_admin, role')
+				.eq('id', targetUserId)
+				.maybeSingle(),
+			supabase
+				.from('roles')
+				.select('id, name')
+				.eq('name', targetRole)
+				.maybeSingle(),
+		])
 
 		if (!target) return NextResponse.json({ error: 'User not found' }, { status: 404 })
 
@@ -140,12 +154,6 @@ export async function POST(request: Request) {
 				{ status: 403 }
 			)
 		}
-
-		const { data: roleRow } = await supabase
-			.from('roles')
-			.select('id, name')
-			.eq('name', targetRole)
-			.maybeSingle()
 
 		if (!roleRow) {
 			return NextResponse.json({ error: `Role "${targetRole}" does not exist` }, { status: 400 })
@@ -185,6 +193,11 @@ export async function POST(request: Request) {
 				updated_at: new Date().toISOString(),
 			})
 			.eq('id', targetUserId)
+
+		// Callers are held briefly to save re-validating a token on every
+		// request; drop this person from that so their new role is in force on
+		// their very next click rather than up to a minute later.
+		invalidateCaller(targetUserId)
 
 		return NextResponse.json({
 			success: true,

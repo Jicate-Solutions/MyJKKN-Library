@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -13,29 +14,28 @@ export async function GET(request: Request) {
 		const conservationStatus = searchParams.get('conservation_status')
 		const conservationType = searchParams.get('conservation_type')
 
-		let query = supabase
-			.from('lib_conservation_requests')
-			.select(`
-				*,
-				item:lib_items(
-					id,
-					accession_number,
-					barcode,
-					catalogue_record:lib_catalogue_records(id, title, isbn)
-				),
-				subscription:lib_periodical_subscriptions(
-					id,
-					catalogue_record:lib_catalogue_records(id, title, issn)
-				)
-			`)
+		// A request carries either an item or a subscription, never both, and the
+		// screen only ever reads the item — so the subscription branch is not
+		// joined here. It would be a two-level join fetched and thrown away.
+		const { data, error } = await fetchAllRows(range => {
+			let query = supabase
+				.from('lib_conservation_requests')
+				.select(`
+					*,
+					item:lib_items(
+						id,
+						accession_number,
+						barcode,
+						catalogue_record:lib_catalogue_records(id, title, isbn)
+					)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (conservationStatus) query = query.eq('conservation_status', conservationStatus)
-		if (conservationType) query = query.eq('conservation_type', conservationType)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (conservationStatus) query = query.eq('conservation_status', conservationStatus)
+			if (conservationType) query = query.eq('conservation_type', conservationType)
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching conservation requests:', error)

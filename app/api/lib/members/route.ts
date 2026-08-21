@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 import { logActivity } from '@/lib/library/activity-log'
 
 export async function GET(request: Request) {
@@ -16,20 +17,22 @@ export async function GET(request: Request) {
 		const isActive = searchParams.get('is_active')
 		const search = searchParams.get('search')
 
-		let query = supabase.from('lib_members').select('*')
+		// A member roll can pass a thousand on the larger campuses, and a single
+		// request stops at exactly that without saying so.
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase.from('lib_members').select('*')
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (memberCategory) query = query.eq('member_category', memberCategory)
-		if (isActive !== null) query = query.eq('is_active', isActive === 'true')
-		if (search) {
-			query = query.or(
-				`member_number.ilike.%${search}%,display_name.ilike.%${search}%,email.ilike.%${search}%`
-			)
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (memberCategory) query = query.eq('member_category', memberCategory)
+			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
+			if (search) {
+				query = query.or(
+					`member_number.ilike.%${search}%,display_name.ilike.%${search}%,email.ilike.%${search}%`
+				)
+			}
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching members:', error)

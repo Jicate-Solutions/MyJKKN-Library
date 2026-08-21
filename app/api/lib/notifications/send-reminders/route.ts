@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { overdueReminderEmail, holdAvailableEmail } from '@/lib/library/notification-templates'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 type ReminderType = 'overdue' | 'hold_available'
 
@@ -87,22 +88,26 @@ async function collectOverdue(
 ): Promise<{ recipients: Recipient[]; skipped: SendOutcome[] }> {
 	const today = new Date().toISOString().split('T')[0]
 
-	let query = supabase
-		.from('lib_lending_transactions')
-		.select(`
-			id,
-			due_date,
-			member:lib_members(id, display_name, email, member_category, is_active),
-			item:lib_items(accession_number, catalogue_record:lib_catalogue_records(title))
-		`)
-		.eq('institution_id', institutionId)
-		.lt('due_date', today)
-		.in('transaction_status', ['active', 'overdue'])
+	// Read in slices: a reminder run that stopped at the thousandth overdue
+	// loan would leave the rest of the borrowers unwritten to, silently
+	const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+		let query = supabase
+			.from('lib_lending_transactions')
+			.select(`
+				id,
+				due_date,
+				member:lib_members(id, display_name, email, member_category, is_active),
+				item:lib_items(accession_number, catalogue_record:lib_catalogue_records(title))
+			`)
+			.eq('institution_id', institutionId)
+			.lt('due_date', today)
+			.in('transaction_status', ['active', 'overdue'])
 
-	if (memberIds?.length) query = query.in('member_id', memberIds)
+		if (memberIds?.length) query = query.in('member_id', memberIds)
 
-	const { data, error } = await query.range(0, 9999)
-	if (error) throw new Error(error.message)
+		return query.order('due_date', { ascending: true }).range(range.from, range.to)
+	})
+	if (error) throw new Error((error as Error).message)
 
 	// Charge rates differ per member category
 	const { data: categories } = await supabase
@@ -156,22 +161,24 @@ async function collectHolds(
 	institutionId: string,
 	memberIds: string[] | null
 ): Promise<{ recipients: Recipient[]; skipped: SendOutcome[] }> {
-	let query = supabase
-		.from('lib_resource_holds')
-		.select(`
-			id,
-			hold_expires_at,
-			member:lib_members(id, display_name, email),
-			item:lib_items(accession_number),
-			catalogue_record:lib_catalogue_records(title)
-		`)
-		.eq('institution_id', institutionId)
-		.eq('hold_status', 'available')
+	const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+		let query = supabase
+			.from('lib_resource_holds')
+			.select(`
+				id,
+				hold_expires_at,
+				member:lib_members(id, display_name, email),
+				item:lib_items(accession_number),
+				catalogue_record:lib_catalogue_records(title)
+			`)
+			.eq('institution_id', institutionId)
+			.eq('hold_status', 'available')
 
-	if (memberIds?.length) query = query.in('member_id', memberIds)
+		if (memberIds?.length) query = query.in('member_id', memberIds)
 
-	const { data, error } = await query.range(0, 9999)
-	if (error) throw new Error(error.message)
+		return query.order('hold_expires_at', { ascending: true }).range(range.from, range.to)
+	})
+	if (error) throw new Error((error as Error).message)
 
 	const recipients: Recipient[] = []
 	const skipped: SendOutcome[] = []

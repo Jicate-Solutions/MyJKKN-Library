@@ -90,3 +90,64 @@ export async function PUT(
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 	}
 }
+
+/**
+ * Deleting one purchase request: DELETE /api/lib/procurement/requests/[id]
+ *
+ * The Delete option on the requests list has always called this; there was no
+ * handler behind it, so the row disappeared from the screen and was back on the
+ * next refresh.
+ *
+ * A request that has already been ordered or received is not deleted — by then
+ * it is part of what the library bought and what it spent, and that record is
+ * worth more than a tidy list. Cancelling it is the way to close it.
+ */
+export async function DELETE(
+	request: Request,
+	{ params }: { params: Promise<{ id: string }> }
+) {
+	try {
+		const { id } = await params
+		const guard = await guardRecord(request, 'lib_procurement_requests', id)
+		if (!guard.ok) return guard.response
+		const supabase = getSupabaseServer()
+
+		const { data: existing } = await supabase
+			.from('lib_procurement_requests')
+			.select('request_status')
+			.eq('id', id)
+			.maybeSingle()
+
+		if (!existing) {
+			return NextResponse.json({ error: 'Procurement request not found' }, { status: 404 })
+		}
+
+		if (existing.request_status === 'ordered' || existing.request_status === 'received') {
+			return NextResponse.json(
+				{ error: `This request has already been ${existing.request_status} — cancel it instead of deleting it` },
+				{ status: 400 }
+			)
+		}
+
+		const { error } = await supabase
+			.from('lib_procurement_requests')
+			.delete()
+			.eq('id', id)
+
+		if (error) {
+			console.error('Error deleting procurement request:', error)
+			if (error.code === '23503') {
+				return NextResponse.json(
+					{ error: 'Cannot delete — an order refers to this request' },
+					{ status: 400 }
+				)
+			}
+			return NextResponse.json({ error: 'Failed to delete procurement request' }, { status: 500 })
+		}
+
+		return NextResponse.json({ success: true })
+	} catch (error) {
+		console.error('Unexpected error deleting procurement request:', error)
+		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+	}
+}

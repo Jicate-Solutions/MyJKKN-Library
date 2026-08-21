@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -15,21 +16,21 @@ export async function GET(request: Request) {
 		const naacReportable = searchParams.get('naac_reportable')
 		const search = searchParams.get('search')
 
-		let query = supabase.from('lib_digital_resources').select('*')
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase.from('lib_digital_resources').select('*')
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (resourceType) query = query.eq('resource_type', resourceType)
-		if (isActive !== null) query = query.eq('is_active', isActive === 'true')
-		if (naacReportable !== null) query = query.eq('naac_reportable', naacReportable === 'true')
-		if (search) {
-			query = query.or(
-				`resource_title.ilike.%${search}%,provider.ilike.%${search}%`
-			)
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (resourceType) query = query.eq('resource_type', resourceType)
+			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
+			if (naacReportable !== null) query = query.eq('naac_reportable', naacReportable === 'true')
+			if (search) {
+				query = query.or(
+					`resource_title.ilike.%${search}%,provider.ilike.%${search}%`
+				)
+			}
 
-		const { data, error } = await query
-			.order('resource_title', { ascending: true })
-			.range(0, 9999)
+			return query.order('resource_title', { ascending: true }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching digital resources:', error)

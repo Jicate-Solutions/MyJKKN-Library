@@ -57,11 +57,22 @@ export async function PUT(
 			if (!body.waiver_reason?.trim()) {
 				return NextResponse.json({ error: 'waiver_reason is required when waiving a charge' }, { status: 400 })
 			}
+
+			// The screen asks how much is being let off, and it is not always the
+			// whole charge — a librarian may waive fifty of a hundred rupee fine.
+			// Anything short of the full amount leaves the rest still owed, so the
+			// charge stays open rather than being written off.
+			const asked = Number(body.waiver_amount)
+			const waived = Number.isFinite(asked) && asked > 0
+				? Math.min(asked, Number(existing.total_charge))
+				: Number(existing.total_charge)
+			const stillOwed = Math.max(0, Number(existing.total_charge) - waived)
+
 			updateData = {
 				...updateData,
-				payment_status: 'waived',
-				waiver_amount: existing.total_charge,
-				net_payable: 0,
+				payment_status: stillOwed > 0 ? 'unpaid' : 'waived',
+				waiver_amount: waived,
+				net_payable: stillOwed,
 				waiver_reason: body.waiver_reason,
 				waiver_approved_by: body.waiver_approved_by ?? null,
 			}

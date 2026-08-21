@@ -19,6 +19,34 @@ import { logActivity, type ActivityAction } from '@/lib/library/activity-log'
 const MAX_LIMIT = 500
 const DEFAULT_LIMIT = 50
 
+/**
+ * What the console's table and its Excel export actually show.
+ *
+ * The three JSON columns — the record before, the record after, and the extra
+ * detail — are deliberately absent. They can each be arbitrarily large, and a
+ * page of five hundred lines carried all fifteen hundred of them across the
+ * wire for a table that renders six plain fields. One line's full story is read
+ * by id when its detail sheet is opened: /api/lib/logs/[id].
+ *
+ * The one thing kept from `metadata` is the email, because the table falls back
+ * to it to name someone whose account has since been deleted. Pulled out by the
+ * database as a single string rather than by shipping the whole blob.
+ */
+const LIST_COLUMNS = `
+	id,
+	institution_id,
+	user_id,
+	session_id,
+	action,
+	resource_type,
+	resource_id,
+	ip_address,
+	status,
+	error_message,
+	created_at,
+	user_email:metadata->>user_email
+`
+
 export async function POST(request: Request) {
 	try {
 		const body = await request.json()
@@ -81,7 +109,7 @@ export async function GET(request: Request) {
 		const supabase = getSupabaseServer()
 		let query = supabase
 			.from('lib_activity_log')
-			.select('*', { count: 'exact' })
+			.select(LIST_COLUMNS, { count: 'exact' })
 			.order('created_at', { ascending: false })
 
 		if (scope.institutionId) query = query.eq('institution_id', scope.institutionId)

@@ -1,6 +1,28 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
+
+/**
+ * What the hold queue shows. The reserved copy used to be joined as well, but
+ * the queue lists the title a member is waiting for, never the individual copy,
+ * so that join was fetched and discarded on every load.
+ */
+const HOLD_COLUMNS = `
+	id,
+	institution_id,
+	catalogue_record_id,
+	member_id,
+	item_id,
+	hold_placed_at,
+	hold_expires_at,
+	notified_at,
+	checked_out_at,
+	hold_status,
+	cancellation_reason,
+	member:lib_members(id, member_number, display_name, member_category),
+	catalogue_record:lib_catalogue_records(id, title, isbn, call_number)
+`
 
 export async function GET(request: Request) {
 	try {
@@ -14,23 +36,18 @@ export async function GET(request: Request) {
 		const catalogueRecordId = searchParams.get('catalogue_record_id')
 		const holdStatus = searchParams.get('hold_status')
 
-		let query = supabase
-			.from('lib_resource_holds')
-			.select(`
-				*,
-				member:lib_members(id, member_number, display_name, member_category),
-				catalogue_record:lib_catalogue_records(id, title, isbn, call_number),
-				item:lib_items(id, accession_number, barcode, status)
-			`)
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_resource_holds')
+				.select(HOLD_COLUMNS)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (memberId) query = query.eq('member_id', memberId)
-		if (catalogueRecordId) query = query.eq('catalogue_record_id', catalogueRecordId)
-		if (holdStatus) query = query.eq('hold_status', holdStatus)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (memberId) query = query.eq('member_id', memberId)
+			if (catalogueRecordId) query = query.eq('catalogue_record_id', catalogueRecordId)
+			if (holdStatus) query = query.eq('hold_status', holdStatus)
 
-		const { data, error } = await query
-			.order('hold_placed_at', { ascending: true })
-			.range(0, 9999)
+			return query.order('hold_placed_at', { ascending: true }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching holds:', error)

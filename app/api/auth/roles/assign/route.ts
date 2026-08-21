@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { invalidateCaller } from '@/lib/auth/server-access'
 
 // Assign role to a user
 export async function POST(req: NextRequest) {
@@ -150,6 +151,10 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', userId)
 
+    // Resolved callers are held briefly to avoid re-validating a token on every
+    // request — drop this one so the new role applies on their next click
+    invalidateCaller(userId)
+
     return NextResponse.json({
       success: true,
       message: 'Role assigned successfully'
@@ -295,6 +300,9 @@ export async function DELETE(req: NextRequest) {
         updated_at: new Date().toISOString()
       })
       .eq('id', userId)
+
+    // As above — the removal must be felt at once, not when the entry expires
+    invalidateCaller(userId)
 
     return NextResponse.json({
       success: true,

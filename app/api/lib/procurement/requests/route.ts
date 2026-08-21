@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -13,22 +14,22 @@ export async function GET(request: Request) {
 		const requestStatus = searchParams.get('request_status')
 		const search = searchParams.get('search')
 
-		let query = supabase
-			.from('lib_procurement_requests')
-			.select(`
-				*,
-				budget_head:lib_budget_heads(id, budget_head_code, budget_head_name, fiscal_year)
-			`)
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_procurement_requests')
+				.select(`
+					*,
+					budget_head:lib_budget_heads(id, budget_head_code, budget_head_name, fiscal_year)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (requestStatus) query = query.eq('request_status', requestStatus)
-		if (search) {
-			query = query.or(`title.ilike.%${search}%,isbn.ilike.%${search}%,author.ilike.%${search}%`)
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (requestStatus) query = query.eq('request_status', requestStatus)
+			if (search) {
+				query = query.or(`title.ilike.%${search}%,isbn.ilike.%${search}%,author.ilike.%${search}%`)
+			}
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching procurement requests:', error)

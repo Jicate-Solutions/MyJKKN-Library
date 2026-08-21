@@ -158,6 +158,24 @@ export default function RegistryPage() {
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
 
+	/**
+	 * Puts one newly entered book into the register on screen.
+	 *
+	 * Its title's other copies each gain one to their count, which is what the
+	 * register itself would say the next time it is read. The table does its own
+	 * sorting, so the row is simply appended.
+	 */
+	const addRegisterRow = useCallback((row: RegisterRow) => {
+		setRegisterRows(prev => [
+			...prev.map(existing =>
+				row.catalogue_record_id && existing.catalogue_record_id === row.catalogue_record_id
+					? { ...existing, total_copies: row.total_copies }
+					: existing
+			),
+			row,
+		])
+	}, [])
+
 	const scorecardData = useMemo(() => ({
 		total: records.length,
 		books: records.filter(r => r.resource_format === 'book').length,
@@ -303,7 +321,12 @@ export default function RegistryPage() {
 				const result = await res.json()
 				if (!res.ok) throw new Error(result.error || 'Could not save the book')
 
-				await fetchData()
+				// The new line is put in place rather than the whole register
+				// being read again — that read is 27,996 copies and 4,007 titles
+				// on the largest college, for one book being entered.
+				if (result.register_row) addRegisterRow(result.register_row as RegisterRow)
+				else await fetchData()
+
 				toast({
 					title: result.copy_number > 1
 						? `✅ Copy ${result.copy_number} of "${result.matched_title ?? result.title}"`
@@ -394,13 +417,24 @@ export default function RegistryPage() {
 			const result = await res.json()
 			if (!res.ok) throw new Error(result.error || 'Delete failed')
 
-			// Just the fact and the number. The counts on screen come back
-			// corrected from the refresh below, without being announced.
+			// Just the fact and the number. The counts on screen are corrected
+			// below, without being announced.
 			toast({
 				title: `✅ Book removed — Accession ${result.accession_number}`,
 				className: 'bg-green-50 border-green-200 text-green-800',
 			})
-			await fetchData()
+
+			// The line goes, and its title's remaining copies are one fewer —
+			// the same two changes a full re-read of the register would have
+			// produced, without reading it.
+			const removed = deleteCopy
+			setRegisterRows(prev => prev
+				.filter(row => row.item_id !== removed.item_id)
+				.map(row =>
+					removed.catalogue_record_id && row.catalogue_record_id === removed.catalogue_record_id
+						? { ...row, total_copies: Math.max(1, row.total_copies - 1) }
+						: row
+				))
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
 		} finally {

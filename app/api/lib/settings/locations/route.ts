@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { hasAtLeast } from '@/lib/auth/server-access'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -23,15 +24,21 @@ export async function GET(request: Request) {
 		if (!guard.ok) return guard.response
 
 		const supabase = getSupabaseServer()
-		let query = supabase
-			.from('lib_locations')
-			.select('*')
-			.order('sort_order', { ascending: true })
-			.order('location_code', { ascending: true })
 
-		if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+		// Shelves are created a rack at a time, up to 500 in one go, so a college
+		// that has laid out its cupboards over a few sittings can hold more than
+		// the thousand a single request returns.
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_locations')
+				.select('*')
+				.order('sort_order', { ascending: true })
+				.order('location_code', { ascending: true })
 
-		const { data, error } = await query.range(0, 9999)
+			if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+
+			return query.range(range.from, range.to)
+		})
 		if (error) {
 			console.error('Error listing locations:', error)
 			return NextResponse.json({ error: 'Failed to load locations' }, { status: 500 })
@@ -87,11 +94,15 @@ export async function POST(request: Request) {
 				}
 			}
 
-			// Skip codes this institution already has rather than failing the batch
+			// Skip codes this institution already has rather than failing the batch.
+			// Only the codes about to be created are asked about — at most 500 of
+			// them — instead of reading the whole shelf list, which would stop at a
+			// thousand rows and quietly call an existing shelf free.
 			const { data: existing } = await supabase
 				.from('lib_locations')
 				.select('location_code')
 				.eq('institution_id', guard.institutionId)
+				.in('location_code', rows.map(r => r.location_code))
 
 			const taken = new Set((existing || []).map(e => e.location_code))
 			const fresh = rows.filter(r => !taken.has(r.location_code))

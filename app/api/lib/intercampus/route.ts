@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -13,22 +14,22 @@ export async function GET(request: Request) {
 		const requestStatus = searchParams.get('request_status')
 		const memberId = searchParams.get('member_id')
 
-		let query = supabase
-			.from('lib_intercampus_requests')
-			.select(`
-				*,
-				member:lib_members(id, member_number, display_name, member_category),
-				catalogue_record:lib_catalogue_records(id, title, isbn, call_number),
-				item:lib_items(id, accession_number, barcode, status)
-			`)
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_intercampus_requests')
+				.select(`
+					*,
+					member:lib_members(id, member_number, display_name, member_category),
+					catalogue_record:lib_catalogue_records(id, title, isbn, call_number),
+					item:lib_items(id, accession_number, barcode, status)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (requestStatus) query = query.eq('request_status', requestStatus)
-		if (memberId) query = query.eq('member_id', memberId)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (requestStatus) query = query.eq('request_status', requestStatus)
+			if (memberId) query = query.eq('member_id', memberId)
 
-		const { data, error } = await query
-			.order('request_date', { ascending: false })
-			.range(0, 9999)
+			return query.order('request_date', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching intercampus requests:', error)

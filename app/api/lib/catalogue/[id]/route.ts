@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { guardCollection, guardWrite, guardRecord, guardRecordRow } from '@/lib/auth/api-guard'
 import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 
 export async function GET(
@@ -9,28 +9,21 @@ export async function GET(
 ) {
 	try {
 		const { id } = await params
-		const guard = await guardRecord(request, 'lib_catalogue_records', id)
-		if (!guard.ok) return guard.response
-		const supabase = getSupabaseServer()
 
-		const { data, error } = await supabase
-			.from('lib_catalogue_records')
-			.select(`
+		// The guard reads the record the page is asking for, rather than reading
+		// its institution first and the whole row again straight after
+		const guard = await guardRecordRow<{ institution_id: string | null }>(
+			request,
+			'lib_catalogue_records',
+			id,
+			`
 				*,
 				authors:lib_catalogue_authors(id, author_name, author_type, sort_order)
-			`)
-			.eq('id', id)
-			.single()
+			`
+		)
+		if (!guard.ok) return guard.response
 
-		if (error) {
-			if (error.code === 'PGRST116') {
-				return NextResponse.json({ error: 'Catalogue record not found' }, { status: 404 })
-			}
-			console.error('Error fetching catalogue record:', error)
-			return NextResponse.json({ error: 'Failed to fetch catalogue record' }, { status: 500 })
-		}
-
-		return NextResponse.json(data)
+		return NextResponse.json(guard.row)
 	} catch (error) {
 		console.error('Unexpected error fetching catalogue record:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

@@ -14,25 +14,9 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
-
-const MYJKKN_API_URL = process.env.MYJKKN_API_URL ?? 'https://www.jkkn.ai/api'
-const MYJKKN_API_KEY = process.env.MYJKKN_API_KEY ?? ''
-
-/** Photo lives in MyJKKN, never in our tables — best effort, never fatal. */
-async function fetchLearnerPhoto(learnerId: string): Promise<string | null> {
-	if (!MYJKKN_API_KEY) return null
-	try {
-		const res = await fetch(`${MYJKKN_API_URL}/api-management/learners/profiles/${learnerId}`, {
-			headers: { Authorization: `Bearer ${MYJKKN_API_KEY}` },
-		})
-		if (!res.ok) return null
-		const json = await res.json()
-		const profile = json?.data ?? json
-		return profile?.student_photo_url ?? profile?.profile_picture ?? profile?.photo_url ?? null
-	} catch {
-		return null
-	}
-}
+// The shared reader: it times MyJKKN out and remembers the answer, where the
+// copy that used to live here would wait as long as MyJKKN cared to take.
+import { fetchLearnerPhoto } from '@/lib/library/learner-photo'
 
 export async function GET(request: Request) {
 	try {
@@ -71,8 +55,18 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: `No member found for "${barcode}"` }, { status: 404 })
 		}
 
-		// What the desk needs to decide whether to lend
-		const [{ count: onLoan }, { data: unpaid }] = await Promise.all([
+		// Everything else the desk needs is answerable the moment we know who
+		// this is, and none of it depends on any of the rest — so it all goes at
+		// once. Asked one after another, as it used to be, five round trips of
+		// waiting stood between the scan and the name appearing on screen.
+		const [
+			{ count: onLoan },
+			{ data: unpaid },
+			{ data: category },
+			{ data: openLoans },
+			settings,
+			photo,
+		] = await Promise.all([
 			// Books in hand right now — overdue ones are still held, so they
 			// count towards the limit and must show in the same number.
 			supabase
@@ -85,6 +79,30 @@ export async function GET(request: Request) {
 				.select('net_payable')
 				.eq('member_id', member.id)
 				.eq('payment_status', 'unpaid'),
+			supabase
+				.from('lib_member_categories')
+				.select('category_name, max_items_allowed, loan_period_days, renewal_limit, late_charge_per_day')
+				.eq('institution_id', member.institution_id)
+				.eq('category_code', member.member_category)
+				.maybeSingle(),
+			// The books actually in this person's hands. The desk needs these on
+			// the same screen as the member: "what have you got, and what is due"
+			// is the first question asked at the counter, and it should not need
+			// a second search to answer.
+			supabase
+				.from('lib_lending_transactions')
+				.select(`
+					id, issued_at, due_date, renewal_count, transaction_status,
+					item:lib_items(
+						id, accession_number, barcode,
+						catalogue:lib_catalogue_records(title, subtitle, call_number)
+					)
+				`)
+				.eq('member_id', member.id)
+				.in('transaction_status', ['active', 'overdue'])
+				.order('due_date', { ascending: true }),
+			getInstitutionSettings(member.institution_id),
+			fetchLearnerPhoto(member.learner_id),
 		])
 
 		const outstanding = (unpaid || []).reduce(
@@ -92,31 +110,6 @@ export async function GET(request: Request) {
 			0
 		)
 
-		const { data: category } = await supabase
-			.from('lib_member_categories')
-			.select('category_name, max_items_allowed, loan_period_days, renewal_limit, late_charge_per_day')
-			.eq('institution_id', member.institution_id)
-			.eq('category_code', member.member_category)
-			.maybeSingle()
-
-		// The books actually in this person's hands. The desk needs these on the
-		// same screen as the member: "what have you got, and what is due" is the
-		// first question asked at the counter, and it should not need a second
-		// search to answer.
-		const { data: openLoans } = await supabase
-			.from('lib_lending_transactions')
-			.select(`
-				id, issued_at, due_date, renewal_count, transaction_status,
-				item:lib_items(
-					id, accession_number, barcode,
-					catalogue:lib_catalogue_records(title, subtitle, call_number)
-				)
-			`)
-			.eq('member_id', member.id)
-			.in('transaction_status', ['active', 'overdue'])
-			.order('due_date', { ascending: true })
-
-		const settings = await getInstitutionSettings(member.institution_id)
 		const today = new Date().toISOString().split('T')[0]
 		const chargePerDay = category?.late_charge_per_day ?? 0
 		const renewalLimit = category?.renewal_limit ?? 0
@@ -149,8 +142,6 @@ export async function GET(request: Request) {
 				estimated_charge: capFine(lateDays * chargePerDay, settings),
 			}
 		})
-
-		const photo = member.learner_id ? await fetchLearnerPhoto(member.learner_id) : null
 
 		return NextResponse.json({
 			...member,

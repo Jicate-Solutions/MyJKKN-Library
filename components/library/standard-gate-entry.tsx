@@ -39,6 +39,25 @@ interface Visit {
 	} | null
 }
 
+/** What POST /api/lib/visits/scan answers with. */
+interface ScanResult {
+	direction: 'in' | 'out'
+	visit: {
+		id: string | null
+		visit_date: string
+		entry_time: string | null
+		exit_time: string | null
+	}
+	member: {
+		id: string
+		member_number: string
+		display_name: string | null
+		member_category: string
+		is_active: boolean
+		photo_url: string | null
+	}
+}
+
 function timeOnly(value: string | null): string {
 	if (!value) return '—'
 	const d = new Date(value.includes('T') ? value : `1970-01-01T${value}`)
@@ -90,6 +109,40 @@ export function StandardGateEntry() {
 
 	const inside = useMemo(() => visits.filter(v => v.entry_time && !v.exit_time), [visits])
 
+	/**
+	 * Puts one scan's result into the register on screen.
+	 *
+	 * An exit closes the line that is already there; an entry starts a new one at
+	 * the top, which is where the day's newest visit belongs.
+	 */
+	const mergeScan = useCallback((result: ScanResult) => {
+		const { visit, member, direction } = result
+		const visitId = visit?.id
+		if (!visitId) return
+
+		setVisits(prev => {
+			if (direction === 'out') {
+				return prev.map(v => (v.id === visitId ? { ...v, exit_time: visit.exit_time } : v))
+			}
+
+			const line: Visit = {
+				id: visitId,
+				member_id: member.id,
+				visit_date: visit.visit_date,
+				entry_time: visit.entry_time,
+				exit_time: null,
+				visit_purpose: null,
+				member: {
+					id: member.id,
+					member_number: member.member_number,
+					display_name: member.display_name,
+					member_category: member.member_category,
+				},
+			}
+			return [line, ...prev.filter(v => v.id !== line.id)]
+		})
+	}, [])
+
 	const handleScan = async () => {
 		const code = barcode.trim()
 		if (!code || scanning) return
@@ -101,42 +154,38 @@ export function StandardGateEntry() {
 		try {
 			setScanning(true)
 
-			// Who is this?
-			const lookupRes = await fetch(
-				`/api/lib/members/lookup?barcode=${encodeURIComponent(code)}&institution_id=${institutionId}`
-			)
-			const person = await lookupRes.json()
-			if (!lookupRes.ok) throw new Error(person.error || 'Member not found')
+			// One call for the whole scan.
+			//
+			// This used to look the person up through the circulation desk's own
+			// route — which also worked out their loans, their fines, their
+			// category's rules and their open books, none of which the gate shows
+			// — and then made a second call to write the visit. Two round trips a
+			// scan, most of the first one wasted.
+			//
+			// The server decides entry or exit, as it must: two quick scans of one
+			// card would both read the same loaded list, both conclude "not inside
+			// yet", and open two visits for one person.
+			const res = await fetch('/api/lib/visits/scan', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ institution_id: institutionId, barcode: code }),
+			})
+			const data = await res.json()
+			if (!res.ok) throw new Error(data.error || 'Scan failed')
 
-			// Already inside? Then this scan is them leaving.
-			const openVisit = visits.find(v => v.member_id === person.id && v.entry_time && !v.exit_time)
+			const person = data.member
+			setLastPerson({
+				name: person.display_name ?? person.member_number,
+				photo: person.photo_url,
+				direction: data.direction,
+			})
 
-			if (openVisit) {
-				const res = await fetch('/api/lib/visits', {
-					method: 'PUT',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ id: openVisit.id, exit_time: new Date().toISOString() }),
-				})
-				if (!res.ok) throw new Error((await res.json()).error || 'Failed to record exit')
-				setLastPerson({ name: person.display_name ?? person.member_number, photo: person.photo_url, direction: 'out' })
-			} else {
-				const res = await fetch('/api/lib/visits', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						institution_id: institutionId,
-						member_id: person.id,
-						visit_date: today,
-						entry_time: new Date().toISOString(),
-					}),
-				})
-				if (!res.ok) throw new Error((await res.json()).error || 'Failed to record entry')
-				setLastPerson({ name: person.display_name ?? person.member_number, photo: person.photo_url, direction: 'in' })
-			}
+			// The register on screen is corrected from the answer just received,
+			// rather than the whole day being read again after every scan
+			mergeScan(data)
 
 			setBarcode('')
 			focusScanBox()
-			fetchData()
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Scan failed'), variant: 'destructive' })
 			setBarcode('')

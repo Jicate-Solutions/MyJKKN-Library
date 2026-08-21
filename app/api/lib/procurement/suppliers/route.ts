@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -13,19 +14,19 @@ export async function GET(request: Request) {
 		const isActive = searchParams.get('is_active')
 		const search = searchParams.get('search')
 
-		let query = supabase.from('lib_suppliers').select('*')
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase.from('lib_suppliers').select('*')
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (isActive !== null) query = query.eq('is_active', isActive === 'true')
-		if (search) {
-			query = query.or(
-				`supplier_code.ilike.%${search}%,supplier_name.ilike.%${search}%,contact_person.ilike.%${search}%`
-			)
-		}
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
+			if (search) {
+				query = query.or(
+					`supplier_code.ilike.%${search}%,supplier_name.ilike.%${search}%,contact_person.ilike.%${search}%`
+				)
+			}
 
-		const { data, error } = await query
-			.order('supplier_name', { ascending: true })
-			.range(0, 9999)
+			return query.order('supplier_name', { ascending: true }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching suppliers:', error)

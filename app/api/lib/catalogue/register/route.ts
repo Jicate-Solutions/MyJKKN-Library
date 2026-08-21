@@ -26,55 +26,82 @@ export async function GET(request: Request) {
 		// thousand rows per request, and a college with more books than that was
 		// seeing its register cut off at the thousandth line — copy counts
 		// included, since they are worked out from the rows in hand.
-		const { data, error } = await fetchAllRows(range => {
-			let query = supabase
-				.from('lib_items')
-				.select(`
-					id, accession_number, copy_number, status, is_lendable, accession_date,
-					catalogue:lib_catalogue_records(
+		//
+		// The titles are read separately rather than hung off each copy. Asking
+		// for them through the copy meant the database assembling the same title
+		// over and over — Engineering has 27,996 copies of 4,007 titles, so each
+		// title was built roughly seven times, and the join cost four times what
+		// the plain rows cost. Read apart and paired up here, the same register
+		// comes back in under half the time.
+		const [items, records] = await Promise.all([
+			fetchAllRows(range => {
+				let query = supabase
+					.from('lib_items')
+					.select('id, accession_number, copy_number, status, is_lendable, accession_date, catalogue_record_id')
+
+				if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+
+				return query
+					.order('accession_number', { ascending: true })
+					.range(range.from, range.to)
+			}),
+			fetchAllRows(range => {
+				let query = supabase
+					.from('lib_catalogue_records')
+					.select(`
 						id, title, subtitle, author, edition, isbn, issn,
 						resource_format, book_type, department, book_location,
 						publisher_name, publication_year, is_reference_only
-					)
-				`)
+					`)
 
-			if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+				if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
 
-			return query
-				.order('accession_number', { ascending: true })
-				.range(range.from, range.to)
-		})
+				return query.range(range.from, range.to)
+			}),
+		])
 
+		const error = items.error ?? records.error
 		if (error) {
 			console.error('Error fetching the accession register:', error)
 			return NextResponse.json({ error: 'Failed to load the register' }, { status: 500 })
+		}
+
+		const data = items.data
+
+		interface CatalogueRow {
+			id: string
+			title: string
+			subtitle: string | null
+			author: string | null
+			edition: string | null
+			isbn: string | null
+			issn: string | null
+			resource_format: string
+			book_type: string | null
+			department: string | null
+			book_location: string | null
+			publisher_name: string | null
+			publication_year: number | null
+			is_reference_only: boolean
+		}
+
+		const titlesById = new Map<string, CatalogueRow>()
+		for (const record of (records.data || []) as CatalogueRow[]) {
+			titlesById.set(record.id, record)
 		}
 
 		// How many copies each title holds, worked out from the rows already in
 		// hand rather than asked of the database again.
 		const copiesByTitle = new Map<string, number>()
 		for (const row of data || []) {
-			const catalogue = row.catalogue as unknown as { id?: string } | null
-			if (catalogue?.id) copiesByTitle.set(catalogue.id, (copiesByTitle.get(catalogue.id) ?? 0) + 1)
+			const id = row.catalogue_record_id
+			if (id) copiesByTitle.set(id, (copiesByTitle.get(id) ?? 0) + 1)
 		}
 
 		const rows = (data || []).map(row => {
-			const catalogue = row.catalogue as unknown as {
-				id: string
-				title: string
-				subtitle: string | null
-				author: string | null
-				edition: string | null
-				isbn: string | null
-				issn: string | null
-				resource_format: string
-				book_type: string | null
-				department: string | null
-				book_location: string | null
-				publisher_name: string | null
-				publication_year: number | null
-				is_reference_only: boolean
-			} | null
+			const catalogue = row.catalogue_record_id
+				? titlesById.get(row.catalogue_record_id) ?? null
+				: null
 
 			return {
 				item_id: row.id,

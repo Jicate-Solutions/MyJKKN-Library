@@ -124,35 +124,45 @@ export async function POST(request: Request) {
 			}
 		}
 
-		// 4. Update lending transaction — mark returned
-		const { data: updatedTx, error: updateError } = await supabase
-			.from('lib_lending_transactions')
-			.update({
-				returned_at: now.toISOString(),
-				returned_by: returned_by ?? null,
-				return_condition: return_condition ?? null,
-				transaction_status: 'returned',
-				updated_at: now.toISOString(),
-			})
-			.eq('id', transaction.id)
-			.select()
-			.single()
+		// 4 and 5. Mark the loan returned and the copy available.
+		//
+		// Neither update needs the other's answer — both are writing values
+		// already in hand — so they go together rather than one after the other.
+		// The item update asks for `catalogue_record_id` back, which is the value
+		// step 6 used to fetch in a third round trip of its own.
+		const newCondition = return_condition ?? undefined
+		const [
+			{ data: updatedTx, error: updateError },
+			{ data: updatedItem, error: itemError },
+		] = await Promise.all([
+			supabase
+				.from('lib_lending_transactions')
+				.update({
+					returned_at: now.toISOString(),
+					returned_by: returned_by ?? null,
+					return_condition: return_condition ?? null,
+					transaction_status: 'returned',
+					updated_at: now.toISOString(),
+				})
+				.eq('id', transaction.id)
+				.select()
+				.single(),
+			supabase
+				.from('lib_items')
+				.update({
+					status: 'available',
+					...(newCondition ? { condition: newCondition } : {}),
+					updated_at: now.toISOString(),
+				})
+				.eq('id', returnedItemId)
+				.select('catalogue_record_id')
+				.single(),
+		])
 
 		if (updateError) {
 			console.error('Error updating transaction on return:', updateError)
 			return NextResponse.json({ error: 'Failed to record return' }, { status: 500 })
 		}
-
-		// 5. Update item status to available
-		const newCondition = return_condition ?? undefined
-		const { error: itemError } = await supabase
-			.from('lib_items')
-			.update({
-				status: 'available',
-				...(newCondition ? { condition: newCondition } : {}),
-				updated_at: now.toISOString(),
-			})
-			.eq('id', returnedItemId)
 
 		if (itemError) {
 			console.error('Error updating item status on return:', itemError)
@@ -160,11 +170,7 @@ export async function POST(request: Request) {
 		}
 
 		// 6. Check for pending holds on this catalogue record and notify
-		const { data: item } = await supabase
-			.from('lib_items')
-			.select('catalogue_record_id')
-			.eq('id', returnedItemId)
-			.single()
+		const item = updatedItem
 
 		if (item?.catalogue_record_id) {
 			const { data: pendingHold } = await supabase

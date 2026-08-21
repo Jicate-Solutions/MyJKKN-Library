@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -12,26 +13,26 @@ export async function GET(request: Request) {
 		const institutionId = guard.institutionId
 		const retirementStatus = searchParams.get('retirement_status')
 
-		let query = supabase
-			.from('lib_retirement_requests')
-			.select(`
-				*,
-				item:lib_items(
-					id,
-					accession_number,
-					barcode,
-					condition,
-					status,
-					catalogue_record:lib_catalogue_records(id, title, isbn, call_number)
-				)
-			`)
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase
+				.from('lib_retirement_requests')
+				.select(`
+					*,
+					item:lib_items(
+						id,
+						accession_number,
+						barcode,
+						condition,
+						status,
+						catalogue_record:lib_catalogue_records(id, title, isbn, call_number)
+					)
+				`)
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (retirementStatus) query = query.eq('retirement_status', retirementStatus)
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (retirementStatus) query = query.eq('retirement_status', retirementStatus)
 
-		const { data, error } = await query
-			.order('created_at', { ascending: false })
-			.range(0, 9999)
+			return query.order('created_at', { ascending: false }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching retirement requests:', error)

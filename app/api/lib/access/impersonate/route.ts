@@ -54,7 +54,10 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'That account is inactive' }, { status: 400 })
 		}
 
-		await recordImpersonationEvent({
+		// Not awaited — whether the audit line lands has no bearing on whether the
+		// switch succeeds, and its own catch already tolerates a failed write, so
+		// making the response wait for it bought nothing.
+		void recordImpersonationEvent({
 			event: 'start',
 			realUserId,
 			realEmail,
@@ -91,7 +94,7 @@ export async function DELETE(request: Request) {
 		const { caller } = await getCaller(request)
 
 		if (caller?.impersonatedBy) {
-			await recordImpersonationEvent({
+			void recordImpersonationEvent({
 				event: 'stop',
 				realUserId: caller.impersonatedBy.userId,
 				realEmail: caller.impersonatedBy.email,

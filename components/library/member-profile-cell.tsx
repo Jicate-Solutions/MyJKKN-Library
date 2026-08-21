@@ -1,23 +1,28 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+/**
+ * One member, as the members table shows them: photo, real name, roll number.
+ *
+ * This used to fetch its own profile from MyJKKN, once per row — which meant a
+ * page of fifty rows opened fifty external calls at the same moment, with
+ * nothing capping a slow one. The page now asks for everyone on it in a single
+ * request and passes the answer down, so this component only draws.
+ */
+
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getCachedProfile, setCachedProfile } from '@/lib/myjkkn-profile-cache'
 import type { LibMemberCategory } from '@/types/lib'
+import type { MyjkknProfile } from '@/lib/library/myjkkn-profile'
 
 interface MemberProfileCellProps {
 	memberCategory: LibMemberCategory
 	learnerId?: string | null
 	facilitatorId?: string | null
 	fallbackName?: string | null
-}
-
-interface ResolvedProfile {
-	name: string
-	identifier: string
-	photoUrl?: string
-	subtitle?: string
+	/** From the page's one lookup: the profile, or null when MyJKKN has none. */
+	profile?: MyjkknProfile | null
+	/** True while that lookup is still out for this row. */
+	loading?: boolean
 }
 
 function getInitials(name: string): string {
@@ -35,77 +40,15 @@ export function MemberProfileCell({
 	learnerId,
 	facilitatorId,
 	fallbackName,
+	profile,
+	loading,
 }: MemberProfileCellProps) {
-	const [profile, setProfile] = useState<ResolvedProfile | null>(null)
-	const [loading, setLoading] = useState(false)
-	const [error, setError] = useState(false)
-
-	const needsFetch =
+	// Only rows that stand for a MyJKKN person are ever waiting on one
+	const fromMyjkkn =
 		(memberCategory === 'learner' && !!learnerId) ||
 		(memberCategory === 'facilitator' && !!facilitatorId)
 
-	const cacheKey = memberCategory === 'learner'
-		? `learner:${learnerId}`
-		: `facilitator:${facilitatorId}`
-
-	useEffect(() => {
-		if (!needsFetch) return
-
-		const cached = getCachedProfile<ResolvedProfile>(cacheKey)
-		if (cached) {
-			setProfile(cached)
-			return
-		}
-
-		let cancelled = false
-
-		const fetchProfile = async () => {
-			setLoading(true)
-			setError(false)
-			try {
-				const apiId = memberCategory === 'learner' ? learnerId : facilitatorId
-				// Learner: use students/[id] which proxies to /api-management/learners/profiles/{id}
-				// Staff: use staff/[id] which proxies to /api-management/staff/{id}
-				const endpoint = memberCategory === 'learner'
-					? `/api/myjkkn/students/${apiId}`
-					: `/api/myjkkn/staff/${apiId}`
-
-				const res = await fetch(endpoint)
-				if (!res.ok) throw new Error('fetch failed')
-
-				const json = await res.json()
-				const d = json.data || json
-
-				const resolved: ResolvedProfile = memberCategory === 'learner'
-					? {
-						name: [d.first_name, d.last_name].filter(Boolean).join(' '),
-						identifier: d.roll_number || d.register_number || '',
-						photoUrl: d.student_photo_url || d.profile_picture,
-						subtitle: d.program_code || d.program?.program_name || '',
-					}
-					: {
-						name: [d.first_name, d.last_name].filter(Boolean).join(' '),
-						identifier: d.staff_id || d.staff_code || '',
-						photoUrl: d.profile_picture || d.staff_photo_url,
-						subtitle: d.designation || '',
-					}
-
-				if (!cancelled) {
-					setProfile(resolved)
-					setCachedProfile(cacheKey, resolved)
-				}
-			} catch {
-				if (!cancelled) setError(true)
-			} finally {
-				if (!cancelled) setLoading(false)
-			}
-		}
-
-		fetchProfile()
-		return () => { cancelled = true }
-	}, [needsFetch, cacheKey, memberCategory, learnerId, facilitatorId])
-
-	if (loading) {
+	if (fromMyjkkn && loading && !profile) {
 		return (
 			<div className="flex items-center gap-2.5">
 				<Skeleton className="h-8 w-8 rounded-full shrink-0" />
@@ -117,7 +60,7 @@ export function MemberProfileCell({
 		)
 	}
 
-	if (profile && !error) {
+	if (profile) {
 		const diceBearUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(profile.name)}&backgroundColor=059669&textColor=ffffff&fontSize=40`
 		return (
 			<div className="flex items-center gap-2.5">
@@ -137,6 +80,8 @@ export function MemberProfileCell({
 		)
 	}
 
+	// No MyJKKN profile — theirs, or none was ever going to be asked for. The
+	// name the library stored is still a name.
 	const displayName = fallbackName || 'Unknown Member'
 	const diceBearUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}&backgroundColor=6b7280&textColor=ffffff&fontSize=40`
 	return (

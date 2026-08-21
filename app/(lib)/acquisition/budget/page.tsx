@@ -63,7 +63,7 @@ export default function BudgetPage() {
 		if (!isReady) return
 		try {
 			setLoading(true)
-			const url = appendToUrl('/api/lib/acquisition/budget')
+			const url = appendToUrl('/api/lib/procurement/budget')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
@@ -137,7 +137,7 @@ export default function BudgetPage() {
 				institution_id: instId ?? '',
 				allocated_amount: Number(form.allocated_amount),
 			}
-			const url = editingItem ? `/api/lib/acquisition/budget/${editingItem.id}` : '/api/lib/acquisition/budget'
+			const url = editingItem ? `/api/lib/procurement/budget/${editingItem.id}` : '/api/lib/procurement/budget'
 			const res = await fetch(url, {
 				method: editingItem ? 'PUT' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -180,8 +180,8 @@ export default function BudgetPage() {
 	const handleDelete = async () => {
 		if (!deleteTarget) return
 		try {
-			const res = await fetch(`/api/lib/acquisition/budget/${deleteTarget.id}`, { method: 'DELETE' })
-			if (!res.ok) throw new Error('Delete failed')
+			const res = await fetch(`/api/lib/procurement/budget/${deleteTarget.id}`, { method: 'DELETE' })
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Delete failed')
 			setBudgets(prev => prev.filter(x => x.id !== deleteTarget.id))
 			toast({ title: '✅ Budget head deleted', className: 'bg-green-50 border-green-200 text-green-800' })
 		} catch (err) {

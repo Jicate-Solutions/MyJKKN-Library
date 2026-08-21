@@ -72,8 +72,8 @@ export default function SubscriptionDetailPage() {
 		try {
 			setLoading(true)
 			const [subRes, issuesRes] = await Promise.all([
-				fetch(`/api/lib/periodicals/${subscriptionId}`),
-				fetch(`/api/lib/periodicals/${subscriptionId}/issues`),
+				fetch(`/api/lib/periodicals/subscriptions/${subscriptionId}`),
+				fetch(`/api/lib/periodicals/subscriptions/${subscriptionId}/issues`),
 			])
 			if (!subRes.ok) throw new Error('Failed to load subscription')
 			const subData = await subRes.json()
@@ -129,7 +129,7 @@ export default function SubscriptionDetailPage() {
 				issue_date: form.issue_date || undefined,
 				cover_date: form.cover_date || undefined,
 			}
-			const res = await fetch(`/api/lib/periodicals/${subscriptionId}/issues`, {
+			const res = await fetch(`/api/lib/periodicals/subscriptions/${subscriptionId}/issues`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(payload),

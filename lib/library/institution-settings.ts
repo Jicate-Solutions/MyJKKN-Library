@@ -57,12 +57,50 @@ export const DEFAULT_SETTINGS: InstitutionSettings = {
 	requires_no_dues: false,
 }
 
+/**
+ * How long a campus's policy is reused before being read again.
+ *
+ * These rules are read on every issue, renew, return and desk lookup, and they
+ * change perhaps twice a year — so re-reading the row for each of those was a
+ * round trip spent confirming what had not moved. Saving the policy on the
+ * settings page clears it here at once, so an edited fine is in force on the
+ * next issue and not a minute later; the window below only covers a rule
+ * changed straight in the database.
+ *
+ * Kept per institution, like everything else about these rules: one campus's
+ * entry is never handed to another.
+ */
+const SETTINGS_TTL_MS = 60_000
+
+interface CachedSettings {
+	settings: InstitutionSettings
+	expiresAt: number
+}
+
+const settingsCache = new Map<string, CachedSettings>()
+
+/** Forgets one campus's policy, or every campus's. */
+export function invalidateInstitutionSettings(institutionId?: string | null): void {
+	if (!institutionId) settingsCache.clear()
+	else settingsCache.delete(institutionId)
+}
+
 /** Reads one institution's policy, falling back to the defaults above. */
 export async function getInstitutionSettings(
 	institutionId: string | null | undefined
 ): Promise<InstitutionSettings> {
 	if (!institutionId) return DEFAULT_SETTINGS
 
+	const cached = settingsCache.get(institutionId)
+	if (cached && cached.expiresAt > Date.now()) return cached.settings
+
+	const settings = await readInstitutionSettings(institutionId)
+	settingsCache.set(institutionId, { settings, expiresAt: Date.now() + SETTINGS_TTL_MS })
+	return settings
+}
+
+/** The read itself, exactly as it was before it was worth remembering. */
+async function readInstitutionSettings(institutionId: string): Promise<InstitutionSettings> {
 	try {
 		const supabase = getSupabaseServer()
 		const { data, error } = await supabase

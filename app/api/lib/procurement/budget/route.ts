@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 export async function GET(request: Request) {
 	try {
@@ -14,16 +15,16 @@ export async function GET(request: Request) {
 		const resourceType = searchParams.get('resource_type')
 		const isActive = searchParams.get('is_active')
 
-		let query = supabase.from('lib_budget_heads').select('*')
+		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+			let query = supabase.from('lib_budget_heads').select('*')
 
-		if (institutionId) query = query.eq('institution_id', institutionId)
-		if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
-		if (resourceType) query = query.eq('resource_type', resourceType)
-		if (isActive !== null) query = query.eq('is_active', isActive === 'true')
+			if (institutionId) query = query.eq('institution_id', institutionId)
+			if (fiscalYear) query = query.eq('fiscal_year', fiscalYear)
+			if (resourceType) query = query.eq('resource_type', resourceType)
+			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
 
-		const { data, error } = await query
-			.order('budget_head_code', { ascending: true })
-			.range(0, 9999)
+			return query.order('budget_head_code', { ascending: true }).range(range.from, range.to)
+		})
 
 		if (error) {
 			console.error('Error fetching budget heads:', error)

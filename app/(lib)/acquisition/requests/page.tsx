@@ -98,7 +98,7 @@ export default function PurchaseRequestsPage() {
 		if (!isReady) return
 		try {
 			setLoading(true)
-			const url = appendToUrl('/api/lib/acquisition/requests')
+			const url = appendToUrl('/api/lib/procurement/requests')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
@@ -170,7 +170,7 @@ export default function PurchaseRequestsPage() {
 				estimated_price: form.estimated_price ? Number(form.estimated_price) : undefined,
 				currency_code: 'INR',
 			}
-			const url = editingItem ? `/api/lib/acquisition/requests/${editingItem.id}` : '/api/lib/acquisition/requests'
+			const url = editingItem ? `/api/lib/procurement/requests/${editingItem.id}` : '/api/lib/procurement/requests'
 			const res = await fetch(url, {
 				method: editingItem ? 'PUT' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -215,10 +215,17 @@ export default function PurchaseRequestsPage() {
 		setSheetOpen(true)
 	}
 
+	// Approving and rejecting are both a change of status on the request, which
+	// is what the route has always accepted. They used to be posted to
+	// /approve and /reject, which were never built, so both buttons failed.
 	const handleApprove = async (r: LibProcurementRequest) => {
 		try {
-			const res = await fetch(`/api/lib/acquisition/requests/${r.id}/approve`, { method: 'POST' })
-			if (!res.ok) throw new Error('Approval failed')
+			const res = await fetch(`/api/lib/procurement/requests/${r.id}`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ request_status: 'approved' }),
+			})
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Approval failed')
 			const updated = await res.json()
 			setRequests(prev => prev.map(x => x.id === updated.id ? updated : x))
 			toast({ title: '✅ Request approved', className: 'bg-green-50 border-green-200 text-green-800' })
@@ -230,12 +237,12 @@ export default function PurchaseRequestsPage() {
 	const handleRejectConfirm = async () => {
 		if (!rejectDialog.request) return
 		try {
-			const res = await fetch(`/api/lib/acquisition/requests/${rejectDialog.request.id}/reject`, {
-				method: 'POST',
+			const res = await fetch(`/api/lib/procurement/requests/${rejectDialog.request.id}`, {
+				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ rejection_reason: rejectDialog.reason }),
+				body: JSON.stringify({ request_status: 'rejected', rejection_reason: rejectDialog.reason }),
 			})
-			if (!res.ok) throw new Error('Rejection failed')
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Rejection failed')
 			const updated = await res.json()
 			setRequests(prev => prev.map(x => x.id === updated.id ? updated : x))
 			toast({ title: '✅ Request rejected', className: 'bg-green-50 border-green-200 text-green-800' })
@@ -249,8 +256,8 @@ export default function PurchaseRequestsPage() {
 	const handleDelete = async () => {
 		if (!deleteTarget) return
 		try {
-			const res = await fetch(`/api/lib/acquisition/requests/${deleteTarget.id}`, { method: 'DELETE' })
-			if (!res.ok) throw new Error('Delete failed')
+			const res = await fetch(`/api/lib/procurement/requests/${deleteTarget.id}`, { method: 'DELETE' })
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Delete failed')
 			setRequests(prev => prev.filter(x => x.id !== deleteTarget.id))
 			toast({ title: '✅ Request deleted', className: 'bg-green-50 border-green-200 text-green-800' })
 		} catch (err) {
