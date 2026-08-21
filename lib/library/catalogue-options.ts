@@ -192,6 +192,35 @@ export function usesIssn(bookType: string): boolean {
 	return type === 'magazine' || type === 'journals'
 }
 
+/**
+ * Magazine and Journals are the two types the register treats as periodicals.
+ *
+ * Projects and Others deliberately stay on the book side: they are entered once,
+ * the way they always were, and nothing about them changes here.
+ */
+export function isPeriodicalType(bookType: string): boolean {
+	return usesIssn(bookType)
+}
+
+/**
+ * A magazine or journal comes from a vendor, issue after issue, and the library
+ * needs to know which one — it is the same vendor the subscription is paid to.
+ * A book is bought once and its supplier belongs to the purchase order, not to
+ * the shelf, which is why the field is asked for on one and not the other.
+ */
+export function usesSupplier(bookType: string): boolean {
+	return isPeriodicalType(bookType)
+}
+
+/**
+ * Every book on the shelf is owned by a department. A magazine or journal sits
+ * in the reading room for the whole college, so the register does not make the
+ * librarian invent a department for it.
+ */
+export function departmentRequiredFor(bookType: string): boolean {
+	return !isPeriodicalType(bookType)
+}
+
 /** Languages seen on the Pharmacy shelves, plus room to type anything else. */
 export const LANGUAGES = [
 	'English',
@@ -230,6 +259,32 @@ export interface TemplateColumn {
 	required: boolean
 	/** Shown under the header row in the template's Instructions sheet. */
 	note?: string
+	/**
+	 * Older wordings of the same column, still accepted on upload.
+	 *
+	 * A header printed into thousands of sheets cannot be renamed and then
+	 * refused — a librarian holding a part-filled sheet from last week would be
+	 * told it "is not the template". The new wording is what gets downloaded;
+	 * the old one keeps working.
+	 */
+	altHeaders?: string[]
+}
+
+/** Spaces, capitals and punctuation are noise when matching a column header. */
+export function normaliseTemplateHeader(header: string): string {
+	return header.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/** The column a sheet's header stands for, whatever wording it was written in. */
+export function templateColumnFor(
+	columns: TemplateColumn[],
+	header: string
+): TemplateColumn | undefined {
+	const wanted = normaliseTemplateHeader(header)
+	return columns.find(column =>
+		normaliseTemplateHeader(column.header) === wanted ||
+		(column.altHeaders ?? []).some(alt => normaliseTemplateHeader(alt) === wanted)
+	)
 }
 
 export const TEMPLATE_COLUMNS: TemplateColumn[] = [
@@ -237,7 +292,9 @@ export const TEMPLATE_COLUMNS: TemplateColumn[] = [
 	{ key: 'title', header: 'Title', required: true },
 	{ key: 'subtitle', header: 'Sub-Title', required: false, note: 'Optional' },
 	{ key: 'author', header: 'Author', required: true },
-	{ key: 'edition', header: 'Edition', required: true, note: 'e.g. 3rd' },
+	// A book has an edition, a magazine or journal has an issue — one column
+	// holds whichever the material has, so the header says both
+	{ key: 'edition', header: 'Edition/Issue', required: true, note: 'For a book the edition, e.g. 3rd. For a magazine or journal the issue, e.g. Vol 12 Issue 4', altHeaders: ['Edition'] },
 	{ key: 'publisher_name', header: 'Publisher Name', required: true },
 	{ key: 'publisher_place', header: 'Place', required: true, note: 'City where it was published' },
 	{ key: 'publication_year', header: 'Year', required: true, note: 'Four digits, e.g. 2024' },
@@ -279,6 +336,109 @@ export const TEMPLATE_EXAMPLE: Record<string, string> = {
 	accession_date: '2026-08-12',
 	department: 'Pharmacognosy',
 	book_location: 'Beero 2 / Rack 3',
+}
+
+/**
+ * Who supplies a magazine or journal. Asked for by name, not by any id — the
+ * librarian filling a sheet knows the vendor's name and nothing else.
+ *
+ * A name new to this college is added to its supplier list rather than refused:
+ * Acquisition → Suppliers is not in use yet, so there is no list to be spelt
+ * correctly against, and a sheet must not be rejected for saying something true.
+ */
+export const SUPPLIER_COLUMN: TemplateColumn = {
+	key: 'supplier',
+	header: 'Supplier',
+	required: false,
+	note: 'The vendor this comes from, written as it appears on the invoice. Leave blank if there is none.',
+	altHeaders: ['Supplier Name', 'Vendor'],
+}
+
+/**
+ * The two sheets, because the two kinds of material genuinely differ.
+ *
+ * A book has an ISBN and belongs to a department. A magazine or journal has an
+ * ISSN, comes from a supplier, and sits in the reading room rather than under
+ * any one department. One sheet carrying every column would ask each librarian
+ * to leave a third of it blank and to work out which third — so there are two,
+ * both cut from the list above so neither can drift away from it.
+ */
+export type CatalogueSheetKind = 'books' | 'periodicals'
+
+export const CATALOGUE_SHEET_LABELS: Record<CatalogueSheetKind, string> = {
+	books: 'Books',
+	periodicals: 'Magazine & Journals',
+}
+
+export function templateColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
+	if (kind === 'books') {
+		// No ISSN: a book was never issued one, and an empty column invites a
+		// number copied from somewhere else.
+		return TEMPLATE_COLUMNS
+			.filter(column => column.key !== 'issn')
+			.map(column => column.key === 'isbn'
+				? { ...column, required: true, note: 'Every book has one. It is what groups copies of the same book together.' }
+				: column)
+	}
+
+	const columns: TemplateColumn[] = []
+	for (const column of TEMPLATE_COLUMNS) {
+		// No ISBN on a periodical, and the department is not forced
+		if (column.key === 'isbn') continue
+		if (column.key === 'issn') {
+			columns.push({ ...column, note: 'The ISSN printed on the issue. Leave blank if it does not print one.' })
+			continue
+		}
+		if (column.key === 'department') {
+			columns.push({ ...column, required: false, note: 'Optional — fill it only if your library shelves this under one department.' })
+			continue
+		}
+		columns.push(column)
+		// Beside the publisher, where the librarian is already looking
+		if (column.key === 'publisher_place') columns.push(SUPPLIER_COLUMN)
+	}
+	return columns
+}
+
+/**
+ * The rules one uploaded row is judged by, chosen from what the row says it is.
+ *
+ * This is what lets a single sheet hold both — and what stops a Books sheet from
+ * demanding a department of the one magazine somebody typed into it.
+ */
+export function templateColumnsForBookType(bookType: string): TemplateColumn[] {
+	if (isPeriodicalType(bookType)) return templateColumnsFor('periodicals')
+	// ISBN is required of Books alone. Projects and Others go on the Books sheet
+	// and were never issued one, so the column stays optional for them.
+	return templateColumnsFor('books').map(column =>
+		column.key === 'isbn' ? { ...column, required: isbnRequiredFor(bookType) } : column
+	)
+}
+
+/** The filled example row for each sheet, so the shape is seen and not guessed. */
+export function templateExampleFor(kind: CatalogueSheetKind): Record<string, string> {
+	if (kind === 'books') return TEMPLATE_EXAMPLE
+	return {
+		...TEMPLATE_EXAMPLE,
+		title: 'Dental Clinics of North America',
+		subtitle: '',
+		author: 'Elsevier Editorial Board',
+		edition: 'Vol 68 Issue 3',
+		publisher_name: 'Elsevier',
+		publisher_place: 'Philadelphia',
+		publication_year: '2024',
+		price: '5000',
+		isbn: '',
+		issn: '0011-8532',
+		book_type: 'Journals',
+		pages: '180',
+		call_number: '',
+		classification_number: '',
+		reference_only: 'Non-lendable',
+		department: '',
+		supplier: 'Universal Book Agency',
+		book_location: 'Reading Room / Rack 1',
+	}
 }
 
 /**

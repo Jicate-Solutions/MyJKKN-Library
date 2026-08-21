@@ -83,6 +83,7 @@ export async function POST(
 				cover_date: body.cover_date ?? null,
 				pages: body.pages ?? null,
 				receipt_status: body.receipt_status ?? 'received',
+				remarks: body.remarks ?? null,
 				is_bound: body.is_bound ?? false,
 			})
 			.select()

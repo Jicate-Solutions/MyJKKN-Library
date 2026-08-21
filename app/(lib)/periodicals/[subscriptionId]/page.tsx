@@ -12,8 +12,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Textarea } from '@/components/ui/textarea'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import {
 	ArrowLeft, PlusCircle, RefreshCw, BookMarked, CheckCircle, Inbox, ChevronLeft, ChevronRight,
+	MoreHorizontal, Eye, Edit, Trash2,
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibPeriodicalSubscription, LibPeriodicalIssue, LibIssueReceiptStatus } from '@/types/lib'
@@ -42,6 +47,7 @@ interface IssueFormData {
 	cover_date: string
 	pages: string
 	receipt_status: LibIssueReceiptStatus
+	remarks: string
 }
 
 const defaultIssueForm: IssueFormData = {
@@ -52,6 +58,30 @@ const defaultIssueForm: IssueFormData = {
 	cover_date: '',
 	pages: '',
 	receipt_status: 'received',
+	remarks: '',
+}
+
+/** A plain date, as the rest of the register writes them. */
+function dateLabel(value?: string | null): string {
+	if (!value) return '—'
+	const date = new Date(value)
+	return isNaN(date.getTime()) ? value : date.toLocaleDateString('en-IN')
+}
+
+/**
+ * A cover date, read the way it is printed on the cover.
+ *
+ * The librarian enters the first of the month, because that is what a date box
+ * can take; the cover itself says "March 2026" and never a day. So the day is
+ * dropped on the way out — what is stored is untouched, only how it reads
+ * changes. Anything that is not a date is shown exactly as it was typed, since
+ * a weekly's cover may carry a full date and older rows hold free text.
+ */
+function coverDateLabel(value?: string | null): string {
+	if (!value) return '—'
+	const date = new Date(value)
+	if (isNaN(date.getTime())) return value
+	return date.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
 }
 
 export default function SubscriptionDetailPage() {
@@ -65,6 +95,12 @@ export default function SubscriptionDetailPage() {
 	const [saving, setSaving] = useState(false)
 	const [form, setForm] = useState<IssueFormData>(defaultIssueForm)
 	const [errors, setErrors] = useState<Record<string, string>>({})
+	/** The issue the sheet is editing, or null when a new one is being recorded. */
+	const [editingIssue, setEditingIssue] = useState<LibPeriodicalIssue | null>(null)
+	/** Shown read-only, for a librarian who only wants to look. */
+	const [viewIssue, setViewIssue] = useState<LibPeriodicalIssue | null>(null)
+	const [deleteTarget, setDeleteTarget] = useState<LibPeriodicalIssue | null>(null)
+	const [deleting, setDeleting] = useState(false)
 	const [currentPage, setCurrentPage] = useState(1)
 	const [itemsPerPage, setItemsPerPage] = useState(10)
 
@@ -108,7 +144,24 @@ export default function SubscriptionDetailPage() {
 		? issues.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
 		: issues
 
-	const resetForm = () => { setForm(defaultIssueForm); setErrors({}) }
+	const resetForm = () => { setForm(defaultIssueForm); setErrors({}); setEditingIssue(null) }
+
+	const startEdit = (issue: LibPeriodicalIssue) => {
+		setEditingIssue(issue)
+		setErrors({})
+		setForm({
+			volume_number: issue.volume_number ?? '',
+			issue_number: issue.issue_number ?? '',
+			// A date box only takes YYYY-MM-DD, and these come back as timestamps
+			issue_date: issue.issue_date?.split('T')[0] ?? '',
+			received_date: issue.received_date?.split('T')[0] ?? '',
+			cover_date: issue.cover_date?.split('T')[0] ?? '',
+			pages: issue.pages?.toString() ?? '',
+			receipt_status: issue.receipt_status,
+			remarks: issue.remarks ?? '',
+		})
+		setSheetOpen(true)
+	}
 
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
@@ -128,9 +181,11 @@ export default function SubscriptionDetailPage() {
 				pages: form.pages ? Number(form.pages) : undefined,
 				issue_date: form.issue_date || undefined,
 				cover_date: form.cover_date || undefined,
+				remarks: form.remarks.trim() || undefined,
 			}
-			const res = await fetch(`/api/lib/periodicals/subscriptions/${subscriptionId}/issues`, {
-				method: 'POST',
+			const base = `/api/lib/periodicals/subscriptions/${subscriptionId}/issues`
+			const res = await fetch(editingIssue ? `${base}/${editingIssue.id}` : base, {
+				method: editingIssue ? 'PUT' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(payload),
 			})
@@ -138,15 +193,47 @@ export default function SubscriptionDetailPage() {
 				const err = await res.json().catch(() => ({}))
 				throw new Error(err.error || 'Save failed')
 			}
-			const created = await res.json()
-			setIssues(prev => [created, ...prev])
-			toast({ title: '✅ Issue recorded', className: 'bg-green-50 border-green-200 text-green-800' })
+			const saved = await res.json()
+			if (editingIssue) {
+				setIssues(prev => prev.map(i => i.id === saved.id ? saved : i))
+				// The Received count moves with the status, so the scorecards above
+				// are read again rather than guessed at here.
+				if (editingIssue.receipt_status !== saved.receipt_status) loadData()
+				toast({ title: '✅ Issue updated', className: 'bg-green-50 border-green-200 text-green-800' })
+			} else {
+				setIssues(prev => [saved, ...prev])
+				toast({ title: '✅ Issue recorded', className: 'bg-green-50 border-green-200 text-green-800' })
+			}
 			setSheetOpen(false)
 			resetForm()
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Save failed'), variant: 'destructive' })
 		} finally {
 			setSaving(false)
+		}
+	}
+
+	const handleDelete = async () => {
+		if (!deleteTarget) return
+		try {
+			setDeleting(true)
+			const res = await fetch(
+				`/api/lib/periodicals/subscriptions/${subscriptionId}/issues/${deleteTarget.id}`,
+				{ method: 'DELETE' }
+			)
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({}))
+				throw new Error(err.error || 'Delete failed')
+			}
+			setIssues(prev => prev.filter(i => i.id !== deleteTarget.id))
+			// A deleted issue that had been counted gives its place back
+			if (deleteTarget.receipt_status === 'received') loadData()
+			toast({ title: '✅ Issue deleted', className: 'bg-green-50 border-green-200 text-green-800' })
+		} catch (err) {
+			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
+		} finally {
+			setDeleting(false)
+			setDeleteTarget(null)
 		}
 	}
 
@@ -343,18 +430,21 @@ export default function SubscriptionDetailPage() {
 								<Table>
 									<TableHeader className="sticky top-0 z-10 bg-muted/50">
 										<TableRow>
+											<TableHead className="text-xs font-semibold w-14">S.No</TableHead>
 											<TableHead className="text-xs font-semibold">Volume</TableHead>
 											<TableHead className="text-xs font-semibold">Issue #</TableHead>
+											<TableHead className="text-xs font-semibold">Cover Date</TableHead>
 											<TableHead className="text-xs font-semibold">Issue Date</TableHead>
 											<TableHead className="text-xs font-semibold">Received Date</TableHead>
 											<TableHead className="text-xs font-semibold">Pages</TableHead>
 											<TableHead className="text-xs font-semibold">Status</TableHead>
+											<TableHead className="text-xs font-semibold w-10"></TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
 										{paginated.length === 0 ? (
 											<TableRow>
-												<TableCell colSpan={6} className="h-32 text-center">
+												<TableCell colSpan={9} className="h-32 text-center">
 													<div className="flex flex-col items-center gap-1 text-muted-foreground">
 														<BookMarked className="h-8 w-8 opacity-20" />
 														<span className="text-sm">No issues recorded yet</span>
@@ -362,21 +452,43 @@ export default function SubscriptionDetailPage() {
 													</div>
 												</TableCell>
 											</TableRow>
-										) : paginated.map(issue => (
+										) : paginated.map((issue, index) => (
 											<TableRow key={issue.id} className="hover:bg-muted/50">
-												<TableCell className="text-sm">{issue.volume_number ?? '—'}</TableCell>
-												<TableCell className="text-sm">{issue.issue_number ?? '—'}</TableCell>
-												<TableCell className="text-sm">
-													{issue.issue_date ? new Date(issue.issue_date).toLocaleDateString('en-IN') : '—'}
+												{/* Counted across pages, so page 2 starts at 11 and not at 1 */}
+												<TableCell className="text-sm text-muted-foreground tabular-nums">
+													{(currentPage - 1) * effectivePerPage + index + 1}
 												</TableCell>
-												<TableCell className="text-sm">
-													{issue.received_date ? new Date(issue.received_date).toLocaleDateString('en-IN') : '—'}
-												</TableCell>
+												<TableCell className="text-sm">{issue.volume_number || '—'}</TableCell>
+												<TableCell className="text-sm">{issue.issue_number || '—'}</TableCell>
+												<TableCell className="text-sm">{coverDateLabel(issue.cover_date)}</TableCell>
+												<TableCell className="text-sm">{dateLabel(issue.issue_date)}</TableCell>
+												<TableCell className="text-sm">{dateLabel(issue.received_date)}</TableCell>
 												<TableCell className="text-sm">{issue.pages ?? '—'}</TableCell>
 												<TableCell>
 													<Badge variant="outline" className={`text-xs ${receiptColors[issue.receipt_status]}`}>
 														{issue.receipt_status}
 													</Badge>
+												</TableCell>
+												<TableCell>
+													<DropdownMenu>
+														<DropdownMenuTrigger asChild>
+															<Button variant="ghost" className="h-7 w-7 p-0">
+																<MoreHorizontal className="h-4 w-4" />
+															</Button>
+														</DropdownMenuTrigger>
+														<DropdownMenuContent align="end">
+															<DropdownMenuItem onClick={() => setViewIssue(issue)}>
+																<Eye className="h-4 w-4 mr-2" />View
+															</DropdownMenuItem>
+															<DropdownMenuItem onClick={() => startEdit(issue)}>
+																<Edit className="h-4 w-4 mr-2" />Edit
+															</DropdownMenuItem>
+															<DropdownMenuSeparator />
+															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
+																<Trash2 className="h-4 w-4 mr-2" />Delete
+															</DropdownMenuItem>
+														</DropdownMenuContent>
+													</DropdownMenu>
 												</TableCell>
 											</TableRow>
 										))}
@@ -392,25 +504,50 @@ export default function SubscriptionDetailPage() {
 									<BookMarked className="h-8 w-8 opacity-20" />
 									<span className="text-sm">No issues recorded yet</span>
 								</div>
-							) : paginated.map(issue => (
+							) : paginated.map((issue, index) => (
 								<div key={issue.id} className="rounded-lg border p-4 space-y-2">
-									<div className="flex items-start justify-between">
-										<div>
+									<div className="flex items-start justify-between gap-2">
+										<div className="min-w-0">
 											<p className="font-medium text-sm">
+												<span className="text-muted-foreground tabular-nums mr-1.5">
+													{(currentPage - 1) * effectivePerPage + index + 1}.
+												</span>
 												{issue.volume_number ? `Vol. ${issue.volume_number}` : ''}
 												{issue.volume_number && issue.issue_number ? ' / ' : ''}
 												{issue.issue_number ? `No. ${issue.issue_number}` : ''}
 												{!issue.volume_number && !issue.issue_number ? 'Issue' : ''}
 											</p>
 											<p className="text-xs text-muted-foreground">
-												{issue.received_date ? new Date(issue.received_date).toLocaleDateString('en-IN') : '—'}
+												{coverDateLabel(issue.cover_date)} · received {dateLabel(issue.received_date)}
 											</p>
 										</div>
-										<Badge variant="outline" className={`text-xs ${receiptColors[issue.receipt_status]}`}>
-											{issue.receipt_status}
-										</Badge>
+										<div className="flex items-center gap-1 shrink-0">
+											<Badge variant="outline" className={`text-xs ${receiptColors[issue.receipt_status]}`}>
+												{issue.receipt_status}
+											</Badge>
+											<DropdownMenu>
+												<DropdownMenuTrigger asChild>
+													<Button variant="ghost" className="h-7 w-7 p-0">
+														<MoreHorizontal className="h-4 w-4" />
+													</Button>
+												</DropdownMenuTrigger>
+												<DropdownMenuContent align="end">
+													<DropdownMenuItem onClick={() => setViewIssue(issue)}>
+														<Eye className="h-4 w-4 mr-2" />View
+													</DropdownMenuItem>
+													<DropdownMenuItem onClick={() => startEdit(issue)}>
+														<Edit className="h-4 w-4 mr-2" />Edit
+													</DropdownMenuItem>
+													<DropdownMenuSeparator />
+													<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
+														<Trash2 className="h-4 w-4 mr-2" />Delete
+													</DropdownMenuItem>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										</div>
 									</div>
 									{issue.pages && <p className="text-xs text-muted-foreground">{issue.pages} pages</p>}
+									{issue.remarks && <p className="text-xs text-muted-foreground italic">{issue.remarks}</p>}
 								</div>
 							))}
 						</div>
@@ -448,8 +585,12 @@ export default function SubscriptionDetailPage() {
 			<Sheet open={sheetOpen} onOpenChange={o => { if (!o) resetForm(); setSheetOpen(o) }}>
 				<SheetContent className="sm:max-w-[720px] overflow-y-auto">
 					<SheetHeader className="pb-4 border-b">
-						<SheetTitle className="text-lg font-semibold">Record Issue</SheetTitle>
-						<p className="text-sm text-muted-foreground">Log a received issue for this periodical subscription</p>
+						<SheetTitle className="text-lg font-semibold">{editingIssue ? 'Edit Issue' : 'Record Issue'}</SheetTitle>
+						<p className="text-sm text-muted-foreground">
+							{editingIssue
+								? 'Correct this issue — including its status, once a missing issue turns up'
+								: 'Log a received issue for this periodical subscription'}
+						</p>
 					</SheetHeader>
 					<div className="mt-6 space-y-8">
 						{/* Section: Issue Identity */}
@@ -490,6 +631,10 @@ export default function SubscriptionDetailPage() {
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Cover Date</Label>
 									<Input type="date" value={form.cover_date} onChange={e => setForm(f => ({ ...f, cover_date: e.target.value }))} />
+									<p className="text-xs text-muted-foreground">
+										Enter the 1st of the month. It is shown as{' '}
+										<span className="font-medium">{form.cover_date ? coverDateLabel(form.cover_date) : 'March 2026'}</span>.
+									</p>
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Pages</Label>
@@ -511,6 +656,19 @@ export default function SubscriptionDetailPage() {
 										))}
 									</SelectContent>
 								</Select>
+								<p className="text-xs text-muted-foreground">
+									An issue marked missing can be set to received here the day it arrives.
+								</p>
+							</div>
+							<div className="space-y-2">
+								<Label className="text-sm font-semibold">Remark</Label>
+								<Textarea
+									value={form.remarks}
+									onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))}
+									placeholder="Why it is missing, what the supplier said, how it arrived..."
+									rows={3}
+								/>
+								<p className="text-xs text-muted-foreground">Optional — a note against this issue alone.</p>
 							</div>
 						</div>
 
@@ -518,12 +676,85 @@ export default function SubscriptionDetailPage() {
 						<div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t">
 							<Button variant="outline" className="h-10 px-6 w-full sm:w-auto" onClick={() => setSheetOpen(false)}>Cancel</Button>
 							<Button className="h-10 px-6 w-full sm:w-auto" onClick={handleSave} disabled={saving}>
-								{saving ? 'Saving...' : 'Record Issue'}
+								{saving ? 'Saving...' : (editingIssue ? 'Update Issue' : 'Record Issue')}
 							</Button>
 						</div>
 					</div>
 				</SheetContent>
 			</Sheet>
+
+			{/* What is on record for one issue, read-only */}
+			<Dialog open={!!viewIssue} onOpenChange={o => { if (!o) setViewIssue(null) }}>
+				<DialogContent className="sm:max-w-[560px]">
+					<DialogHeader>
+						<DialogTitle className="text-lg font-semibold">Issue Detail</DialogTitle>
+						<DialogDescription>
+							{subscription.catalogue_record?.title ?? 'This subscription'}
+						</DialogDescription>
+					</DialogHeader>
+
+					{viewIssue && (
+						<div className="space-y-4">
+							<div className="grid grid-cols-2 gap-4">
+								{([
+									['Volume', viewIssue.volume_number || '—'],
+									['Issue #', viewIssue.issue_number || '—'],
+									['Cover Date', coverDateLabel(viewIssue.cover_date)],
+									['Issue Date', dateLabel(viewIssue.issue_date)],
+									['Received Date', dateLabel(viewIssue.received_date)],
+									['Pages', viewIssue.pages?.toString() || '—'],
+								] as Array<[string, string]>).map(([label, value]) => (
+									<div key={label}>
+										<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>
+										<p className="text-sm font-medium">{value}</p>
+									</div>
+								))}
+							</div>
+
+							<div>
+								<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Status</p>
+								<Badge variant="outline" className={`text-xs capitalize ${receiptColors[viewIssue.receipt_status]}`}>
+									{viewIssue.receipt_status}
+								</Badge>
+							</div>
+
+							<div>
+								<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Remark</p>
+								<p className="text-sm whitespace-pre-wrap">
+									{viewIssue.remarks || <span className="text-muted-foreground">No remark on this issue.</span>}
+								</p>
+							</div>
+						</div>
+					)}
+
+					<DialogFooter className="gap-2 sm:gap-2">
+						<Button variant="outline" onClick={() => setViewIssue(null)}>Close</Button>
+						<Button onClick={() => { const issue = viewIssue; setViewIssue(null); if (issue) startEdit(issue) }}>
+							<Edit className="h-4 w-4 mr-1.5" />Edit
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Delete confirmation */}
+			<AlertDialog open={!!deleteTarget} onOpenChange={o => { if (!o) setDeleteTarget(null) }}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete Issue</AlertDialogTitle>
+						<AlertDialogDescription>
+							Delete the issue recorded on <strong>{dateLabel(deleteTarget?.received_date)}</strong>
+							{deleteTarget?.issue_number ? <> (No. {deleteTarget.issue_number})</> : null}? This cannot be undone.
+							{deleteTarget?.receipt_status === 'received' && ' The Received count will go down by one.'}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={handleDelete} disabled={deleting} className="bg-red-600 hover:bg-red-700">
+							{deleting ? 'Deleting...' : 'Delete'}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</div>
 	)
 }

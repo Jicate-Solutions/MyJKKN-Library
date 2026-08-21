@@ -15,14 +15,16 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import {
-	TEMPLATE_COLUMNS,
+	templateColumnsForBookType,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
+	departmentRequiredFor,
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { toSheetDate } from '@/lib/library/sheet-date'
+import { supplierLookupFor } from '@/lib/library/supplier-by-name'
 import { logActivity } from '@/lib/library/activity-log'
 
 /** How many books are in flight at once. Enough to be quick, few enough to be kind to the connection pool. */
@@ -64,7 +66,12 @@ function validateRow(
 	rowNumber: number,
 	institutionCode: string | null
 ): string | null {
-	for (const column of TEMPLATE_COLUMNS) {
+	const bookType = text(row.book_type)
+
+	// Judged by what the row says it is, not by which sheet it arrived on. A
+	// magazine typed into the Books sheet is still a magazine, and is not asked
+	// for an ISBN or a department it does not have.
+	for (const column of templateColumnsForBookType(bookType)) {
 		if (column.required && !text(row[column.key])) {
 			return `${column.header} is empty`
 		}
@@ -87,9 +94,14 @@ function validateRow(
 
 	// Only books carry an ISBN. Magazines, journals, project reports and
 	// whatever lands under Others were never issued one.
-	if (isbnRequiredFor(text(row.book_type)) && !text(row.isbn)) {
+	if (isbnRequiredFor(bookType) && !text(row.isbn)) {
 		return 'ISBN is empty — books must have one'
 	}
+
+	// The supplier is not checked against a list. Acquisition → Suppliers is not
+	// in use yet, so there is no list to check against — a name that is new to
+	// this college is added to it rather than refused, exactly as the Add Title
+	// form now does.
 
 	const lendable = text(row.reference_only).toLowerCase()
 	if (lendable !== 'lendable' && lendable !== 'non-lendable') {
@@ -98,8 +110,10 @@ function validateRow(
 
 	// Each college has its own department list; one that has not given us a list
 	// yet accepts whatever is typed rather than rejecting every row.
+	// A magazine or journal may leave it blank; anything filled in is still
+	// checked, so a misspelt department is caught either way.
 	const department = text(row.department)
-	if (!isValidDepartment(institutionCode, department)) {
+	if ((departmentRequiredFor(bookType) || department) && !isValidDepartment(institutionCode, department)) {
 		return `Department "${department}" is not in your college's list`
 	}
 
@@ -146,6 +160,12 @@ export async function POST(request: Request) {
 			.maybeSingle()
 
 		const institutionCode: string | null = institution?.institution_code ?? null
+
+		// This college's vendors, read once for the whole batch rather than once
+		// per row. Both the name and the code are accepted, because a librarian
+		// filling a sheet writes whichever is in front of them — and a name that
+		// is new to the college is added rather than refused.
+		const suppliers = await supplierLookupFor(supabase, institutionId)
 
 		const failures: RowFailure[] = []
 		const seen = new Map<string, number>()
@@ -262,7 +282,7 @@ export async function POST(request: Request) {
 								pages: Number(text(data.pages)),
 								price,
 								currency_code: 'INR',
-								department: text(data.department),
+								department: text(data.department) || null,
 								book_location: text(data.book_location) || null,
 								is_reference_only: referenceOnly,
 								is_active: true,
@@ -293,6 +313,10 @@ export async function POST(request: Request) {
 
 					const copyNumber = await nextCopyNumber(supabase, recordId as string)
 
+					// The vendor named in the sheet, added to this college's list the
+					// first time it appears. Blank on a book, which carries none here.
+					const supplierId = await suppliers.resolve(data.supplier)
+
 					const { error: itemError } = await supabase
 						.from('lib_items')
 						.insert({
@@ -306,6 +330,7 @@ export async function POST(request: Request) {
 							status: 'available',
 							is_lendable: !referenceOnly,
 							is_active: true,
+							supplier_id: supplierId,
 							// Whatever form it was written in, stored the one way
 							accession_date: toSheetDate(data.accession_date),
 						})

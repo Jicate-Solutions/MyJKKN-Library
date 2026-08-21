@@ -203,6 +203,8 @@ export default function PeriodicalSubscriptionsPage() {
 				start_date: form.start_date || undefined,
 				end_date: form.end_date || undefined,
 				access_url: form.access_url || undefined,
+				// An empty string is not a UUID — send nothing so the column stays null.
+				supplier_id: form.supplier_id || undefined,
 			}
 			const url = editingItem ? `/api/lib/periodicals/subscriptions/${editingItem.id}` : '/api/lib/periodicals/subscriptions'
 			const res = await fetch(url, {

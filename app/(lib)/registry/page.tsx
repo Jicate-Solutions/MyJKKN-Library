@@ -35,7 +35,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -79,6 +79,9 @@ interface FormData {
 	book_type_other: string
 	department: string
 	book_location: string
+	/** Copy-level, and asked for on magazines and journals only. Typed by hand:
+	    Acquisition → Suppliers is not in use yet. */
+	supplier_name: string
 }
 
 const today = () => new Date().toISOString().split('T')[0]
@@ -107,6 +110,7 @@ const defaultForm: FormData = {
 	book_type_other: '',
 	department: '',
 	book_location: '',
+	supplier_name: '',
 }
 
 export default function RegistryPage() {
@@ -226,7 +230,7 @@ export default function RegistryPage() {
 			// form asks for the same. Only Sub-Title, Call Number, Classification
 			// Number and Book Location are optional there.
 			if (!form.author.trim()) e.author = 'Author is required'
-			if (!form.edition.trim()) e.edition = 'Edition is required'
+			if (!form.edition.trim()) e.edition = 'Edition/Issue is required'
 			if (!form.publisher_name.trim()) e.publisher_name = 'Publisher name is required'
 			if (!form.publisher_place.trim()) e.publisher_place = 'Place is required'
 			if (!form.publication_year.trim()) e.publication_year = 'Year is required'
@@ -246,7 +250,11 @@ export default function RegistryPage() {
 			if (!form.language.trim()) e.language = 'Language is required'
 			if (!form.pages.trim()) e.pages = 'Total pages is required'
 			else if (isNaN(Number(form.pages)) || Number(form.pages) <= 0) e.pages = 'Total pages must be a number'
-			if (!form.department.trim()) e.department = 'Department is required'
+			// A magazine or journal is shelved for the whole college, so it is not
+			// made to name a department.
+			if (departmentRequiredFor(form.book_type) && !form.department.trim()) {
+				e.department = 'Department is required'
+			}
 
 			// Copy-level, and only when adding — an existing title's copies are
 			// managed on its own page
@@ -272,7 +280,7 @@ export default function RegistryPage() {
 			// sent rather than four empty columns they never asked for.
 			const {
 				accession_number, accession_date, book_type_other,
-				author, book_type, department, book_location,
+				author, book_type, department, book_location, supplier_name,
 				...bibliographic
 			} = form
 
@@ -316,6 +324,9 @@ export default function RegistryPage() {
 						...payload,
 						accession_number: accession_number.trim(),
 						accession_date: accession_date || undefined,
+						// Belongs to the copy, not to the title, and only a magazine
+						// or journal is asked for one.
+						supplier_name: usesSupplier(book_type) ? (supplier_name.trim() || undefined) : undefined,
 					}),
 				})
 				const result = await res.json()
@@ -379,6 +390,9 @@ export default function RegistryPage() {
 			book_type_other: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? '' : (r.book_type ?? ''),
 			department: r.department ?? '',
 			book_location: r.book_location ?? '',
+			// Belongs to a copy, and copies are managed on the title's own page, so
+			// editing a title never carries one.
+			supplier_name: '',
 		})
 		setSheetOpen(true)
 	}
@@ -796,8 +810,8 @@ export default function RegistryPage() {
 									</Select>
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Edition</Label>
-									<Input value={form.edition} onChange={e => setForm(f => ({ ...f, edition: e.target.value }))} placeholder="e.g. 3rd" />
+									<Label className="text-sm font-semibold">Edition/Issue</Label>
+									<Input value={form.edition} onChange={e => setForm(f => ({ ...f, edition: e.target.value }))} placeholder="e.g. 3rd — or Vol 12 Issue 4" />
 								</div>
 							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

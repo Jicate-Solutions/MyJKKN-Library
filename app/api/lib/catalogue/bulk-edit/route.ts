@@ -26,10 +26,12 @@ import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
 import {
 	TEMPLATE_COLUMNS,
 	EDIT_ID_COLUMN,
+	templateColumnsForBookType,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
+	departmentRequiredFor,
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { fetchAllRows } from '@/lib/library/fetch-all'
@@ -72,7 +74,12 @@ interface ItemOnShelf {
  * Returns the error message, or null when the row is good.
  */
 function validateRow(row: IncomingRow, institutionCode: string | null): string | null {
-	for (const column of TEMPLATE_COLUMNS) {
+	const bookType = text(row.book_type)
+
+	// Judged by what the row is, exactly as the upload sheet judges it — a
+	// magazine that was allowed in without a department must not be refused when
+	// it comes back through bulk edit.
+	for (const column of templateColumnsForBookType(bookType)) {
 		if (column.required && !text(row[column.key])) {
 			return `${column.header} is empty`
 		}
@@ -103,7 +110,7 @@ function validateRow(row: IncomingRow, institutionCode: string | null): string |
 	}
 
 	const department = text(row.department)
-	if (!isValidDepartment(institutionCode, department)) {
+	if ((departmentRequiredFor(bookType) || department) && !isValidDepartment(institutionCode, department)) {
 		return `Department "${department}" is not in your college's list`
 	}
 

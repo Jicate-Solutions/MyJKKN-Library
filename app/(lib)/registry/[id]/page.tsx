@@ -261,7 +261,7 @@ export default function CatalogueDetailPage() {
 							<p className="font-medium">{record.publication_year || '—'}</p>
 						</div>
 						<div>
-							<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Edition</p>
+							<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Edition/Issue</p>
 							<p className="font-medium">{record.edition || '—'}</p>
 						</div>
 						<div>

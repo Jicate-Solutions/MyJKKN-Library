@@ -16,6 +16,7 @@ import { guardWrite } from '@/lib/auth/api-guard'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { formatForBookType, isbnRequiredFor } from '@/lib/library/catalogue-options'
 import { istToday } from '@/lib/library/ist-clock'
+import { supplierLookupFor } from '@/lib/library/supplier-by-name'
 
 const text = (value: unknown): string => (value ?? '').toString().trim()
 
@@ -130,6 +131,20 @@ export async function POST(request: Request) {
 			}
 		}
 
+		// The vendor is typed rather than chosen — Acquisition → Suppliers is not
+		// in use yet — so the name is turned into this college's supplier row,
+		// created the first time that name is seen.
+		//
+		// Only asked when a name was actually sent: a book carries no supplier
+		// here, and reading the whole vendor list to answer "none" would put a
+		// query in front of every book entered.
+		const supplierName = text(body.supplier_name)
+		let supplierId: string | null = null
+		if (supplierName) {
+			const suppliers = await supplierLookupFor(supabase, institutionId)
+			supplierId = await suppliers.resolve(supplierName)
+		}
+
 		const copyNumber = await nextCopyNumber(supabase, recordId as string)
 
 		const { data: item, error: itemError } = await supabase
@@ -145,6 +160,8 @@ export async function POST(request: Request) {
 				status: 'available',
 				is_lendable: !(body.is_reference_only ?? false),
 				is_active: true,
+				// Who this copy came from. Only magazines and journals send one.
+				supplier_id: supplierId,
 				accession_date: text(body.accession_date) || istToday(),
 			})
 			.select('id, accession_number, copy_number')

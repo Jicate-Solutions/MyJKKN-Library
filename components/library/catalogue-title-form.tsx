@@ -23,6 +23,8 @@ import {
 	OTHER_BOOK_TYPE,
 	isbnRequiredFor,
 	usesIssn,
+	usesSupplier,
+	departmentRequiredFor,
 } from '@/lib/library/catalogue-options'
 
 export interface TitleFormFields {
@@ -47,6 +49,12 @@ export interface TitleFormFields {
 	is_reference_only: boolean
 	department: string
 	book_location: string
+	/**
+	 * The vendor this copy came from, as the librarian writes it. Asked for on
+	 * magazines and journals only, and typed rather than chosen — see the field
+	 * itself for why.
+	 */
+	supplier_name: string
 }
 
 interface Props<T extends TitleFormFields> {
@@ -75,9 +83,13 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 	)
 }
 
-export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, errors, showCopySection, institutionCode }: Props<T>) {
+export function CatalogueTitleForm<T extends TitleFormFields>({
+	form, setForm, errors, showCopySection, institutionCode,
+}: Props<T>) {
 	const set = (patch: Partial<TitleFormFields>) => setForm(f => ({ ...f, ...patch }))
 	const departments = departmentsFor(institutionCode)
+	const departmentRequired = departmentRequiredFor(form.book_type)
+	const showSupplier = showCopySection && usesSupplier(form.book_type)
 
 	const field = (name: keyof TitleFormFields, label: string, required: boolean, extra?: {
 		placeholder?: string
@@ -99,50 +111,28 @@ export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, e
 
 	return (
 		<>
-			{showCopySection && (
-				<Section title="The Book in Hand" hint="Saving records this book as copy 1. Further copies are added from the title's own page.">
-					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						{field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })}
-						{field('accession_date', 'Date of Adding', true, { type: 'date' })}
-					</div>
-				</Section>
-			)}
-
-			<Section title="Book Details">
-				{field('title', 'Title', true, { placeholder: 'Full title as printed on the book' })}
-				{field('subtitle', 'Sub-Title', false, { placeholder: 'Optional' })}
-				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					{field('author', 'Author', true, { placeholder: 'e.g. C.K. Kokate' })}
-					{field('edition', 'Edition', true, { placeholder: 'e.g. 3rd' })}
-				</div>
-			</Section>
-
-			<Section title="What It Is">
-				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					<div className="space-y-2">
-						<Label className="text-sm font-semibold">Book Type <Required /></Label>
-						<Select value={form.book_type} onValueChange={v => set({ book_type: v })}>
-							<SelectTrigger className={errors.book_type ? 'border-red-500' : ''}>
-								<SelectValue placeholder="Choose" />
-							</SelectTrigger>
-							<SelectContent>
-								{BOOK_TYPES.map(t => <SelectItem key={t.label} value={t.label}>{t.label}</SelectItem>)}
-							</SelectContent>
-						</Select>
-						{errors.book_type && <p className="text-xs text-red-500">{errors.book_type}</p>}
-					</div>
-					<div className="space-y-2">
-						<Label className="text-sm font-semibold">Language <Required /></Label>
-						<Select value={form.language} onValueChange={v => set({ language: v })}>
-							<SelectTrigger className={errors.language ? 'border-red-500' : ''}>
-								<SelectValue placeholder="Choose" />
-							</SelectTrigger>
-							<SelectContent>
-								{LANGUAGES.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-							</SelectContent>
-						</Select>
-						{errors.language && <p className="text-xs text-red-500">{errors.language}</p>}
-					</div>
+			{/* First, because the rest of the form follows from it: a book is asked
+			    for its ISBN and its department, a magazine or journal for its ISSN
+			    and its supplier. Asking this last would mean fields changing under
+			    a librarian who had already filled them in. */}
+			<Section title="What Are You Adding?">
+				<div className="space-y-2">
+					<Label className="text-sm font-semibold">Book Type <Required /></Label>
+					<Select value={form.book_type} onValueChange={v => set({ book_type: v })}>
+						<SelectTrigger className={errors.book_type ? 'border-red-500' : ''}>
+							<SelectValue placeholder="Choose" />
+						</SelectTrigger>
+						<SelectContent>
+							{BOOK_TYPES.map(t => <SelectItem key={t.label} value={t.label}>{t.label}</SelectItem>)}
+						</SelectContent>
+					</Select>
+					{errors.book_type
+						? <p className="text-xs text-red-500">{errors.book_type}</p>
+						: <p className="text-xs text-muted-foreground">
+							{usesIssn(form.book_type)
+								? 'A magazine or journal is asked for its ISSN and its supplier.'
+								: 'This decides what the rest of the form asks for.'}
+						</p>}
 				</div>
 
 				{/* Only asked once Others is chosen, so the common case stays two clicks */}
@@ -158,9 +148,45 @@ export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, e
 						{errors.book_type_other && <p className="text-xs text-red-500">{errors.book_type_other}</p>}
 					</div>
 				)}
+			</Section>
+
+			{showCopySection && (
+				<Section title="The Book in Hand" hint="Saving records this book as copy 1. Further copies are added from the title's own page.">
+					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+						{field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })}
+						{field('accession_date', 'Date of Adding', true, { type: 'date' })}
+					</div>
+				</Section>
+			)}
+
+			<Section title="Book Details">
+				{field('title', 'Title', true, { placeholder: 'Full title as printed on the book' })}
+				{field('subtitle', 'Sub-Title', false, { placeholder: 'Optional' })}
+				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+					{field('author', 'Author', true, { placeholder: 'e.g. C.K. Kokate' })}
+					{/* A book has an edition, a magazine or journal has an issue */}
+					{field('edition', 'Edition/Issue', true, { placeholder: 'e.g. 3rd — or Vol 12 Issue 4' })}
+				</div>
+			</Section>
+
+			<Section title="What It Is">
+				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+					<div className="space-y-2">
+						<Label className="text-sm font-semibold">Language <Required /></Label>
+						<Select value={form.language} onValueChange={v => set({ language: v })}>
+							<SelectTrigger className={errors.language ? 'border-red-500' : ''}>
+								<SelectValue placeholder="Choose" />
+							</SelectTrigger>
+							<SelectContent>
+								{LANGUAGES.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+							</SelectContent>
+						</Select>
+						{errors.language && <p className="text-xs text-red-500">{errors.language}</p>}
+					</div>
+					{field('pages', 'Total Pages', true, { type: 'number', placeholder: 'e.g. 624' })}
+				</div>
 
 				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					{field('pages', 'Total Pages', true, { type: 'number', placeholder: 'e.g. 624' })}
 					<div className="space-y-2">
 						<Label className="text-sm font-semibold">Reference Only <Required /></Label>
 						<Select
@@ -184,6 +210,30 @@ export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, e
 					{field('publisher_name', 'Publisher Name', true, { placeholder: 'e.g. Nirali Prakashan' })}
 					{field('publisher_place', 'Place', true, { placeholder: 'City' })}
 				</div>
+
+				{/* A magazine or journal arrives from a vendor, and the library pays
+				    that vendor for the subscription. A book does not carry one here —
+				    its supplier belongs to the purchase order.
+
+				    Typed, not chosen from a list: Acquisition → Suppliers is not in
+				    use yet, so a dropdown would offer nothing and the librarian
+				    could not record the vendor at all. What is typed is remembered
+				    under this college's suppliers, so the list fills itself and is
+				    already there when that screen is put to work. */}
+				{showSupplier && (
+					<div className="space-y-2">
+						<Label className="text-sm font-semibold">Supplier</Label>
+						<Input
+							value={form.supplier_name}
+							onChange={e => set({ supplier_name: e.target.value })}
+							placeholder="e.g. Universal Book Agency"
+						/>
+						<p className="text-xs text-muted-foreground">
+							Who this magazine or journal comes from. Leave it blank if it is not bought from a vendor.
+						</p>
+					</div>
+				)}
+
 				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 					{field('publication_year', 'Year', true, { placeholder: '2024' })}
 					{field('price', 'Price (INR)', true, { type: 'number', placeholder: '0.00' })}
@@ -230,16 +280,24 @@ export function CatalogueTitleForm<T extends TitleFormFields>({ form, setForm, e
 
 			<Section title="Where It Belongs">
 				<div className="space-y-2">
-					<Label className="text-sm font-semibold">Department <Required /></Label>
+					{/* A book belongs to a department; a magazine or journal sits in the
+					    reading room, so it is offered rather than demanded. */}
+					<Label className="text-sm font-semibold">Department {departmentRequired && <Required />}</Label>
 					{/* A college whose list we have picks from it; one whose list has
 					    not come in yet types the name. Offering another college's
 					    departments would be worse than offering none. */}
 					{departments.length > 0 ? (
-						<Select value={form.department} onValueChange={v => set({ department: v })}>
+						<Select
+							value={form.department || 'none'}
+							onValueChange={v => set({ department: v === 'none' ? '' : v })}
+						>
 							<SelectTrigger className={errors.department ? 'border-red-500' : ''}>
 								<SelectValue placeholder="Choose department" />
 							</SelectTrigger>
 							<SelectContent>
+								{/* Offered only where it is allowed to be blank, so a book
+								    cannot quietly end up without one. */}
+								{!departmentRequired && <SelectItem value="none">No department</SelectItem>}
 								{departments.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
 							</SelectContent>
 						</Select>

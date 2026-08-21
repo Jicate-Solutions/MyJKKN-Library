@@ -24,6 +24,7 @@ import {
 	TEMPLATE_COLUMNS,
 	EDIT_ID_COLUMN,
 	departmentsFor,
+	templateColumnFor,
 	BOOK_TYPE_LABELS,
 	LANGUAGES,
 } from '@/lib/library/catalogue-options'
@@ -67,11 +68,6 @@ function cellToText(value: unknown): string {
 		return new Date(value.getTime() - offset).toISOString().split('T')[0]
 	}
 	return value.toString().trim()
-}
-
-/** "Publisher Name" and "publisher name " are the same column to us. */
-function normaliseHeader(header: string): string {
-	return header.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, disabled }: Props) {
@@ -182,8 +178,10 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 			// Match the file's headers back to our keys, so a column the librarian
 			// moved still lands in the right place and a stray extra column is
 			// ignored rather than shifting everything after it.
-			const headerRow = (grid[0] as unknown[]).map(h => normaliseHeader(cellToText(h).replace(/\*/g, '')))
-			const keyByIndex = headerRow.map(h => EDIT_COLUMNS.find(c => normaliseHeader(c.header) === h)?.key ?? null)
+			// A column renamed since a sheet was downloaded is still recognised —
+			// "Edition" and "Edition/Issue" are the same column
+			const headerRow = (grid[0] as unknown[]).map(h => cellToText(h).replace(/\*/g, ''))
+			const keyByIndex = headerRow.map(h => templateColumnFor(EDIT_COLUMNS, h)?.key ?? null)
 
 			const missing = EDIT_COLUMNS
 				.filter(c => c.required && !keyByIndex.includes(c.key))

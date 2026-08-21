@@ -19,12 +19,30 @@ import { useToast } from '@/hooks/common/use-toast'
 import { FileSpreadsheet, Download, Upload, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
-	TEMPLATE_COLUMNS,
-	TEMPLATE_EXAMPLE,
+	templateColumnsFor,
+	templateExampleFor,
 	departmentsFor,
+	templateColumnFor,
 	BOOK_TYPE_LABELS,
+	CATALOGUE_SHEET_LABELS,
 	LANGUAGES,
+	type CatalogueSheetKind,
+	type TemplateColumn,
 } from '@/lib/library/catalogue-options'
+
+/** Both sheets, so an upload can be matched against whichever one it came from. */
+const SHEET_KINDS: CatalogueSheetKind[] = ['books', 'periodicals']
+
+/** Every column either sheet can carry, for reading a file's headers back. */
+const ALL_COLUMNS: TemplateColumn[] = (() => {
+	const byKey = new Map<string, TemplateColumn>()
+	for (const kind of SHEET_KINDS) {
+		for (const column of templateColumnsFor(kind)) {
+			if (!byKey.has(column.key)) byKey.set(column.key, column)
+		}
+	}
+	return [...byKey.values()]
+})()
 
 /**
  * Books per request.
@@ -72,11 +90,6 @@ function cellToText(value: unknown): string {
 	return value.toString().trim()
 }
 
-/** "Publisher Name" and "publisher name " are the same column to us. */
-function normaliseHeader(header: string): string {
-	return header.toLowerCase().replace(/[^a-z0-9]/g, '')
-}
-
 export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded, disabled }: Props) {
 	const departments = departmentsFor(institutionCode)
 	const { toast } = useToast()
@@ -85,17 +98,22 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 	const [progress, setProgress] = useState({ done: 0, total: 0 })
 	const [result, setResult] = useState<UploadResult | null>(null)
 
-	const downloadTemplate = () => {
-		const headers = TEMPLATE_COLUMNS.map(c => c.required ? `${c.header} *` : c.header)
-		const example = TEMPLATE_COLUMNS.map(c => TEMPLATE_EXAMPLE[c.key] ?? '')
+	const downloadTemplate = (kind: CatalogueSheetKind) => {
+		const columns = templateColumnsFor(kind)
+		const example = templateExampleFor(kind)
+		const isBooks = kind === 'books'
+		const label = CATALOGUE_SHEET_LABELS[kind]
 
-		const books = XLSX.utils.aoa_to_sheet([headers, example])
+		const headers = columns.map(c => c.required ? `${c.header} *` : c.header)
+		const exampleRow = columns.map(c => example[c.key] ?? '')
+
+		const rows = XLSX.utils.aoa_to_sheet([headers, exampleRow])
 		// Wide enough to read the header without dragging every column open
-		books['!cols'] = TEMPLATE_COLUMNS.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
+		rows['!cols'] = columns.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
 
 		const guide = XLSX.utils.aoa_to_sheet([
 			['Column', 'Must fill?', 'What to write'],
-			...TEMPLATE_COLUMNS.map(c => [c.header, c.required ? 'Yes' : 'Optional', c.note ?? '']),
+			...columns.map(c => [c.header, c.required ? 'Yes' : 'Optional', c.note ?? '']),
 			[],
 			[
 				'Departments',
@@ -104,19 +122,28 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 					? departments.join(', ')
 					: 'Your list is not set up yet — type the department name and it will be accepted',
 			],
-			['Book Types', '', BOOK_TYPE_LABELS.join(', ')],
+			[
+				'Book Types',
+				'',
+				isBooks
+					? 'Books / Projects / Others — put magazines and journals on the Magazine & Journals sheet instead'
+					: 'Magazine / Journals — put books on the Books sheet instead',
+			],
 			['Languages', '', LANGUAGES.join(', ')],
 			[],
-			['Row 2 is a filled example — delete it before uploading, or leave it and it will be saved as a book.'],
-			['As many books as you like in one file — a long sheet simply takes longer.'],
+			[`This is the ${label} sheet. Every book type is listed here: ${BOOK_TYPE_LABELS.join(', ')}.`],
+			['Row 2 is a filled example — delete it before uploading, or leave it and it will be saved.'],
+			['As many rows as you like in one file — a long sheet simply takes longer.'],
 			['Do not rename or reorder the columns.'],
 		])
 		guide['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 90 }]
 
 		const book = XLSX.utils.book_new()
-		XLSX.utils.book_append_sheet(book, books, 'Books')
+		XLSX.utils.book_append_sheet(book, rows, isBooks ? 'Books' : 'Magazines & Journals')
 		XLSX.utils.book_append_sheet(book, guide, 'How to fill')
-		XLSX.writeFile(book, 'library-book-upload-template.xlsx')
+		XLSX.writeFile(book, isBooks
+			? 'library-book-upload-template.xlsx'
+			: 'library-magazine-journal-upload-template.xlsx')
 	}
 
 	const handleFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,17 +172,28 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 			// Match the file's headers back to our keys, so a column the librarian
 			// moved still lands in the right place and a stray extra column is
 			// ignored rather than shifting everything after it.
-			const headerRow = (grid[0] as unknown[]).map(h => normaliseHeader(cellToText(h).replace(/\*/g, '')))
-			const keyByIndex = headerRow.map(h => TEMPLATE_COLUMNS.find(c => normaliseHeader(c.header) === h)?.key ?? null)
+			// A column renamed since a sheet was downloaded is still recognised —
+			// "Edition" and "Edition/Issue" are the same column
+			const headerRow = (grid[0] as unknown[]).map(h => cellToText(h).replace(/\*/g, ''))
+			const keyByIndex = headerRow.map(h => templateColumnFor(ALL_COLUMNS, h)?.key ?? null)
 
-			const missing = TEMPLATE_COLUMNS
-				.filter(c => c.required && !keyByIndex.includes(c.key))
-				.map(c => c.header)
+			// Either sheet is accepted, so the file is measured against both and
+			// judged by whichever it is closer to. A Books sheet is then never told
+			// it is missing an ISSN column, nor a magazine sheet an ISBN one.
+			const shortfalls = SHEET_KINDS.map(kind => ({
+				kind,
+				missing: templateColumnsFor(kind)
+					.filter(c => c.required && !keyByIndex.includes(c.key))
+					.map(c => c.header),
+			}))
+			const closest = shortfalls.reduce((best, next) =>
+				next.missing.length < best.missing.length ? next : best
+			)
 
-			if (missing.length > 0) {
+			if (closest.missing.length > 0) {
 				toast({
-					title: '❌ This is not the template',
-					description: `Missing column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Download the template and fill that.`,
+					title: '❌ This is not a template',
+					description: `Closest to the ${CATALOGUE_SHEET_LABELS[closest.kind]} sheet, but missing: ${closest.missing.join(', ')}. Download a template and fill that.`,
 					variant: 'destructive',
 				})
 				return
@@ -259,21 +297,32 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" className="w-72">
 					<DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-						Add many books at once
+						Add many at once
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem onClick={downloadTemplate} className="gap-2 py-2.5">
+					{/* Two sheets, because the two ask for different things: a book has
+					    an ISBN and a department, a magazine or journal an ISSN and a
+					    supplier. One sheet would leave a third of every row blank. */}
+					<DropdownMenuItem onClick={() => downloadTemplate('books')} className="gap-2 py-2.5">
 						<Download className="h-4 w-4 text-muted-foreground" />
 						<div>
-							<p className="text-sm font-medium">Download template</p>
-							<p className="text-xs text-muted-foreground">Excel file with one example filled in</p>
+							<p className="text-sm font-medium">Template — Books</p>
+							<p className="text-xs text-muted-foreground">ISBN and department. Projects and Others go here too.</p>
 						</div>
 					</DropdownMenuItem>
+					<DropdownMenuItem onClick={() => downloadTemplate('periodicals')} className="gap-2 py-2.5">
+						<Download className="h-4 w-4 text-muted-foreground" />
+						<div>
+							<p className="text-sm font-medium">Template — Magazine &amp; Journals</p>
+							<p className="text-xs text-muted-foreground">ISSN and supplier, department optional</p>
+						</div>
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
 					<DropdownMenuItem onClick={() => fileInput.current?.click()} className="gap-2 py-2.5">
 						<Upload className="h-4 w-4 text-muted-foreground" />
 						<div>
 							<p className="text-sm font-medium">Upload filled sheet</p>
-							<p className="text-xs text-muted-foreground">Any number of books in one file</p>
+							<p className="text-xs text-muted-foreground">Either sheet, any number of rows</p>
 						</div>
 					</DropdownMenuItem>
 				</DropdownMenuContent>

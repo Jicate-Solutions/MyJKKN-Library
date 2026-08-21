@@ -69,7 +69,7 @@ function bibliographicDetails(r: OPACResult): Array<[string, string]> {
 	add('Publisher', r.publisher_name)
 	add('Place', r.publisher_place)
 	add('Year', r.publication_year)
-	add('Edition', r.edition)
+	add('Edition/Issue', r.edition)
 	add('Volume', r.volume_number)
 	add('Series', r.series_title)
 	add('ISBN', r.isbn)

@@ -415,6 +415,8 @@ export interface LibPeriodicalIssue {
 	cover_date?: string
 	pages?: number
 	receipt_status: LibIssueReceiptStatus
+	/** Why it is missing, what the supplier said, how it arrived. */
+	remarks?: string
 	is_bound: boolean
 	created_at: string
 }

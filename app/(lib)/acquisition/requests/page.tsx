@@ -586,8 +586,8 @@ export default function PurchaseRequestsPage() {
 									<Input value={form.isbn} onChange={e => setForm(f => ({ ...f, isbn: e.target.value }))} placeholder="978-..." />
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Edition</Label>
-									<Input value={form.edition} onChange={e => setForm(f => ({ ...f, edition: e.target.value }))} placeholder="e.g. 3rd" />
+									<Label className="text-sm font-semibold">Edition/Issue</Label>
+									<Input value={form.edition} onChange={e => setForm(f => ({ ...f, edition: e.target.value }))} placeholder="e.g. 3rd — or Vol 12 Issue 4" />
 								</div>
 							</div>
 							<div className="space-y-2">
