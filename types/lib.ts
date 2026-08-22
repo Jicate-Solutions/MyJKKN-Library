@@ -11,6 +11,15 @@
  */
 export type LibMemberCategory = 'learner' | 'facilitator' | 'other' | 'team_member' | 'guest' | 'alumni'
 
+/**
+ * The old enrolled-membership row, kept for the history already recorded
+ * against it.
+ *
+ * Nothing writes one any more. A member is now an Active learner or staff
+ * member in MyJKKN — see `LibDirectoryMember` — and somebody who borrows is a
+ * `LibBorrower`. This type stays so the rows already in `lib_members` still
+ * read.
+ */
 export interface LibMember {
 	id: string
 	institution_id: string
@@ -34,6 +43,58 @@ export interface LibMember {
 	// Joined from MyJKKN (not stored locally)
 	photo_url?: string
 	roll_number?: string
+}
+
+/**
+ * A member as the library now sees one: an Active learner or staff member read
+ * live from MyJKKN, with the two things this library knows about them added.
+ *
+ * Nothing here is stored in our database except `is_delinquent` and
+ * `has_borrowed`, and those come from `lib_borrowers` — the row written the
+ * first time somebody actually takes a book out.
+ */
+export interface LibDirectoryMember {
+	/** `learner:<id>` or `facilitator:<id>` — stable, and unique within a college. */
+	id: string
+	myjkkn_id: string
+	person_kind: 'learner' | 'facilitator'
+	institution_id: string
+	/** The number on the card: roll number, application id, or staff id. */
+	member_number: string
+	member_category: LibMemberCategory
+	display_name: string
+	email: string | null
+	phone: string | null
+	photo_url: string | null
+	/** MyJKKN's own word for what they are — their programme, or their role. */
+	role_label: string
+	is_active: true
+	is_delinquent: boolean
+	has_borrowed: boolean
+}
+
+/**
+ * Somebody who has actually taken a book out of this library.
+ *
+ * Written the first time they borrow and never before — a person who has only
+ * ever walked in, or who has never come at all, has no row. It carries what
+ * their name and number were on that day, so a loan or a fine from years ago
+ * still says whose it was even after MyJKKN has forgotten them.
+ *
+ * This is what every loan, hold, fine and inter-campus request points at, and
+ * what the joins on those records return as `member`.
+ */
+export interface LibBorrower {
+	id: string
+	institution_id: string
+	myjkkn_id: string
+	person_kind: 'learner' | 'facilitator' | 'legacy'
+	member_number: string
+	member_category: LibMemberCategory
+	display_name?: string | null
+	email?: string | null
+	phone?: string | null
+	is_delinquent: boolean
 }
 
 export interface LibMemberFilters {
@@ -211,7 +272,7 @@ export interface LibLendingTransaction {
 	updated_at: string
 	// Joined
 	item?: LibItem
-	member?: LibMember
+	member?: LibBorrower
 	overdue_days?: number
 	late_charge_amount?: number
 }
@@ -232,7 +293,7 @@ export interface LibResourceHold {
 	created_at: string
 	updated_at: string
 	catalogue_record?: LibCatalogueRecord
-	member?: LibMember
+	member?: LibBorrower
 }
 
 // ── Late Charges ──────────────────────────────────────────────────────
@@ -257,7 +318,7 @@ export interface LibLateCharge {
 	created_at: string
 	updated_at: string
 	transaction?: LibLendingTransaction
-	member?: LibMember
+	member?: LibBorrower
 }
 
 // ── Procurement ────────────────────────────────────────────────────────
@@ -483,7 +544,7 @@ export interface LibIntercampusRequest {
 	approved_note?: string
 	created_at: string
 	updated_at: string
-	member?: LibMember
+	member?: LibBorrower
 }
 
 // ── Conservation ─────────────────────────────────────────────────────
@@ -595,9 +656,13 @@ export interface LibCatalogueSearchResult extends LibCatalogueRecord {
 export type LibCirculationTransaction = LibLendingTransaction
 
 export interface LibIssuePayload {
-	member_id: string
 	item_id: string
 	institution_id: string
+	/** Who is borrowing, as MyJKKN knows them — this is what the desk sends. */
+	myjkkn_id?: string
+	person_kind?: 'learner' | 'facilitator'
+	/** A borrower this library already holds. Only used where one is in hand. */
+	member_id?: string
 	issued_by?: string
 }
 

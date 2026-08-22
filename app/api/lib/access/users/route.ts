@@ -1,32 +1,30 @@
 /**
- * Staff access management — who may sign in and what they may do.
+ * Who can open the library: GET /api/lib/access/users
  *
- * GET  /api/lib/access/users            list staff accounts with their role
- * POST /api/lib/access/users            assign a role  { user_id, role }
+ * Read-only, and super admin only.
  *
- * super_admin only. Handing out roles is not something an admin does, so the
- * page, its sidebar link and these handlers all stop at the same rule.
+ * Roles are MyJKKN's now. This project neither stores them nor grants them, so
+ * this screen no longer hands anything out — it reports. It lists the MyJKKN
+ * staff who hold one of the four library roles, so a super admin can see at a
+ * glance who has access and to which college, and go and change it in MyJKKN if
+ * that is wrong.
+ *
+ * POST is answered rather than removed so a page left open from before the
+ * change says why, instead of failing with a bare 405.
  */
 
 import { NextResponse } from 'next/server'
-import { getSupabaseServer } from '@/lib/supabase-server'
-import {
-	getCaller,
-	canAssignRole,
-	resolveInstitutionScope,
-	invalidateCaller,
-	ASSIGNABLE_ROLES,
-	type LibraryRole,
-} from '@/lib/auth/server-access'
-import { fetchAllRows } from '@/lib/library/fetch-all'
+import { getCaller, resolveInstitutionScope } from '@/lib/auth/server-access'
+import { LIBRARY_ROLES, highestLibraryRole } from '@/lib/auth/library-roles'
+import { allStaff, collegeForMyjkknInstitution, myjkknStaffConfigured } from '@/lib/auth/myjkkn-staff'
 
 export async function GET(request: Request) {
 	try {
 		const { caller, error, status } = await getCaller(request)
 		if (!caller) return NextResponse.json({ error }, { status: status ?? 401 })
 
-		// Granting library roles is a super admin job. An admin runs a library —
-		// or all of them — but does not decide who else may.
+		// Granting library roles is not something this application does at all
+		// any more, but seeing who holds one is still a super admin's business.
 		if (!caller.isSuperAdmin) {
 			return NextResponse.json({ error: 'Only a super admin can view staff access' }, { status: 403 })
 		}
@@ -35,56 +33,54 @@ export async function GET(request: Request) {
 		const scope = resolveInstitutionScope(caller, searchParams.get('institution_id'))
 		if (scope.error) return NextResponse.json({ error: scope.error }, { status: scope.status ?? 403 })
 
-		const supabase = getSupabaseServer()
-
-		const { data: users, error: usersError } = await fetchAllRows<{ id: string; [field: string]: any }>(range => {
-			let query = supabase
-				.from('users')
-				.select('id, email, full_name, role, is_super_admin, is_active, institution_id, last_login')
-				.order('full_name', { ascending: true })
-
-			if (scope.institutionId) query = query.eq('institution_id', scope.institutionId)
-
-			return query.range(range.from, range.to)
-		})
-		if (usersError) {
-			console.error('Error listing staff accounts:', usersError)
-			return NextResponse.json({ error: 'Failed to load staff accounts' }, { status: 500 })
+		if (!myjkknStaffConfigured()) {
+			return NextResponse.json(
+				{ error: 'MyJKKN is not configured on this server, so roles cannot be read' },
+				{ status: 503 }
+			)
 		}
 
-		// Attach assigned roles in one round-trip rather than per user
-		const ids = (users || []).map(u => u.id)
-		const rolesByUser = new Map<string, string[]>()
+		const staff = await allStaff()
 
-		if (ids.length > 0) {
-			const { data: assignments } = await supabase
-				.from('user_roles')
-				.select('user_id, roles(name)')
-				.in('user_id', ids)
-				.eq('is_active', true)
+		const rows = []
+		for (const person of staff) {
+			// Only the people this screen is about
+			const role = highestLibraryRole(person.roleKeys)
+			if (!role) continue
 
-			for (const row of assignments || []) {
-				const name = (row.roles as any)?.name
-				if (!name) continue
-				const list = rolesByUser.get(row.user_id) ?? []
-				list.push(name)
-				rolesByUser.set(row.user_id, list)
-			}
+			const institutionId = role === 'super_admin'
+				? null
+				: await collegeForMyjkknInstitution(person.myjkknInstitutionId)
+
+			// A college was asked for: show only that college's people. A super
+			// admin belongs to none of them, so they are shown either way.
+			if (scope.institutionId && institutionId !== scope.institutionId && role !== 'super_admin') continue
+
+			rows.push({
+				id: person.id,
+				email: person.email,
+				full_name: person.fullName,
+				role,
+				is_super_admin: role === 'super_admin',
+				is_active: person.isActive,
+				institution_id: institutionId,
+				last_login: null,
+				staff_code: person.staffCode,
+				/** Every MyJKKN role they hold, not only the library one. */
+				assigned_roles: person.roleKeys,
+				effective_role: role,
+			})
 		}
 
-		const data = (users || []).map(u => ({
-			...u,
-			assigned_roles: rolesByUser.get(u.id) ?? [],
-			// What the app will actually treat them as
-			effective_role: u.is_super_admin
-				? 'super_admin'
-				: (rolesByUser.get(u.id)?.[0] ?? u.role ?? 'member'),
-		}))
+		rows.sort((a, b) => (a.full_name ?? a.email).localeCompare(b.full_name ?? b.email))
 
 		return NextResponse.json({
-			data,
+			data: rows,
 			caller: { role: caller.role, institution_id: caller.institutionId },
-			assignable_roles: ASSIGNABLE_ROLES.filter(r => canAssignRole(caller, r).allowed),
+			// Nothing is assignable from here any more — the screen is a report.
+			assignable_roles: [],
+			library_roles: LIBRARY_ROLES,
+			managed_in: 'myjkkn',
 		})
 	} catch (error) {
 		console.error('Unexpected error listing staff access:', error)
@@ -92,121 +88,12 @@ export async function GET(request: Request) {
 	}
 }
 
-export async function POST(request: Request) {
-	try {
-		const { caller, error, status } = await getCaller(request)
-		if (!caller) return NextResponse.json({ error }, { status: status ?? 401 })
-
-		if (!caller.isSuperAdmin) {
-			return NextResponse.json({ error: 'Only a super admin can assign roles' }, { status: 403 })
-		}
-
-		const body = await request.json()
-		const targetUserId: string | undefined = body.user_id
-		const targetRole: LibraryRole | undefined = body.role
-
-		if (!targetUserId) return NextResponse.json({ error: 'user_id is required' }, { status: 400 })
-		if (!targetRole || !ASSIGNABLE_ROLES.includes(targetRole)) {
-			return NextResponse.json(
-				{ error: `role must be one of: ${ASSIGNABLE_ROLES.join(', ')}` },
-				{ status: 400 }
-			)
-		}
-
-		// The escalation guard: an admin cannot mint a super_admin or another admin
-		const permission = canAssignRole(caller, targetRole)
-		if (!permission.allowed) {
-			return NextResponse.json({ error: permission.reason }, { status: 403 })
-		}
-
-		const supabase = getSupabaseServer()
-
-		// Who is being changed, and which role they are being given. Independent
-		// questions, so they are asked together. The checks below still run in
-		// their old order, so the same refusal comes back first as before.
-		const [{ data: target }, { data: roleRow }] = await Promise.all([
-			supabase
-				.from('users')
-				.select('id, email, full_name, institution_id, is_super_admin, role')
-				.eq('id', targetUserId)
-				.maybeSingle(),
-			supabase
-				.from('roles')
-				.select('id, name')
-				.eq('name', targetRole)
-				.maybeSingle(),
-		])
-
-		if (!target) return NextResponse.json({ error: 'User not found' }, { status: 404 })
-
-		// An admin may only touch accounts inside their own institution
-		if (!caller.isSuperAdmin && target.institution_id !== caller.institutionId) {
-			return NextResponse.json(
-				{ error: 'You can only manage accounts in your own institution' },
-				{ status: 403 }
-			)
-		}
-
-		// An admin must not be able to demote or alter an existing super admin
-		if (!caller.isSuperAdmin && target.is_super_admin) {
-			return NextResponse.json(
-				{ error: 'Only a super admin can change another super admin' },
-				{ status: 403 }
-			)
-		}
-
-		if (!roleRow) {
-			return NextResponse.json({ error: `Role "${targetRole}" does not exist` }, { status: 400 })
-		}
-
-		// One effective role per person — retire the old assignments first
-		await supabase
-			.from('user_roles')
-			.update({ is_active: false, updated_at: new Date().toISOString() })
-			.eq('user_id', targetUserId)
-			.eq('is_active', true)
-
-		const { error: assignError } = await supabase
-			.from('user_roles')
-			.upsert(
-				{
-					user_id: targetUserId,
-					role_id: roleRow.id,
-					is_active: true,
-					assigned_by: caller.userId,
-					updated_at: new Date().toISOString(),
-				},
-				{ onConflict: 'user_id,role_id' }
-			)
-
-		if (assignError) {
-			console.error('Error assigning role:', assignError)
-			return NextResponse.json({ error: 'Failed to assign role' }, { status: 500 })
-		}
-
-		// Keep the legacy column in step so older code paths agree
-		await supabase
-			.from('users')
-			.update({
-				role: targetRole,
-				is_super_admin: targetRole === 'super_admin',
-				updated_at: new Date().toISOString(),
-			})
-			.eq('id', targetUserId)
-
-		// Callers are held briefly to save re-validating a token on every
-		// request; drop this person from that so their new role is in force on
-		// their very next click rather than up to a minute later.
-		invalidateCaller(targetUserId)
-
-		return NextResponse.json({
-			success: true,
-			user_id: targetUserId,
-			role: targetRole,
-			message: `${target.full_name ?? target.email} is now ${targetRole.replace('_', ' ')}`,
-		})
-	} catch (error) {
-		console.error('Unexpected error assigning role:', error)
-		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-	}
+export async function POST() {
+	return NextResponse.json(
+		{
+			error:
+				'Library roles are set in MyJKKN, not here. Add or remove super_admin, library_admin, librarian or assistant_librarian on the person\'s MyJKKN staff record.',
+		},
+		{ status: 410 }
+	)
 }

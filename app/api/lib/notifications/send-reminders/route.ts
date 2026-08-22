@@ -96,7 +96,7 @@ async function collectOverdue(
 			.select(`
 				id,
 				due_date,
-				member:lib_members(id, display_name, email, member_category, is_active),
+				member:lib_borrowers(id, display_name, email, member_category),
 				item:lib_items(accession_number, catalogue_record:lib_catalogue_records(title))
 			`)
 			.eq('institution_id', institutionId)
@@ -167,7 +167,7 @@ async function collectHolds(
 			.select(`
 				id,
 				hold_expires_at,
-				member:lib_members(id, display_name, email),
+				member:lib_borrowers(id, display_name, email),
 				item:lib_items(accession_number),
 				catalogue_record:lib_catalogue_records(title)
 			`)

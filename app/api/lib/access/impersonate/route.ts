@@ -15,9 +15,10 @@
  */
 
 import { NextResponse } from 'next/server'
-import { getSupabaseServer } from '@/lib/supabase-server'
 import { getCaller, IMPERSONATION_COOKIE } from '@/lib/auth/server-access'
 import { recordImpersonationEvent } from '@/lib/auth/impersonation-log'
+import { staffById } from '@/lib/auth/myjkkn-staff'
+import { highestLibraryRole } from '@/lib/auth/library-roles'
 
 export async function POST(request: Request) {
 	try {
@@ -42,16 +43,22 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'That is already your own account' }, { status: 400 })
 		}
 
-		const supabase = getSupabaseServer()
-		const { data: target } = await supabase
-			.from('users')
-			.select('id, email, full_name, is_active, institution_id')
-			.eq('id', targetId)
-			.maybeSingle()
+		// The person being viewed as is a MyJKKN staff member, looked up by their
+		// MyJKKN id — this project holds no user table to look them up in.
+		const target = await staffById(targetId)
 
-		if (!target) return NextResponse.json({ error: 'User not found' }, { status: 404 })
-		if (!target.is_active) {
-			return NextResponse.json({ error: 'That account is inactive' }, { status: 400 })
+		if (!target) return NextResponse.json({ error: 'User not found in MyJKKN' }, { status: 404 })
+		if (!target.isActive) {
+			return NextResponse.json({ error: 'That MyJKKN account is not active' }, { status: 400 })
+		}
+
+		// Viewing as somebody who cannot open the library would show a super
+		// admin nothing but the restricted page, which is not a useful session.
+		if (!highestLibraryRole(target.roleKeys)) {
+			return NextResponse.json(
+				{ error: 'That person has no library role in MyJKKN, so there is nothing to view as' },
+				{ status: 400 }
+			)
 		}
 
 		// Not awaited — whether the audit line lands has no bearing on whether the
@@ -70,7 +77,7 @@ export async function POST(request: Request) {
 			viewing_as: {
 				user_id: target.id,
 				email: target.email,
-				full_name: target.full_name,
+				full_name: target.fullName,
 			},
 		})
 

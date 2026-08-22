@@ -21,6 +21,7 @@ import {
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
 	departmentRequiredFor,
+	usesBookOnlyFields,
 } from '@/lib/library/catalogue-options'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { toSheetDate } from '@/lib/library/sheet-date'
@@ -80,8 +81,12 @@ function validateRow(
 	const year = text(row.publication_year)
 	if (!/^\d{4}$/.test(year)) return 'Year must be four digits'
 
-	const price = text(row.price)
-	if (isNaN(Number(price)) || Number(price) < 0) return 'Price must be a number'
+	// A magazine or journal has no price column on its sheet — what the library
+	// pays is a year's subscription, recorded against that subscription
+	if (usesBookOnlyFields(bookType)) {
+		const price = text(row.price)
+		if (isNaN(Number(price)) || Number(price) < 0) return 'Price must be a number'
+	}
 
 	const pages = text(row.pages)
 	if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
@@ -242,12 +247,18 @@ export async function POST(request: Request) {
 					const accession = text(data.accession_number)
 					const bookType = text(data.book_type)
 					const referenceOnly = isReferenceOnlyFromLabel(text(data.reference_only))
-					const price = Number(text(data.price))
+
+					// Author, issue number and price are a book's. A magazine or
+					// journal sheet does not carry them, and a blank left as 0 or ''
+					// would read later as "somebody skipped it" rather than "this
+					// does not apply".
+					const bookOnly = usesBookOnlyFields(bookType)
+					const price = bookOnly && text(data.price) ? Number(text(data.price)) : null
 
 					const identity = {
 						title: text(data.title),
-						author: text(data.author),
-						edition: text(data.edition),
+						author: bookOnly ? text(data.author) : '',
+						edition: bookOnly ? text(data.edition) : '',
 						publisher_name: text(data.publisher_name),
 						publisher_place: text(data.publisher_place),
 						publication_year: Number(text(data.publication_year)),
@@ -269,7 +280,7 @@ export async function POST(request: Request) {
 								subtitle: text(data.subtitle) || null,
 								resource_format: formatForBookType(bookType),
 								book_type: bookType,
-								author: identity.author,
+								author: identity.author || null,
 								isbn: identity.isbn || null,
 								issn: identity.issn || null,
 								edition: identity.edition || null,

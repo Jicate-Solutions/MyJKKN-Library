@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { collegeMemberCount } from '@/lib/library/myjkkn-directory'
 
 export async function GET(request: Request) {
 	try {
@@ -46,7 +47,7 @@ export async function GET(request: Request) {
 			activeSubscriptionsResult,
 			circulationResult,
 			budgetResult,
-			membersResult,
+			activeMembers,
 		] = await Promise.all([
 			// 4.2.1 / 4.2.4 — Total volumes (all active items)
 			supabase
@@ -109,12 +110,12 @@ export async function GET(request: Request) {
 				.eq('institution_id', institutionId)
 				.eq('is_active', true),
 
-			// Total active members
-			supabase
-				.from('lib_members')
-				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
-				.eq('is_active', true),
+			// Total active members.
+			//
+			// Read from MyJKKN, not from a roll of our own: every Active learner
+			// and staff member of this college is a member of its library, so
+			// that count IS the membership. Nobody is enrolled here to be counted.
+			collegeMemberCount(institutionId),
 		])
 
 		// Aggregate budget by resource type
@@ -153,7 +154,7 @@ export async function GET(request: Request) {
 			total_volumes: totalVolumesResult.count ?? 0,
 			volumes_added_this_year: volumesAddedResult.count ?? 0,
 			total_titles: totalTitlesResult.count ?? 0,
-			active_members: membersResult.count ?? 0,
+			active_members: activeMembers ?? 0,
 			total_lending_transactions: circulationResult.count ?? 0,
 
 			// Periodicals & digital

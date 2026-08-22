@@ -1,31 +1,51 @@
 /**
  * Server-side access control for library APIs.
  *
- * MyJKKN proves WHO the caller is. This project decides WHAT they may do:
- * the role is read from our own `users` / `user_roles` tables, never from the
- * MyJKKN token, so a MyJKKN role change can never silently grant library rights.
+ * MyJKKN proves WHO the caller is and decides WHAT they are. This project keeps
+ * no roll of users and no roles of its own: the sign-in token is exchanged for
+ * an email, the email is matched to a MyJKKN staff record, and that record's
+ * roles decide everything — whether the library opens at all, and which college
+ * they see.
+ *
+ * Only four roles open this application: super_admin, library_admin, librarian
+ * and assistant_librarian. A person may hold several MyJKKN roles at once and
+ * only one of them needs to be a library role; where more than one matches, the
+ * highest wins. Anyone else — including senior roles like `ceo` — is refused
+ * and shown the restricted page.
+ *
+ * The `users` and `user_roles` tables are no longer read. They are left in the
+ * database untouched, but nothing here consults them.
  */
 
-import { getSupabaseServer } from '@/lib/supabase-server'
 import { authConfig } from './config'
+import {
+	LIBRARY_ROLES,
+	ROLE_LABEL,
+	highestLibraryRole,
+	rankAtLeast,
+	type LibraryRole,
+} from './library-roles'
+import {
+	staffByEmail,
+	staffById,
+	collegeForMyjkknInstitution,
+	invalidateStaff,
+	type MyjkknStaff,
+} from './myjkkn-staff'
 
-export type LibraryRole = 'super_admin' | 'admin' | 'librarian' | 'assistant_librarian' | 'member'
-
-/** Highest first — used for "at least this role" checks. */
-const ROLE_RANK: Record<LibraryRole, number> = {
-	super_admin: 5,
-	admin: 4,
-	librarian: 3,
-	assistant_librarian: 2,
-	member: 1,
-}
+export type { LibraryRole } from './library-roles'
+export { LIBRARY_ROLES, ROLE_LABEL } from './library-roles'
 
 export interface Caller {
+	/** MyJKKN's staff id. The identity every record in this project is filed under. */
 	userId: string
 	email: string
 	fullName: string | null
+	/** The highest library role MyJKKN gives them. */
 	role: LibraryRole
-	/** null for super_admin — they are not tied to one institution */
+	/** Every role MyJKKN gives them, library or not — shown, never trusted for access. */
+	myjkknRoles: string[]
+	/** null for super_admin, and for a library admin who oversees every college */
 	institutionId: string | null
 	isSuperAdmin: boolean
 	/**
@@ -42,6 +62,28 @@ export interface AccessResult {
 	error?: string
 	status?: number
 }
+
+/** Why somebody was turned away, in enough detail for the page to explain it. */
+export type RefusalReason =
+	| 'not_signed_in'
+	| 'session_expired'
+	| 'not_staff'
+	| 'inactive'
+	| 'role_not_allowed'
+	| 'no_institution'
+
+export type Identity =
+	| { ok: true; caller: Caller }
+	| {
+		ok: false
+		reason: RefusalReason
+		error: string
+		status: number
+		/** What MyJKKN does say they are, so the refusal can name it. */
+		email?: string | null
+		fullName?: string | null
+		myjkknRoles?: string[]
+	}
 
 /** Name of the cookie that holds the id of the user being viewed as. */
 export const IMPERSONATION_COOKIE = 'lib_view_as'
@@ -71,8 +113,7 @@ function readToken(request: Request): string | null {
  *
  * Different sign-in paths fill different fields, so the first non-empty one
  * wins, falling back to first + last. Returns null rather than an empty string
- * when MyJKKN sends no name at all — an absent name must never overwrite the
- * one we already hold.
+ * when MyJKKN sends no name at all.
  */
 export function nameFromParent(user: any): string | null {
 	if (!user) return null
@@ -88,6 +129,25 @@ export function nameFromParent(user: any): string | null {
 interface ParentIdentity {
 	email: string
 	fullName: string | null
+	/** Roles the token itself carries, when MyJKKN puts any there. */
+	roleKeys: string[]
+}
+
+/** Roles named anywhere in the validate response, whatever shape they take. */
+function roleKeysFromToken(user: any): string[] {
+	if (!user) return []
+
+	const found: unknown[] = [user.role, user.role_key]
+	for (const field of ['roles', 'role_keys']) {
+		const list = user[field]
+		if (Array.isArray(list)) {
+			for (const entry of list) {
+				found.push(entry && typeof entry === 'object' ? entry.role_key ?? entry.name : entry)
+			}
+		}
+	}
+
+	return found.filter(Boolean).map(String)
 }
 
 /** Asks MyJKKN who this token belongs to. Returns their email and name, or null. */
@@ -104,7 +164,11 @@ async function resolveIdentity(token: string): Promise<ParentIdentity | null> {
 		const email = data?.user?.email ?? null
 		if (!email) return null
 
-		return { email, fullName: nameFromParent(data.user) }
+		return {
+			email,
+			fullName: nameFromParent(data.user),
+			roleKeys: roleKeysFromToken(data.user),
+		}
 	} catch (error) {
 		console.error('[access] Token validation failed:', error)
 		return null
@@ -112,112 +176,97 @@ async function resolveIdentity(token: string): Promise<ParentIdentity | null> {
 }
 
 /**
- * Builds a caller from one `users` row, resolving their library role from our
- * database. `user_roles` wins when present; otherwise the legacy `users.role`
- * column is used, so accounts created before RBAC still work.
+ * Builds a caller from one MyJKKN staff record.
  *
- * Shared by the signed-in caller and by whoever a super admin is viewing as,
- * so both are resolved by exactly the same rules — there is no second, laxer
- * path into the system.
+ * Shared by the signed-in caller and by whoever a super admin is viewing as, so
+ * both are resolved by exactly the same rules — there is no second, laxer path
+ * into the system.
+ *
+ * `extraRoleKeys` carries anything the sign-in token itself said, pooled with
+ * the staff record's roles: a role named in either place counts, because only
+ * one library role is needed to get in.
  */
-async function callerFromUser(
-	user: {
-		id: string
-		email: string
-		full_name: string | null
-		role: string | null
-		is_super_admin: boolean
-		institution_id: string | null
-	}
-): Promise<Caller> {
-	const supabase = getSupabaseServer()
+async function callerFromStaff(
+	staff: MyjkknStaff,
+	extraRoleKeys: string[] = []
+): Promise<Identity> {
+	const allRoleKeys = [...new Set([...staff.roleKeys, ...extraRoleKeys.map(String)])]
 
-	// Assigned roles take precedence over the legacy column
-	const { data: assigned } = await supabase
-		.from('user_roles')
-		.select('roles(name)')
-		.eq('user_id', user.id)
-		.eq('is_active', true)
-
-	const assignedNames = (assigned || [])
-		.map(r => (r.roles as any)?.name)
-		.filter(Boolean) as LibraryRole[]
-
-	let role: LibraryRole = 'member'
-	if (assignedNames.length > 0) {
-		role = assignedNames.reduce((best, next) =>
-			(ROLE_RANK[next] ?? 0) > (ROLE_RANK[best] ?? 0) ? next : best
-		)
-	} else if (user.is_super_admin) {
-		role = 'super_admin'
-	} else if (user.role && user.role in ROLE_RANK) {
-		role = user.role as LibraryRole
+	if (!staff.isActive) {
+		return {
+			ok: false,
+			reason: 'inactive',
+			error: 'Your MyJKKN account is not active',
+			status: 403,
+			email: staff.email,
+			fullName: staff.fullName,
+			myjkknRoles: allRoleKeys,
+		}
 	}
 
-	// The legacy flag can only ever raise the role, never lower an assigned one
-	if (user.is_super_admin) role = 'super_admin'
+	const role = highestLibraryRole(allRoleKeys)
+	if (!role) {
+		return {
+			ok: false,
+			reason: 'role_not_allowed',
+			error: 'Your MyJKKN role does not have access to the library',
+			status: 403,
+			email: staff.email,
+			fullName: staff.fullName,
+			myjkknRoles: allRoleKeys,
+		}
+	}
+
+	// A super admin is not tied to one college. Nor is a library admin whose
+	// MyJKKN institution is not one of the seven libraries — that is the CEO's
+	// case, an overseer rather than a member of one campus.
+	const isSuperAdmin = role === 'super_admin'
+	const institutionId = isSuperAdmin
+		? null
+		: await collegeForMyjkknInstitution(staff.myjkknInstitutionId)
+
+	// A librarian must belong to a college; without one there is nothing for
+	// them to run, and letting them through unscoped would show them every
+	// campus at once.
+	if (!institutionId && !isSuperAdmin && role !== 'library_admin') {
+		return {
+			ok: false,
+			reason: 'no_institution',
+			error: 'Your MyJKKN college is not set up as a library yet',
+			status: 403,
+			email: staff.email,
+			fullName: staff.fullName,
+			myjkknRoles: allRoleKeys,
+		}
+	}
 
 	return {
-		userId: user.id,
-		email: user.email,
-		fullName: user.full_name ?? null,
-		role,
-		institutionId: role === 'super_admin' ? null : (user.institution_id ?? null),
-		isSuperAdmin: role === 'super_admin',
-		impersonatedBy: null,
+		ok: true,
+		caller: {
+			userId: staff.id,
+			email: staff.email,
+			fullName: staff.fullName,
+			role,
+			myjkknRoles: allRoleKeys,
+			institutionId,
+			isSuperAdmin,
+			impersonatedBy: null,
+		},
 	}
-}
-
-const USER_FIELDS = 'id, email, full_name, role, is_super_admin, institution_id, is_active'
-
-/**
- * Keeps our copy of the name identical to MyJKKN's.
- *
- * MyJKKN owns who a person is; this project only borrows it. So whatever their
- * MyJKKN profile says is what the library shows — including after a correction
- * or a change of name there, with nobody having to edit the row by hand.
- *
- * The row is written only when the two actually differ, so an ordinary request
- * costs one string comparison. A failed write is logged and swallowed: a stale
- * name is no reason to refuse someone entry.
- */
-async function syncNameFromParent(
-	supabase: ReturnType<typeof getSupabaseServer>,
-	user: { id: string; full_name: string | null },
-	parentName: string | null
-): Promise<void> {
-	if (!parentName || parentName === user.full_name) return
-
-	const { error } = await supabase
-		.from('users')
-		.update({ full_name: parentName, updated_at: new Date().toISOString() })
-		.eq('id', user.id)
-
-	if (error) {
-		console.error('[access] Could not sync name from MyJKKN:', error.message)
-		return
-	}
-
-	// Show the new name on this request, not the next one
-	user.full_name = parentName
 }
 
 /**
  * How long a resolved caller is reused before being worked out again.
  *
  * Answering "who is this" costs a round trip to MyJKKN to validate the token —
- * measured at 1.0–2.9 seconds — plus two Supabase reads. Every `/api/lib/*`
- * route starts with it, and opening one page fires five of them at once (the
- * institution list, the caller's role, favourites, the activity line, and the
- * page's own data), so the desk paid that toll five times over before anything
- * appeared. A gate scan paid it three times in a row, which is most of the ten
- * seconds a scan was taking.
+ * measured at 1.0–2.9 seconds — plus the staff lookup. Every `/api/lib/*` route
+ * starts with it, and opening one page fires several at once, so the desk would
+ * pay that toll several times over before anything appeared.
  *
  * So the answer is held briefly and shared. The rules themselves are untouched
  * — the same validation, the same role resolution, the same institution scope,
- * just not repeated for every request in the same breath. The two changes that
- * must not wait, a role change and a deactivation, push the affected user out
- * of here the moment they are made, so they still take effect at once.
+ * just not repeated for every request in the same breath. A role changed in
+ * MyJKKN takes effect within the minute.
  */
 const CALLER_TTL_MS = 60_000
 
@@ -227,23 +276,23 @@ const REFUSAL_TTL_MS = 10_000
 /** Well above the number of people signed in at once; keeps the map bounded. */
 const MAX_CACHED_CALLERS = 500
 
-interface CachedCaller {
-	result: AccessResult
+interface CachedIdentity {
+	identity: Identity
 	expiresAt: number
-	/** Who this entry describes, so a role change can drop it by hand. */
+	/** Who this entry describes, so a change can drop it by hand. */
 	userId: string | null
 }
 
-const callerCache = new Map<string, CachedCaller>()
+const callerCache = new Map<string, CachedIdentity>()
 
 /**
  * Resolutions already under way, keyed the same as the cache.
  *
- * The five requests a page opens with arrive together, so without this they
+ * The several requests a page opens with arrive together, so without this they
  * would all miss the empty cache and each start their own validation. Sharing
  * the one promise turns that burst into a single round trip.
  */
-const callerInFlight = new Map<string, Promise<AccessResult>>()
+const callerInFlight = new Map<string, Promise<Identity>>()
 
 /** Drops entries that have expired, and if still crowded, the whole lot. */
 function pruneCallerCache(): void {
@@ -254,18 +303,18 @@ function pruneCallerCache(): void {
 		if (entry.expiresAt <= now) callerCache.delete(key)
 	}
 
-	// Still full of live entries — start over rather than grow without limit.
-	// The cost is one extra validation each for the people signed in.
 	if (callerCache.size >= MAX_CACHED_CALLERS) callerCache.clear()
 }
 
 /**
- * Forgets what is known about one user, or about everyone.
+ * Forgets what is known about one person, or about everyone.
  *
- * Called wherever a role is granted or an account is switched off, so that
- * change is felt on the very next request rather than up to a minute later.
+ * Called wherever something that decides access may have changed, so it is felt
+ * on the very next request rather than up to a minute later.
  */
 export function invalidateCaller(userId?: string | null): void {
+	invalidateStaff(userId)
+
 	if (!userId) {
 		callerCache.clear()
 		return
@@ -277,16 +326,16 @@ export function invalidateCaller(userId?: string | null): void {
 }
 
 /**
- * Identifies the caller.
+ * Identifies the caller, in full — including why somebody was turned away.
  *
- * When a super admin has picked someone to view as, the returned caller IS
- * that person — same role, same institution, same limits — because the point
- * of the feature is to see and do exactly what they can. Who is really at the
- * keyboard is kept on `impersonatedBy` so nothing becomes anonymous.
+ * Used by the route that tells the browser whether to draw the application or
+ * the restricted page. Everywhere else wants `getCaller`.
  */
-export async function getCaller(request: Request): Promise<AccessResult> {
+export async function identifyCaller(request: Request): Promise<Identity> {
 	const token = readToken(request)
-	if (!token) return { caller: null, error: 'Not signed in', status: 401 }
+	if (!token) {
+		return { ok: false, reason: 'not_signed_in', error: 'Not signed in', status: 401 }
+	}
 
 	// Viewing as someone else gives a different caller for the same token, so it
 	// has to be part of the key or a super admin would be served their own row.
@@ -294,20 +343,20 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 	const key = `${token}|${viewAsId ?? ''}`
 
 	const cached = callerCache.get(key)
-	if (cached && cached.expiresAt > Date.now()) return cached.result
+	if (cached && cached.expiresAt > Date.now()) return cached.identity
 
 	const running = callerInFlight.get(key)
 	if (running) return running
 
-	const work = resolveCaller(token, viewAsId)
-		.then(result => {
+	const work = resolveIdentityFor(token, viewAsId)
+		.then(identity => {
 			pruneCallerCache()
 			callerCache.set(key, {
-				result,
-				expiresAt: Date.now() + (result.caller ? CALLER_TTL_MS : REFUSAL_TTL_MS),
-				userId: result.caller?.userId ?? null,
+				identity,
+				expiresAt: Date.now() + (identity.ok ? CALLER_TTL_MS : REFUSAL_TTL_MS),
+				userId: identity.ok ? identity.caller.userId : null,
 			})
-			return result
+			return identity
 		})
 		.finally(() => {
 			callerInFlight.delete(key)
@@ -317,53 +366,74 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 	return work
 }
 
-/** The work getCaller used to do inline, unchanged apart from being callable. */
-async function resolveCaller(token: string, viewAsId: string | null): Promise<AccessResult> {
+/**
+ * Identifies the caller.
+ *
+ * When a super admin has picked someone to view as, the returned caller IS
+ * that person — same role, same college, same limits — because the point of the
+ * feature is to see and do exactly what they can. Who is really at the keyboard
+ * is kept on `impersonatedBy` so nothing becomes anonymous.
+ */
+export async function getCaller(request: Request): Promise<AccessResult> {
+	const identity = await identifyCaller(request)
+	if (identity.ok) return { caller: identity.caller }
+	return { caller: null, error: identity.error, status: identity.status }
+}
+
+/** The work behind identifyCaller, unchanged apart from being callable. */
+async function resolveIdentityFor(token: string, viewAsId: string | null): Promise<Identity> {
 	const identity = await resolveIdentity(token)
-	if (!identity) return { caller: null, error: 'Session expired — please sign in again', status: 401 }
+	if (!identity) {
+		return {
+			ok: false,
+			reason: 'session_expired',
+			error: 'Session expired — please sign in again',
+			status: 401,
+		}
+	}
 
-	const supabase = getSupabaseServer()
+	const staff = await staffByEmail(identity.email)
+	if (!staff) {
+		return {
+			ok: false,
+			reason: 'not_staff',
+			error: 'MyJKKN has no staff record for this account',
+			status: 403,
+			email: identity.email,
+			fullName: identity.fullName,
+			myjkknRoles: identity.roleKeys,
+		}
+	}
 
-	const { data: user } = await supabase
-		.from('users')
-		.select(USER_FIELDS)
-		.eq('email', identity.email)
-		.maybeSingle()
-
-	if (!user) return { caller: null, error: 'Your account is not provisioned for the library', status: 403 }
-	if (!user.is_active) return { caller: null, error: 'Your account is inactive', status: 403 }
-
-	await syncNameFromParent(supabase, user, identity.fullName)
-
-	const realCaller = await callerFromUser(user)
+	const real = await callerFromStaff(staff, identity.roleKeys)
+	if (!real.ok) return real
 
 	// Only a super admin can be viewing as someone else. If anyone else has the
 	// cookie it is ignored outright rather than trusted.
-	if (viewAsId && realCaller.isSuperAdmin && viewAsId !== realCaller.userId) {
-		const { data: target } = await supabase
-			.from('users')
-			.select(USER_FIELDS)
-			.eq('id', viewAsId)
-			.maybeSingle()
-
-		if (target?.is_active) {
-			const asCaller = await callerFromUser(target)
-			return {
-				caller: {
-					...asCaller,
-					impersonatedBy: { userId: realCaller.userId, email: realCaller.email },
-				},
+	if (viewAsId && real.caller.isSuperAdmin && viewAsId !== real.caller.userId) {
+		const target = await staffById(viewAsId)
+		if (target) {
+			const asCaller = await callerFromStaff(target)
+			if (asCaller.ok) {
+				return {
+					ok: true,
+					caller: {
+						...asCaller.caller,
+						impersonatedBy: { userId: real.caller.userId, email: real.caller.email },
+					},
+				}
 			}
 		}
-		// Target gone or deactivated — fall through as the real super admin
+		// Target gone, deactivated, or no longer a library person — fall through
+		// as the real super admin rather than refusing them their own session
 	}
 
-	return { caller: realCaller }
+	return real
 }
 
 /** True when the caller holds at least the given role. */
 export function hasAtLeast(caller: Caller, minimum: LibraryRole): boolean {
-	return ROLE_RANK[caller.role] >= ROLE_RANK[minimum]
+	return rankAtLeast(caller.role, minimum)
 }
 
 /**
@@ -382,10 +452,10 @@ export function resolveInstitutionScope(
 		return { institutionId: requestedInstitutionId }
 	}
 
-	// An admin with no college attached oversees all of them — the CEO's case.
-	// Deliberately narrow: it reads every library but, unlike super_admin, it
-	// cannot open Staff Access or view as another user.
-	if (caller.role === 'admin' && !caller.institutionId) {
+	// A library admin with no college attached oversees all of them — the CEO's
+	// case. Deliberately narrow: it reads every library but, unlike super_admin,
+	// it cannot open Staff Access or view as another user.
+	if (caller.role === 'library_admin' && !caller.institutionId) {
 		return { institutionId: requestedInstitutionId }
 	}
 
@@ -407,34 +477,3 @@ export function resolveInstitutionScope(
 
 	return { institutionId: caller.institutionId }
 }
-
-/**
- * Role-assignment rules.
- *
- * super_admin may grant anything. admin may staff their own institution but may
- * NOT create another super_admin or admin — that stops an admin promoting
- * themselves (or a friend) to full system access.
- */
-export function canAssignRole(caller: Caller, targetRole: LibraryRole): { allowed: boolean; reason?: string } {
-	if (caller.role === 'super_admin') return { allowed: true }
-
-	if (caller.role === 'admin') {
-		if (targetRole === 'super_admin') {
-			return { allowed: false, reason: 'Only a super admin can grant the super_admin role' }
-		}
-		if (targetRole === 'admin') {
-			return { allowed: false, reason: 'Only a super admin can grant the admin role' }
-		}
-		return { allowed: true }
-	}
-
-	return { allowed: false, reason: 'You do not have permission to assign roles' }
-}
-
-export const ASSIGNABLE_ROLES: LibraryRole[] = [
-	'super_admin',
-	'admin',
-	'librarian',
-	'assistant_librarian',
-	'member',
-]

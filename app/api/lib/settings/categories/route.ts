@@ -16,7 +16,7 @@ import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { hasAtLeast } from '@/lib/auth/server-access'
 import { logActivity, fetchOldValues } from '@/lib/library/activity-log'
 
-/** The codes lib_members actually stores, so a lookup can never miss. */
+/** The codes a borrower can carry, so a lookup can never miss. */
 const VALID_CODES = ['learner', 'facilitator', 'other', 'team_member', 'guest', 'alumni']
 
 export async function GET(request: Request) {

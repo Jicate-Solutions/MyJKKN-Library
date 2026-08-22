@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { fetchAllRows } from '@/lib/library/fetch-all'
+import { personByMyjkknId } from '@/lib/library/myjkkn-directory'
+import { ensureBorrower, borrowerById } from '@/lib/library/borrower'
 
 /**
  * What the hold queue shows. The reserved copy used to be joined as well, but
@@ -20,7 +22,7 @@ const HOLD_COLUMNS = `
 	checked_out_at,
 	hold_status,
 	cancellation_reason,
-	member:lib_members(id, member_number, display_name, member_category),
+	member:lib_borrowers(id, member_number, display_name, member_category),
 	catalogue_record:lib_catalogue_records(id, title, isbn, call_number)
 `
 
@@ -75,21 +77,44 @@ export async function POST(request: Request) {
 		if (!body.catalogue_record_id) {
 			return NextResponse.json({ error: 'catalogue_record_id is required' }, { status: 400 })
 		}
-		if (!body.member_id) {
-			return NextResponse.json({ error: 'member_id is required' }, { status: 400 })
+
+		const myjkknId: string | null = body.myjkkn_id ?? null
+		const personKind: 'learner' | 'facilitator' | null =
+			body.person_kind === 'learner' || body.person_kind === 'facilitator' ? body.person_kind : null
+
+		if (!myjkknId && !body.member_id) {
+			return NextResponse.json({ error: 'Scan the member card first' }, { status: 400 })
 		}
 
-		// Check member is active and not delinquent
-		const { data: member } = await supabase
-			.from('lib_members')
-			.select('is_active, is_delinquent, member_category')
-			.eq('id', body.member_id)
-			.single()
+		// Who is reserving.
+		//
+		// A hold is a claim on a book, so it needs the same identity a loan
+		// does — which means the same borrower row. Checked against MyJKKN
+		// rather than trusted from the request, exactly as issuing is, so a
+		// hold cannot be placed for somebody who is not an Active member here.
+		let borrower = null
 
-		if (!member?.is_active) {
-			return NextResponse.json({ error: 'Member account is inactive' }, { status: 400 })
+		if (myjkknId && personKind) {
+			const person = await personByMyjkknId(body.institution_id, personKind, myjkknId)
+			if (!person) {
+				return NextResponse.json(
+					{ error: 'This person is not an Active member of this college in MyJKKN' },
+					{ status: 404 }
+				)
+			}
+			const resolved = await ensureBorrower(supabase, body.institution_id, person)
+			if (!resolved.borrower) {
+				return NextResponse.json({ error: resolved.error ?? 'Could not record who is reserving' }, { status: 500 })
+			}
+			borrower = resolved.borrower
+		} else {
+			borrower = await borrowerById(supabase, body.institution_id, body.member_id)
+			if (!borrower) {
+				return NextResponse.json({ error: 'Member not found' }, { status: 404 })
+			}
 		}
-		if (member?.is_delinquent) {
+
+		if (borrower.is_delinquent) {
 			return NextResponse.json({ error: 'Member has unpaid late charges — cannot place hold' }, { status: 400 })
 		}
 
@@ -98,7 +123,7 @@ export async function POST(request: Request) {
 			.from('lib_member_categories')
 			.select('reservation_limit')
 			.eq('institution_id', body.institution_id)
-			.eq('category_code', member.member_category)
+			.eq('category_code', borrower.member_category)
 			.maybeSingle()
 
 		const reservationLimit = categoryConfig?.reservation_limit ?? 2
@@ -106,7 +131,7 @@ export async function POST(request: Request) {
 		const { count: activeHolds } = await supabase
 			.from('lib_resource_holds')
 			.select('*', { count: 'exact', head: true })
-			.eq('member_id', body.member_id)
+			.eq('member_id', borrower.id)
 			.in('hold_status', ['pending', 'available'])
 
 		if ((activeHolds ?? 0) >= reservationLimit) {
@@ -120,7 +145,7 @@ export async function POST(request: Request) {
 		const { count: existingHold } = await supabase
 			.from('lib_resource_holds')
 			.select('*', { count: 'exact', head: true })
-			.eq('member_id', body.member_id)
+			.eq('member_id', borrower.id)
 			.eq('catalogue_record_id', body.catalogue_record_id)
 			.in('hold_status', ['pending', 'available'])
 
@@ -143,7 +168,7 @@ export async function POST(request: Request) {
 			.insert({
 				institution_id: body.institution_id,
 				catalogue_record_id: body.catalogue_record_id,
-				member_id: body.member_id,
+				member_id: borrower.id,
 				item_id: body.item_id ?? null,
 				hold_placed_at: new Date().toISOString(),
 				hold_expires_at: expiresAt,

@@ -1,244 +1,173 @@
+/**
+ * Who this college's library members are: GET /api/lib/members
+ *
+ * There is no roll to keep any more. Every Active learner and every Active
+ * staff member in MyJKKN is a member of their own college's library, and the
+ * answer is read from MyJKKN on every request rather than stored here. Nobody
+ * is enrolled, nobody is edited, nobody is deleted — which is why this route
+ * no longer accepts POST.
+ *
+ * What this database does hold is what the library itself knows about them:
+ * whether they owe a fine, and whether they have ever borrowed. That comes from
+ * `lib_borrowers`, which is written only when somebody actually takes a book.
+ *
+ * A college sees its own people and no one else's. Only a super admin, or an
+ * admin overseeing every campus, may ask for all of them at once.
+ */
+
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
-import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { guardCollection } from '@/lib/auth/api-guard'
+import { collegeDirectory, myjkknConfigured, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
 import { fetchAllRows } from '@/lib/library/fetch-all'
-import { logActivity } from '@/lib/library/activity-log'
+
+/** One row of the members list, as the page renders it. */
+interface MemberRow {
+	/** Stable across requests, and unique within a college — MyJKKN's id, kinded. */
+	id: string
+	myjkkn_id: string
+	person_kind: 'learner' | 'facilitator'
+	institution_id: string
+	member_number: string
+	member_category: string
+	display_name: string
+	email: string | null
+	phone: string | null
+	photo_url: string | null
+	/** MyJKKN's own word for what they are — their programme, or their designation. */
+	role_label: string
+	/** Everyone read from MyJKKN is Active there; the inactive are never returned. */
+	is_active: true
+	is_delinquent: boolean
+	/** Whether they have ever taken a book out of this library. */
+	has_borrowed: boolean
+}
+
+/** The colleges a caller who spans campuses should see. */
+async function everyLibraryInstitution(): Promise<string[]> {
+	const supabase = getSupabaseServer()
+	const { data } = await supabase
+		.from('institutions')
+		.select('id, myjkkn_institution_ids')
+
+	return (data || [])
+		.filter(row => Array.isArray(row.myjkkn_institution_ids) && row.myjkkn_institution_ids.length > 0)
+		.map(row => row.id as string)
+}
+
+/**
+ * What the library knows about the people it is about to list: who owes money,
+ * and who has borrowed at all. One read per college, not one per person.
+ */
+async function libraryFacts(institutionIds: string[]) {
+	const supabase = getSupabaseServer()
+
+	// Read in slices. A college that has been lending for a few years passes a
+	// thousand borrowers, and a single request stops at exactly that without
+	// saying so — every borrower past the thousandth would show as owing
+	// nothing, which is the one thing on this page that must not be wrong.
+	const { data, error } = await fetchAllRows<{
+		institution_id: string
+		myjkkn_id: string
+		is_delinquent: boolean
+	}>(range => supabase
+		.from('lib_borrowers')
+		.select('institution_id, myjkkn_id, is_delinquent')
+		.in('institution_id', institutionIds)
+		.order('myjkkn_id', { ascending: true })
+		.range(range.from, range.to))
+
+	// A database without the new table yet still lists members — it simply
+	// cannot say who owes, which is better than showing nothing at all.
+	if (error) {
+		console.warn('[members] Could not read borrowers:', (error as Error).message)
+		return new Map<string, boolean>()
+	}
+
+	const facts = new Map<string, boolean>()
+	for (const row of data || []) {
+		facts.set(`${row.institution_id}:${row.myjkkn_id}`, row.is_delinquent === true)
+	}
+	return facts
+}
 
 export async function GET(request: Request) {
 	try {
-		const supabase = getSupabaseServer()
 		const { searchParams } = new URL(request.url)
-		const requestedInstitutionId = searchParams.get('institution_id')
-		const guard = await guardCollection(request, requestedInstitutionId)
+		const guard = await guardCollection(request, searchParams.get('institution_id'))
 		if (!guard.ok) return guard.response
-		const institutionId = guard.institutionId
-		const memberCategory = searchParams.get('member_category')
-		const isActive = searchParams.get('is_active')
-		const search = searchParams.get('search')
 
-		// A member roll can pass a thousand on the larger campuses, and a single
-		// request stops at exactly that without saying so.
-		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
-			let query = supabase.from('lib_members').select('*')
-
-			if (institutionId) query = query.eq('institution_id', institutionId)
-			if (memberCategory) query = query.eq('member_category', memberCategory)
-			if (isActive !== null) query = query.eq('is_active', isActive === 'true')
-			if (search) {
-				query = query.or(
-					`member_number.ilike.%${search}%,display_name.ilike.%${search}%,email.ilike.%${search}%`
-				)
-			}
-
-			return query.order('created_at', { ascending: false }).range(range.from, range.to)
-		})
-
-		if (error) {
-			console.error('Error fetching members:', error)
-			return NextResponse.json({ error: 'Failed to fetch members' }, { status: 500 })
-		}
-
-		return NextResponse.json(data || [])
-	} catch (error) {
-		console.error('Unexpected error fetching members:', error)
-		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-	}
-}
-
-export async function POST(request: Request) {
-	try {
-		const supabase = getSupabaseServer()
-		const body = await request.json()
-		const guard = await guardWrite(request, body.institution_id)
-		if (!guard.ok) return guard.response
-		body.institution_id = guard.institutionId
-
-		if (!body.institution_id) {
-			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
-		}
-		if (!body.member_category?.trim()) {
-			return NextResponse.json({ error: 'member_category is required' }, { status: 400 })
-		}
-		if (!body.membership_start_date) {
-			return NextResponse.json({ error: 'membership_start_date is required' }, { status: 400 })
-		}
-		// "Other" without a name is a member nobody can describe later
-		if (body.member_category === 'other' && !body.category_label?.toString().trim()) {
-			return NextResponse.json({ error: 'Type what this member is called' }, { status: 400 })
-		}
-
-		// One MyJKKN person may hold only one membership per institution. The UI hides
-		// people who are already enrolled, but this is the guard that actually enforces
-		// it — a stale page or a direct API call must not create a second membership.
-		const linkedColumn = body.learner_id
-			? 'learner_id'
-			: body.facilitator_id
-				? 'facilitator_id'
-				: body.team_member_id
-					? 'team_member_id'
-					: null
-		const linkedId = body.learner_id ?? body.facilitator_id ?? body.team_member_id ?? null
-
-		if (linkedColumn && linkedId) {
-			const { data: existing } = await supabase
-				.from('lib_members')
-				.select('id, member_number, display_name')
-				.eq('institution_id', body.institution_id)
-				.eq(linkedColumn, linkedId)
-				.maybeSingle()
-
-			if (existing) {
-				return NextResponse.json(
-					{
-						error: `${existing.display_name ?? 'This person'} is already a member (${existing.member_number})`,
-						existing_member_id: existing.id,
-						existing_member_number: existing.member_number,
-					},
-					{ status: 409 }
-				)
-			}
-		}
-
-		// member_number is always assigned here — any value sent by the client is ignored.
-		// Derived from the highest existing number for this institution and year, so
-		// deleting a member can never cause the next enrolment to reuse a taken number.
-		const settings = await getInstitutionSettings(body.institution_id)
-		const year = new Date().getFullYear()
-		const prefix = `${settings.member_number_prefix}-${year}-`
-
-		// A learner's member number is their MyJKKN roll number — the number
-		// already printed on the card the desk will scan. This is required for
-		// learners and does not apply to staff, guests or alumni, who have no
-		// roll number to use.
-		const rollNumber: string | null =
-			(body.roll_number ?? body.college_id ?? '').toString().trim() || null
-
-		if (body.member_category === 'learner' && !rollNumber) {
+		if (!myjkknConfigured()) {
 			return NextResponse.json(
-				{ error: 'This learner has no roll number in MyJKKN — a learner cannot be enrolled without one' },
-				{ status: 400 }
+				{ error: 'MyJKKN is not configured on this server, so the member list cannot be read' },
+				{ status: 503 }
 			)
 		}
 
-		if (rollNumber) {
-			const { data: taken } = await supabase
-				.from('lib_members')
-				.select('id, display_name')
-				.eq('institution_id', body.institution_id)
-				.eq('member_number', rollNumber)
-				.maybeSingle()
+		// A college, or every college for whoever is allowed to see every college
+		const institutionIds = guard.institutionId
+			? [guard.institutionId]
+			: await everyLibraryInstitution()
 
-			if (taken) {
-				return NextResponse.json(
-					{ error: `Roll number ${rollNumber} is already used by ${taken.display_name ?? 'another member'}` },
-					{ status: 409 }
-				)
-			}
-		}
+		if (institutionIds.length === 0) return NextResponse.json([])
 
-		const nextMemberNumber = async (): Promise<string> => {
-			// Learners always get their roll number; other categories use it only
-			// when this campus has asked for college IDs.
-			if (rollNumber && (body.member_category === 'learner' || settings.member_number_source === 'college_id')) {
-				return rollNumber
-			}
+		const [rolls, facts] = await Promise.all([
+			Promise.all(institutionIds.map(id => collegeDirectory(id))),
+			libraryFacts(institutionIds),
+		])
 
-			const { data: last } = await supabase
-				.from('lib_members')
-				.select('member_number')
-				.eq('institution_id', body.institution_id)
-				.like('member_number', `${prefix}%`)
-				.order('member_number', { ascending: false })
-				.limit(1)
-				.maybeSingle()
+		const memberCategory = searchParams.get('member_category')
+		const search = (searchParams.get('search') ?? '').trim().toLowerCase()
 
-			const lastSeq = last?.member_number
-				? parseInt(last.member_number.slice(prefix.length), 10)
-				: 0
-			const nextSeq = (Number.isFinite(lastSeq) ? lastSeq : 0) + 1
-			return `${prefix}${String(nextSeq).padStart(4, '0')}`
-		}
+		const rows: MemberRow[] = []
+		for (const roll of rolls) {
+			for (const person of roll as DirectoryPerson[]) {
+				if (memberCategory && person.member_category !== memberCategory) continue
 
-		const buildRow = (memberNumber: string) => ({
-			institution_id: body.institution_id,
-			member_number: memberNumber,
-			member_category: body.member_category,
-			// Only "Other" is named by the librarian; the rest name themselves.
-			// Written only for "Other", so enrolling a learner still works on a
-			// database that has not had the category_label column added yet.
-			...(body.member_category === 'other'
-				? { category_label: body.category_label?.toString().trim() || null }
-				: {}),
-			learner_id: body.learner_id ?? null,
-			facilitator_id: body.facilitator_id ?? null,
-			team_member_id: body.team_member_id ?? null,
-			display_name: body.display_name ?? null,
-			email: body.email ?? null,
-			phone: body.phone ?? null,
-			membership_start_date: body.membership_start_date,
-			membership_end_date: body.membership_end_date ?? null,
-			is_active: body.is_active ?? true,
-			is_delinquent: body.is_delinquent ?? false,
-			created_by: body.created_by ?? null,
-		})
+				if (search) {
+					const haystack = [person.member_number, person.display_name, person.email ?? '']
+						.join(' ').toLowerCase()
+					if (!haystack.includes(search)) continue
+				}
 
-		// Retry on 23505 so two librarians enrolling at the same moment don't collide
-		const MAX_ATTEMPTS = 5
-		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-			const memberNumber = await nextMemberNumber()
-			const { data, error } = await supabase
-				.from('lib_members')
-				.insert(buildRow(memberNumber))
-				.select()
-				.single()
-
-			if (!error) {
-				await logActivity(request, {
-					action: 'create',
-					resource_type: 'member',
-					resource_id: '/members',
-					institution_id: body.institution_id,
-					new_values: data,
-					metadata: { member_number: data.member_number, member_category: data.member_category },
+				const key = `${person.institution_id}:${person.myjkkn_id}`
+				rows.push({
+					id: `${person.person_kind}:${person.myjkkn_id}`,
+					myjkkn_id: person.myjkkn_id,
+					person_kind: person.person_kind,
+					institution_id: person.institution_id,
+					member_number: person.member_number,
+					member_category: person.member_category,
+					display_name: person.display_name,
+					email: person.email,
+					phone: person.phone,
+					photo_url: person.photo_url,
+					role_label: person.role_label,
+					is_active: true,
+					is_delinquent: facts.get(key) === true,
+					has_borrowed: facts.has(key),
 				})
-				return NextResponse.json(data, { status: 201 })
 			}
-
-			if (error.code === '23505' && attempt < MAX_ATTEMPTS) {
-				console.warn(`Member number ${memberNumber} taken, retrying (${attempt}/${MAX_ATTEMPTS})`)
-				continue
-			}
-
-			console.error('Error creating member:', error)
-			await logActivity(request, {
-				action: 'create',
-				resource_type: 'member',
-				resource_id: '/members',
-				institution_id: body.institution_id,
-				status: 'error',
-				error_message: error.message,
-				metadata: { display_name: body.display_name ?? null },
-			})
-			// The Other category needs one database update to have been run
-			if (error.code === '42703' || error.code === '23514') {
-				return NextResponse.json(
-					{ error: 'This library\'s database has not been updated for the Other category yet — please run the pending database update' },
-					{ status: 400 }
-				)
-			}
-			if (error.code === '23505') {
-				return NextResponse.json({ error: 'Could not assign a member number — please try again' }, { status: 409 })
-			}
-			if (error.code === '23503') {
-				return NextResponse.json({ error: 'Invalid reference — check institution_id' }, { status: 400 })
-			}
-			return NextResponse.json({ error: 'Failed to create member' }, { status: 500 })
 		}
 
-		return NextResponse.json({ error: 'Failed to create member' }, { status: 500 })
+		return NextResponse.json(rows)
 	} catch (error) {
-		console.error('Unexpected error creating member:', error)
-		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+		console.error('Unexpected error listing members:', error)
+		return NextResponse.json({ error: 'Failed to read the member list from MyJKKN' }, { status: 500 })
 	}
+}
+
+/**
+ * Enrolment is gone.
+ *
+ * Answered rather than removed so a page left open from before the change gets
+ * told why its Save did nothing, instead of a bare 405 that reads like a bug.
+ */
+export async function POST() {
+	return NextResponse.json(
+		{
+			error: 'Members are no longer added here — everyone Active in MyJKKN is already a member of their college\'s library',
+		},
+		{ status: 410 }
+	)
 }

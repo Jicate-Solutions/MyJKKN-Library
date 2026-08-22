@@ -14,14 +14,13 @@
  *
  * Usage on a single record:
  *
- *   const guard = await guardRecord(request, 'lib_members', id)
+ *   const guard = await guardRecord(request, 'lib_borrowers', id)
  *   if (!guard.ok) return guard.response
  */
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { getCaller, resolveInstitutionScope, type Caller } from './server-access'
-import { isMemberAllowedApi } from './member-access'
 import { recordImpersonatedAction } from './impersonation-log'
 
 export type GuardResult =
@@ -35,17 +34,6 @@ export type GuardRowResult<T> =
 
 function deny(error: string, status: number): { ok: false; response: NextResponse } {
 	return { ok: false, response: NextResponse.json({ error }, { status }) }
-}
-
-/**
- * A member may only read the Circulation and catalogue routes. Applied inside
- * every guard so the rule cannot be missed on a route someone adds later.
- */
-function denyIfMemberBlocked(caller: Caller, request: Request) {
-	if (caller.role !== 'member') return null
-	const { pathname } = new URL(request.url)
-	if (isMemberAllowedApi(pathname, request.method)) return null
-	return deny('You do not have access to this part of the library', 403)
 }
 
 /**
@@ -85,8 +73,6 @@ export async function guardCollection(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const blocked = denyIfMemberBlocked(caller, request)
-	if (blocked) return blocked
 
 	const scope = resolveInstitutionScope(caller, requestedInstitutionId)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
@@ -106,15 +92,13 @@ export async function guardWrite(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const blocked = denyIfMemberBlocked(caller, request)
-	if (blocked) return blocked
 
 	const scope = resolveInstitutionScope(caller, bodyInstitutionId ?? null)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
 
 	// Anyone who spans institutions must say which one a new row belongs to —
-	// a super admin, or an admin with no college of their own.
-	if (!scope.institutionId && (caller.isSuperAdmin || caller.role === 'admin')) {
+	// a super admin, or a library admin with no college of their own.
+	if (!scope.institutionId && (caller.isSuperAdmin || caller.role === 'library_admin')) {
 		return deny('institution_id is required — select an institution first', 400)
 	}
 
@@ -135,11 +119,9 @@ export async function guardRecord(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const blocked = denyIfMemberBlocked(caller, request)
-	if (blocked) return blocked
 
-	// Spans every institution: a super admin, or an admin overseeing all colleges
-	if (caller.isSuperAdmin || (caller.role === 'admin' && !caller.institutionId)) {
+	// Spans every institution: a super admin, or a library admin overseeing all
+	if (caller.isSuperAdmin || (caller.role === 'library_admin' && !caller.institutionId)) {
 		noteIfImpersonated(caller, request, null)
 		return { ok: true, caller, institutionId: null }
 	}
@@ -186,8 +168,6 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const blocked = denyIfMemberBlocked(caller, request)
-	if (blocked) return blocked
 
 	const supabase = getSupabaseServer()
 	const { data: row, error: readError } = await supabase
@@ -206,8 +186,8 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 	// The columns are given by the caller, so the client cannot type the row
 	const record = row as unknown as T
 
-	// Spans every institution: a super admin, or an admin overseeing all colleges
-	if (caller.isSuperAdmin || (caller.role === 'admin' && !caller.institutionId)) {
+	// Spans every institution: a super admin, or a library admin overseeing all
+	if (caller.isSuperAdmin || (caller.role === 'library_admin' && !caller.institutionId)) {
 		noteIfImpersonated(caller, request, null)
 		return { ok: true, caller, institutionId: null, row: record }
 	}

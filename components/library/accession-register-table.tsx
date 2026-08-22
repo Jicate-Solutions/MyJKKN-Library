@@ -26,7 +26,7 @@ import {
 	ChevronLeft, ChevronRight, ExternalLink,
 } from 'lucide-react'
 import Link from 'next/link'
-import { BOOK_TYPE_LABELS } from '@/lib/library/catalogue-options'
+import { BOOK_TYPE_LABELS, isPeriodicalType } from '@/lib/library/catalogue-options'
 import type { LibItemStatus } from '@/types/lib'
 
 export interface RegisterRow {
@@ -76,6 +76,21 @@ const soften = (value: unknown): string => (value ?? '').toString().trim().toLow
 const digitsOnly = (value: unknown): string => soften(value).replace(/[^0-9x]/g, '')
 
 /**
+ * The number this material is identified by, in one column.
+ *
+ * A book has an ISBN, a magazine or journal an ISSN — they are never both, and
+ * the register has one column for whichever it is. Which one is asked for first
+ * follows the book type, so a magazine that also has a stray ISBN typed against
+ * it still shows the ISSN a librarian would look for.
+ */
+const standardNumber = (row: RegisterRow): string | null => {
+	const [first, second] = isPeriodicalType(row.book_type ?? '')
+		? [row.issn, row.isbn]
+		: [row.isbn, row.issn]
+	return (first ?? '').trim() || (second ?? '').trim() || null
+}
+
+/**
  * Register order: accession numbers, counted rather than spelled.
  *
  * Sorted as text, 1000 lands next to 100 and the register reads nothing like
@@ -123,7 +138,10 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 		for (const r of rows) {
 			index.set(r.item_id, {
 				accession: soften(r.accession_number),
-				isbn: digitsOnly(r.isbn),
+				// Both numbers, in one field: a book carries an ISBN and a magazine
+				// or journal an ISSN, and the librarian typing a number into that
+				// box is looking for whichever this material has.
+				isbn: [digitsOnly(r.isbn), digitsOnly(r.issn)].filter(Boolean).join(' '),
 				title: soften(r.title),
 			})
 		}
@@ -293,7 +311,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 							</div>
 
 							<div className="w-[180px]">
-								<label className="text-[11px] font-medium text-muted-foreground">ISBN</label>
+								<label className="text-[11px] font-medium text-muted-foreground">ISBN/ISSN</label>
 								<Input
 									placeholder="With or without dashes"
 									value={draft.isbn}
@@ -345,7 +363,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 											<TableHead className="text-xs font-semibold">Title</TableHead>
 											<TableHead className="text-xs font-semibold w-[160px]">Author</TableHead>
 											<TableHead className="text-xs font-semibold w-[110px]">Type</TableHead>
-											<TableHead className="text-xs font-semibold w-[150px]">ISBN</TableHead>
+											<TableHead className="text-xs font-semibold w-[150px]">ISBN/ISSN</TableHead>
 											<TableHead className="text-xs font-semibold w-[120px]">Status</TableHead>
 											<TableHead className="text-xs font-semibold w-10"></TableHead>
 										</TableRow>
@@ -388,7 +406,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 													<Badge variant="outline" className="text-xs">{r.book_type ?? '—'}</Badge>
 												</TableCell>
 												<TableCell className="text-sm font-mono text-muted-foreground">
-													{r.isbn ?? r.issn ?? '—'}
+													{standardNumber(r) ?? '—'}
 												</TableCell>
 												<TableCell><ResourceStatusBadge status={r.status} /></TableCell>
 												<TableCell>
@@ -484,8 +502,8 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 											<span className="text-xs text-muted-foreground">copy {r.copy_number} of {r.total_copies}</span>
 										)}
 									</div>
-									{(r.isbn ?? r.issn) && (
-										<p className="text-xs text-muted-foreground font-mono">{r.isbn ?? r.issn}</p>
+									{standardNumber(r) && (
+										<p className="text-xs text-muted-foreground font-mono">{standardNumber(r)}</p>
 									)}
 								</div>
 							))}

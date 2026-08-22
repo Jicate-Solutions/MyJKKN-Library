@@ -143,7 +143,7 @@ export const navGroups: NavGroup[] = [
 export function visibleNavGroups(role: string | null | undefined, isMember: boolean): NavGroup[] {
 	// The activity log carries names, addresses and whole records, so it stops
 	// at the two roles that answer for the library rather than run its desk
-	const readsTheLog = role === 'super_admin' || role === 'admin'
+	const readsTheLog = role === 'super_admin' || role === 'library_admin'
 
 	const withoutRestricted = navGroups
 		.map(group => ({

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { setDelinquent } from '@/lib/library/borrower'
 
 export async function PUT(
 	request: Request,
@@ -104,7 +105,7 @@ export async function PUT(
 			return NextResponse.json({ error: 'Failed to update charge' }, { status: 500 })
 		}
 
-		// If charge fully settled, check if member can be cleared of delinquent flag
+		// If charge fully settled, check whether the borrower still owes anything
 		if (data.payment_status === 'paid' || data.payment_status === 'waived') {
 			const { count: unpaidCount } = await supabase
 				.from('lib_late_charges')
@@ -113,10 +114,7 @@ export async function PUT(
 				.in('payment_status', ['unpaid', 'partial'])
 
 			if ((unpaidCount ?? 0) === 0) {
-				await supabase
-					.from('lib_members')
-					.update({ is_delinquent: false, updated_at: new Date().toISOString() })
-					.eq('id', existing.member_id)
+				await setDelinquent(supabase, existing.member_id, false)
 			}
 		}
 

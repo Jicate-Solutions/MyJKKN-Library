@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
-import { formatForBookType, isbnRequiredFor } from '@/lib/library/catalogue-options'
+import { formatForBookType, isbnRequiredFor, usesBookOnlyFields } from '@/lib/library/catalogue-options'
 import { istToday } from '@/lib/library/ist-clock'
 import { supplierLookupFor } from '@/lib/library/supplier-by-name'
 
@@ -66,10 +66,16 @@ export async function POST(request: Request) {
 			)
 		}
 
+		// Author, issue number and price are a book's. The form does not ask a
+		// magazine or journal for them, and the server does not take them either
+		// — so a hand-made request cannot put an issue number on a title that
+		// will go on to hold a hundred of them.
+		const bookOnly = usesBookOnlyFields(bookType)
+
 		const identity = {
 			title,
-			author: text(body.author),
-			edition: text(body.edition),
+			author: bookOnly ? text(body.author) : '',
+			edition: bookOnly ? text(body.edition) : '',
 			publisher_name: text(body.publisher_name),
 			publisher_place: text(body.publisher_place),
 			publication_year: body.publication_year ?? null,
@@ -101,7 +107,7 @@ export async function POST(request: Request) {
 					publisher_name: identity.publisher_name || null,
 					publisher_place: identity.publisher_place || null,
 					pages: body.pages ?? null,
-					price: body.price ?? null,
+					price: bookOnly ? (body.price ?? null) : null,
 					currency_code: 'INR',
 					department: text(body.department) || null,
 					book_location: text(body.book_location) || null,
@@ -155,7 +161,7 @@ export async function POST(request: Request) {
 				accession_number: accession,
 				copy_number: copyNumber,
 				condition: 'new',
-				price: body.price ?? null,
+				price: bookOnly ? (body.price ?? null) : null,
 				currency_code: 'INR',
 				status: 'available',
 				is_lendable: !(body.is_reference_only ?? false),

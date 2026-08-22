@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 			.from('lib_lending_transactions')
 			.select(`
 				*,
-				member:lib_members(id, member_category)
+				member:lib_borrowers(id, member_category)
 			`)
 			.eq('id', transaction_id)
 			.single()

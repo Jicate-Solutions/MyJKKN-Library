@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 		// An admin with no college of their own oversees all of them, so the
 		// switcher has to offer all of them — otherwise they sign in to an empty
 		// list and can reach nothing.
-		const spansAllInstitutions = caller.isSuperAdmin || caller.role === 'admin'
+		const spansAllInstitutions = caller.isSuperAdmin || caller.role === 'library_admin'
 
 		if (!spansAllInstitutions) {
 			if (!caller.institutionId) {

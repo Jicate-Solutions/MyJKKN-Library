@@ -31,7 +31,14 @@ const statusColors: Record<string, string> = {
 }
 
 interface FormData {
-	member_id: string
+	/**
+	 * The number on the requester's card, not a row id.
+	 *
+	 * Members are Active people in MyJKKN rather than rows kept here, so the
+	 * only thing a librarian can be expected to have in hand is the number
+	 * printed on the card. It is looked up before the request is made.
+	 */
+	member_number: string
 	title: string
 	author: string
 	isbn: string
@@ -39,7 +46,7 @@ interface FormData {
 }
 
 const defaultForm: FormData = {
-	member_id: '',
+	member_number: '',
 	title: '',
 	author: '',
 	isbn: '',
@@ -113,7 +120,7 @@ export default function IntercampusPage() {
 
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
-		if (!form.member_id.trim()) e.member_id = 'Member ID is required'
+		if (!form.member_number.trim()) e.member_number = 'Member card number is required'
 		if (!form.title.trim()) e.title = 'Title is required'
 		setErrors(e)
 		return Object.keys(e).length === 0
@@ -124,8 +131,22 @@ export default function IntercampusPage() {
 		try {
 			setSaving(true)
 			const instId = getInstitutionIdForCreate() ?? institutionId
+
+			// Who is asking, from their card number. The desk lookup is the one
+			// place that turns a number into a person, and it only ever finds
+			// Active members of this college — so a request cannot be raised for
+			// somebody who is not entitled to one.
+			const lookup = await fetch(
+				`/api/lib/members/lookup?barcode=${encodeURIComponent(form.member_number.trim())}${instId ? `&institution_id=${instId}` : ''}`
+			)
+			const person = await lookup.json()
+			if (!lookup.ok) throw new Error(person.error || 'That card number was not found')
+
+			const { member_number: _cardNumber, ...resource } = form
 			const payload = {
-				...form,
+				...resource,
+				myjkkn_id: person.myjkkn_id,
+				person_kind: person.person_kind,
 				institution_id: instId ?? '',
 				request_date: new Date().toISOString().split('T')[0],
 			}
@@ -153,7 +174,7 @@ export default function IntercampusPage() {
 	const handleEdit = (r: LibIntercampusRequest) => {
 		setEditingItem(r)
 		setForm({
-			member_id: r.member_id,
+			member_number: r.member?.member_number ?? '',
 			title: r.title,
 			author: r.author ?? '',
 			isbn: r.isbn ?? '',
@@ -431,14 +452,21 @@ export default function IntercampusPage() {
 						<div className="space-y-4">
 							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Requester</h3>
 							<div className="space-y-2">
-								<Label className="text-sm font-semibold">Member ID <span className="text-red-500">*</span></Label>
+								<Label className="text-sm font-semibold">Member Card Number <span className="text-red-500">*</span></Label>
 								<Input
-									value={form.member_id}
-									onChange={e => setForm(f => ({ ...f, member_id: e.target.value }))}
-									className={errors.member_id ? 'border-red-500' : ''}
-									placeholder="Member UUID or member number"
+									value={form.member_number}
+									onChange={e => setForm(f => ({ ...f, member_number: e.target.value }))}
+									className={errors.member_number ? 'border-red-500' : ''}
+									placeholder="Roll number, application id or staff id"
+									disabled={!!editingItem}
 								/>
-								{errors.member_id && <p className="text-xs text-red-500">{errors.member_id}</p>}
+								{errors.member_number
+									? <p className="text-xs text-red-500">{errors.member_number}</p>
+									: <p className="text-xs text-muted-foreground">
+										{editingItem
+											? 'The requester cannot be changed after the request is made'
+											: 'Checked against MyJKKN — only an Active member of this college can ask'}
+									</p>}
 							</div>
 						</div>
 

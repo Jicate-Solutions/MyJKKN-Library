@@ -42,7 +42,7 @@ export async function GET(request: Request) {
 			.from('lib_lending_transactions')
 			.select(`
 				*,
-				member:lib_members(id, member_number, display_name, member_category, email, phone)
+				member:lib_borrowers(id, member_number, display_name, member_category, email, phone)
 			`)
 			.eq('item_id', item.id)
 			.in('transaction_status', ['active', 'overdue'])

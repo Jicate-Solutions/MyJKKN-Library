@@ -3,6 +3,7 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
 import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
+import { setDelinquent } from '@/lib/library/borrower'
 
 export async function POST(request: Request) {
 	try {
@@ -67,9 +68,9 @@ export async function POST(request: Request) {
 
 		// 3. Create late charge if overdue and not waiving upfront
 		if (overdueDays > 0) {
-			// Get charge rate from member category
+			// Get charge rate from the borrower's category
 			const { data: member } = await supabase
-				.from('lib_members')
+				.from('lib_borrowers')
 				.select('member_category')
 				.eq('id', transaction.member_id)
 				.single()
@@ -114,12 +115,9 @@ export async function POST(request: Request) {
 			} else {
 				chargeRecord = charge
 
-				// Mark member delinquent if there is a net payable amount
+				// Mark the borrower as owing if there is a net payable amount
 				if (netPayable > 0) {
-					await supabase
-						.from('lib_members')
-						.update({ is_delinquent: true, updated_at: new Date().toISOString() })
-						.eq('id', transaction.member_id)
+					await setDelinquent(supabase, transaction.member_id, true)
 				}
 			}
 		}

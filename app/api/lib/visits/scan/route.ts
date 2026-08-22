@@ -6,6 +6,10 @@
  * reliably: two quick scans of the same card would both read the same loaded
  * list, both conclude "not inside yet", and open two entries for one person.
  *
+ * Who the card belongs to comes from MyJKKN. Walking into the library is not
+ * borrowing, so a gate scan writes no borrower row — the visit carries the
+ * person itself: their MyJKKN id, and the name and number the register prints.
+ *
  * Times are the library's own clock, never the server's.
  */
 
@@ -13,7 +17,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { istToday, istTimeNow } from '@/lib/library/ist-clock'
-import { fetchLearnerPhoto } from '@/lib/library/learner-photo'
+import { personByCardNumber, myjkknConfigured } from '@/lib/library/myjkkn-directory'
 
 export async function POST(request: Request) {
 	try {
@@ -31,35 +35,24 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Scan a card or type an ID' }, { status: 400 })
 		}
 
+		if (!myjkknConfigured()) {
+			return NextResponse.json(
+				{ error: 'MyJKKN is not configured on this server, so cards cannot be checked' },
+				{ status: 503 }
+			)
+		}
+
+		// Only this college's Active people. Someone from another campus, or
+		// someone MyJKKN no longer has as active, simply is not found.
+		const person = await personByCardNumber(institutionId, barcode)
+		if (!person) {
+			return NextResponse.json(
+				{ error: `No member found for "${barcode}"` },
+				{ status: 404 }
+			)
+		}
+
 		const supabase = getSupabaseServer()
-
-		// The member number is the card number. Matched whole and case
-		// insensitively, so a typed `pb23001` finds what a scanner finds.
-		const { data: members, error: memberError } = await supabase
-			.from('lib_members')
-			.select('id, member_number, display_name, member_category, learner_id, is_active')
-			.eq('institution_id', institutionId)
-			.ilike('member_number', barcode)
-			.limit(1)
-
-		if (memberError) {
-			console.error('Error looking up member at the gate:', memberError)
-			return NextResponse.json({ error: 'Lookup failed' }, { status: 500 })
-		}
-
-		const member = members?.[0]
-		if (!member) {
-			return NextResponse.json({ error: `No member found for "${barcode}"` }, { status: 404 })
-		}
-
-		// The face is wanted at the same time as the name, and MyJKKN is slower
-		// than our own tables, so it is asked for now and collected at the end —
-		// it travels alongside the visit being written instead of after it. The
-		// reader never throws, so nothing here can fail because of it.
-		const photoRequest = member.member_category === 'learner'
-			? fetchLearnerPhoto(member.learner_id)
-			: Promise.resolve(null)
-
 		const visitDate = istToday()
 		const now = istTimeNow()
 
@@ -68,7 +61,7 @@ export async function POST(request: Request) {
 			.from('lib_member_visits')
 			.select('id, entry_time')
 			.eq('institution_id', institutionId)
-			.eq('member_id', member.id)
+			.eq('myjkkn_id', person.myjkkn_id)
 			.eq('visit_date', visitDate)
 			.not('entry_time', 'is', null)
 			.is('exit_time', null)
@@ -110,7 +103,13 @@ export async function POST(request: Request) {
 				.from('lib_member_visits')
 				.insert({
 					institution_id: institutionId,
-					member_id: member.id,
+					// No borrower row: nobody becomes a borrower by walking in.
+					member_id: null,
+					myjkkn_id: person.myjkkn_id,
+					person_kind: person.person_kind,
+					member_number: person.member_number,
+					display_name: person.display_name,
+					member_category: person.member_category,
 					visit_date: visitDate,
 					entry_time: now,
 					visit_purpose: body.visit_purpose ?? null,
@@ -120,6 +119,13 @@ export async function POST(request: Request) {
 
 			if (openError || !opened) {
 				console.error('Error recording entry:', openError)
+				// The gate columns arrive with the 2026-08-22 database update
+				if (openError?.code === '42703') {
+					return NextResponse.json(
+						{ error: 'This library\'s database has not been updated for the new member system yet — please run the pending database update' },
+						{ status: 400 }
+					)
+				}
 				return NextResponse.json({ error: 'Could not record the entry' }, { status: 500 })
 			}
 
@@ -127,22 +133,23 @@ export async function POST(request: Request) {
 			entryTime = opened.entry_time
 		}
 
-		// Collected only now the visit is safely recorded — the face on the
-		// screen is worth waiting a moment for, but never worth losing an entry
-		// over. By this point it has usually already arrived.
-		const photo = await photoRequest
-
 		return NextResponse.json({
 			direction,
 			at: direction === 'out' ? now : entryTime,
 			visit: { id: visitId, visit_date: visitDate, entry_time: entryTime, exit_time: direction === 'out' ? now : null },
 			member: {
-				id: member.id,
-				member_number: member.member_number,
-				display_name: member.display_name,
-				member_category: member.member_category,
-				is_active: member.is_active,
-				photo_url: photo,
+				// MyJKKN's id. There is no membership row to point at any more.
+				id: person.myjkkn_id,
+				myjkkn_id: person.myjkkn_id,
+				person_kind: person.person_kind,
+				member_number: person.member_number,
+				display_name: person.display_name,
+				member_category: person.member_category,
+				role_label: person.role_label,
+				// Only Active people are ever found above
+				is_active: true,
+				// Already in hand from the same read — no second trip for a face
+				photo_url: person.photo_url,
 			},
 		})
 	} catch (error) {

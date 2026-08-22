@@ -14,10 +14,20 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { getCaller, hasAtLeast, resolveInstitutionScope } from '@/lib/auth/server-access'
 import { logActivity, type ActivityAction } from '@/lib/library/activity-log'
+import { staffById } from '@/lib/auth/myjkkn-staff'
 
 /** One page of the console. Capped so a single request can never pull the table. */
 const MAX_LIMIT = 500
 const DEFAULT_LIMIT = 50
+
+/**
+ * How many names one page may ask MyJKKN for.
+ *
+ * Only lines written before the name was stored on the line itself need this,
+ * and a page of them is the work of a few librarians — but a page of five
+ * hundred old lines from a busy year should still not open five hundred calls.
+ */
+const MAX_NAME_LOOKUPS = 25
 
 /**
  * What the console's table and its Excel export actually show.
@@ -28,9 +38,10 @@ const DEFAULT_LIMIT = 50
  * wire for a table that renders six plain fields. One line's full story is read
  * by id when its detail sheet is opened: /api/lib/logs/[id].
  *
- * The one thing kept from `metadata` is the email, because the table falls back
- * to it to name someone whose account has since been deleted. Pulled out by the
- * database as a single string rather than by shipping the whole blob.
+ * The two things kept from `metadata` are the name and the email, because that
+ * is how a line names who did it — there is no user table to join to, and a line
+ * from years ago must still say whose it was. Pulled out by the database as two
+ * strings rather than by shipping the whole blob.
  */
 const LIST_COLUMNS = `
 	id,
@@ -44,7 +55,8 @@ const LIST_COLUMNS = `
 	status,
 	error_message,
 	created_at,
-	user_email:metadata->>user_email
+	user_email:metadata->>user_email,
+	user_name:metadata->>user_name
 `
 
 export async function POST(request: Request) {
@@ -83,7 +95,7 @@ export async function GET(request: Request) {
 		if (!caller) {
 			return NextResponse.json({ error: error ?? 'Not signed in' }, { status: status ?? 401 })
 		}
-		if (!hasAtLeast(caller, 'admin')) {
+		if (!hasAtLeast(caller, 'library_admin')) {
 			return NextResponse.json(
 				{ error: 'Only an admin can read the activity log' },
 				{ status: 403 }
@@ -151,23 +163,39 @@ export async function GET(request: Request) {
 
 		const rows = data ?? []
 
-		// Names are resolved now rather than joined: the log deliberately holds no
-		// foreign key, so it survives a user being deleted
-		const userIds = [...new Set(rows.map(r => r.user_id).filter(Boolean))] as string[]
+		// Who did it, resolved rather than joined: the log deliberately holds no
+		// foreign key, so it survives the person leaving.
+		//
+		// Lines written from 22-08-2026 carry the name and email in their own
+		// metadata, so they need nothing at all. Older lines hold only an id, and
+		// those are asked of MyJKKN — a page's worth of lines is the work of a
+		// handful of librarians, so this is a few cached lookups, not one per row.
 		const byUser = new Map<string, { id: string; email: string; full_name: string | null }>()
 
-		if (userIds.length > 0) {
-			const { data: users } = await supabase
-				.from('users')
-				.select('id, email, full_name')
-				.in('id', userIds)
-			for (const user of users ?? []) byUser.set(user.id, user)
+		const unnamed = [...new Set(
+			rows.filter(r => r.user_id && !r.user_name && !r.user_email).map(r => r.user_id)
+		)] as string[]
+
+		if (unnamed.length > 0) {
+			const found = await Promise.all(unnamed.slice(0, MAX_NAME_LOOKUPS).map(id => staffById(id)))
+			for (const person of found) {
+				if (person) byUser.set(person.id, { id: person.id, email: person.email, full_name: person.fullName })
+			}
+		}
+
+		/** The name to show against one line, wherever it can be found. */
+		const actorOf = (row: Record<string, any>) => {
+			if (!row.user_id) return null
+			if (row.user_name || row.user_email) {
+				return { id: row.user_id, email: row.user_email ?? '', full_name: row.user_name ?? null }
+			}
+			return byUser.get(row.user_id) ?? null
 		}
 
 		const total = count ?? 0
 
 		return NextResponse.json({
-			data: rows.map(row => ({ ...row, users: row.user_id ? byUser.get(row.user_id) ?? null : null })),
+			data: rows.map(row => ({ ...row, users: actorOf(row) })),
 			pagination: {
 				page,
 				limit,

@@ -35,7 +35,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -229,14 +229,20 @@ export default function RegistryPage() {
 			// The Pharmacy register has a filled column for each of these, so the
 			// form asks for the same. Only Sub-Title, Call Number, Classification
 			// Number and Book Location are optional there.
-			if (!form.author.trim()) e.author = 'Author is required'
-			if (!form.edition.trim()) e.edition = 'Edition/Issue is required'
+			// Author, Edition/Issue and Price are a book's. A magazine or journal
+			// has an author per article, its issue numbers are recorded issue by
+			// issue under Periodicals, and what is paid is a year's subscription —
+			// so none of the three is asked for, or checked for, here.
+			if (usesBookOnlyFields(form.book_type)) {
+				if (!form.author.trim()) e.author = 'Author is required'
+				if (!form.edition.trim()) e.edition = 'Edition/Issue is required'
+				if (!form.price.trim()) e.price = 'Price is required'
+				else if (isNaN(Number(form.price)) || Number(form.price) < 0) e.price = 'Price must be a number'
+			}
 			if (!form.publisher_name.trim()) e.publisher_name = 'Publisher name is required'
 			if (!form.publisher_place.trim()) e.publisher_place = 'Place is required'
 			if (!form.publication_year.trim()) e.publication_year = 'Year is required'
 			else if (!/^\d{4}$/.test(form.publication_year.trim())) e.publication_year = 'Year must be four digits'
-			if (!form.price.trim()) e.price = 'Price is required'
-			else if (isNaN(Number(form.price)) || Number(form.price) < 0) e.price = 'Price must be a number'
 			// Only books are issued an ISBN. A magazine, journal or project report
 			// has none, and forcing the field would only get a made-up number
 			// typed in — which would then group two unrelated titles into one.
@@ -288,19 +294,25 @@ export default function RegistryPage() {
 			// a shelf full of books all labelled Others is no better than blank.
 			const bookType = book_type === OTHER_BOOK_TYPE ? book_type_other.trim() : book_type
 
+			// A magazine or journal is not asked for these three, so nothing is
+			// sent for them either — an empty string saved against a title reads
+			// later as "somebody left it blank" rather than "this does not apply".
+			const bookOnly = usesBookOnlyFields(book_type)
+
 			const payload = {
 				...bibliographic,
 				institution_id: instId ?? '',
 				publication_year: form.publication_year ? Number(form.publication_year) : undefined,
 				pages: form.pages ? Number(form.pages) : undefined,
-				price: form.price ? Number(form.price) : undefined,
+				edition: bookOnly ? (form.edition || undefined) : undefined,
+				price: bookOnly && form.price ? Number(form.price) : undefined,
 				subtitle: form.subtitle || undefined,
 				currency_code: 'INR',
 				// The register speaks in book types; the rest of the system reads
 				// resource_format, so the chosen type sets both.
 				...(requiresAccession
 					? {
-						author,
+						author: bookOnly ? author : undefined,
 						department,
 						book_location,
 						book_type: bookType,

@@ -13,7 +13,7 @@ const OVERDUE_COLUMNS = `
 	due_date,
 	renewal_count,
 	transaction_status,
-	member:lib_members(id, member_number, display_name, email, phone, member_category),
+	member:lib_borrowers(id, member_number, display_name, email, phone, member_category),
 	item:lib_items(
 		id,
 		accession_number,

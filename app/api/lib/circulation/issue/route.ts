@@ -1,8 +1,24 @@
+/**
+ * Issuing a book: POST /api/lib/circulation/issue
+ *
+ * This is the one place a person becomes a borrower. Everyone Active in MyJKKN
+ * is already a member of their college's library — nobody is enrolled — so
+ * until a book actually leaves the building there is nothing about them in this
+ * database at all. The row in `lib_borrowers` is written here, and here only,
+ * and only once every check below has passed: a refused issue leaves no trace
+ * of a borrower who never borrowed.
+ *
+ * Body: { institution_id, item_id, myjkkn_id, person_kind }
+ * `member_id` is still accepted, for a borrower this library already holds.
+ */
+
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { guardWrite } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
 import { logActivity } from '@/lib/library/activity-log'
+import { personByMyjkknId, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
+import { ensureBorrower, findBorrower, borrowerById } from '@/lib/library/borrower'
 
 export async function POST(request: Request) {
 	try {
@@ -12,7 +28,11 @@ export async function POST(request: Request) {
 		if (!guard.ok) return guard.response
 		body.institution_id = guard.institutionId
 
-		const { institution_id, item_id, member_id, issued_by } = body
+		const { institution_id, item_id, issued_by } = body
+		const myjkknId: string | null = body.myjkkn_id ?? null
+		const personKind: 'learner' | 'facilitator' | null =
+			body.person_kind === 'learner' || body.person_kind === 'facilitator' ? body.person_kind : null
+		const memberId: string | null = body.member_id ?? null
 
 		if (!institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -20,46 +40,80 @@ export async function POST(request: Request) {
 		if (!item_id) {
 			return NextResponse.json({ error: 'item_id is required' }, { status: 400 })
 		}
-		if (!member_id) {
-			return NextResponse.json({ error: 'member_id is required' }, { status: 400 })
+		if (!myjkknId && !memberId) {
+			return NextResponse.json({ error: 'Scan the member card first' }, { status: 400 })
+		}
+		if (myjkknId && !personKind) {
+			return NextResponse.json({ error: 'person_kind must be learner or facilitator' }, { status: 400 })
 		}
 
-		// The book, the member, the campus rules and how much they are already
-		// holding are four separate questions that do not depend on each other's
-		// answers, so they are asked together. They used to be asked one after
-		// another, and the desk waited through all four before the first word of
-		// a refusal appeared. The checks below still run in their old order, so
-		// which complaint comes back first has not changed.
+		// Who is borrowing.
+		//
+		// Checked against MyJKKN again rather than trusted from the request: the
+		// desk sends back what it found, and a book must not leave the building
+		// on the strength of a value somebody could type. This also refuses a
+		// person from another campus outright — `personByMyjkknId` only ever
+		// looks inside this college's own MyJKKN institutions.
+		let person: DirectoryPerson | null = null
+		let borrower = null
+
+		if (myjkknId && personKind) {
+			person = await personByMyjkknId(institution_id, personKind, myjkknId)
+			if (!person) {
+				return NextResponse.json(
+					{ error: 'This person is not an Active member of this college in MyJKKN' },
+					{ status: 404 }
+				)
+			}
+			borrower = await findBorrower(supabase, institution_id, person.myjkkn_id)
+		} else if (memberId) {
+			// A borrower this library already holds — including one carried over
+			// from before members came from MyJKKN.
+			borrower = await borrowerById(supabase, institution_id, memberId)
+			if (!borrower) {
+				return NextResponse.json({ error: 'Member not found' }, { status: 404 })
+			}
+		}
+
+		const memberCategory = person?.member_category ?? borrower?.member_category ?? ''
+
+		// The book, the campus rules and how much they are already holding are
+		// three separate questions that do not depend on each other's answers,
+		// so they are asked together rather than one after another with the desk
+		// waiting through all three.
 		const [
 			{ data: item, error: itemError },
-			{ data: member, error: memberError },
 			settings,
 			{ count: booksHeld },
+			{ data: categoryConfig },
 		] = await Promise.all([
 			supabase
 				.from('lib_items')
 				.select('id, status, is_lendable, institution_id, catalogue_record_id')
 				.eq('id', item_id)
 				.single(),
-			supabase
-				.from('lib_members')
-				.select('id, is_active, is_delinquent, member_category, institution_id')
-				.eq('id', member_id)
-				.single(),
 			getInstitutionSettings(institution_id),
 			// The limit is on books held at once, not books borrowed over the
 			// year — returning one frees the slot immediately. An overdue book is
 			// still in the member's hands, so it must count: checking only
 			// 'active' would let someone holding three overdue books take three
-			// more.
+			// more. Somebody with no borrower row has never held anything.
+			borrower
+				? supabase
+					.from('lib_lending_transactions')
+					.select('*', { count: 'exact', head: true })
+					.eq('member_id', borrower.id)
+					.in('transaction_status', ['active', 'overdue'])
+				: Promise.resolve({ count: 0 }),
 			supabase
-				.from('lib_lending_transactions')
-				.select('*', { count: 'exact', head: true })
-				.eq('member_id', member_id)
-				.in('transaction_status', ['active', 'overdue']),
+				.from('lib_member_categories')
+				.select('loan_period_days, max_items_allowed')
+				.eq('institution_id', institution_id)
+				.eq('category_code', memberCategory)
+				.maybeSingle(),
 		])
 
-		// 1. Check item exists and is available
+		// 1. The book is here, and lendable
 		if (itemError || !item) {
 			return NextResponse.json({ error: 'Item not found' }, { status: 404 })
 		}
@@ -76,37 +130,22 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Item is marked as non-lendable (reference only)' }, { status: 400 })
 		}
 
-		// 2. Check member is active and not delinquent
-		if (memberError || !member) {
-			return NextResponse.json({ error: 'Member not found' }, { status: 404 })
-		}
-		if (member.institution_id !== institution_id) {
-			return NextResponse.json({ error: 'Member does not belong to this institution' }, { status: 400 })
-		}
-		if (!member.is_active) {
-			return NextResponse.json({ error: 'Member account is inactive' }, { status: 400 })
-		}
+		// 2. Nothing outstanding stands in the way.
+		//
 		// Whether unpaid charges stop a member borrowing is a campus decision:
 		// Pharmacy lets them take the next book while a fine is still open.
-		if (member.is_delinquent && settings.block_borrowing_when_fine_due) {
+		// Somebody who has never borrowed owes nothing, by definition.
+		if (borrower?.is_delinquent && settings.block_borrowing_when_fine_due) {
 			return NextResponse.json(
 				{ error: 'Member has unpaid late charges — please clear outstanding charges before lending' },
 				{ status: 400 }
 			)
 		}
 
-		// 3. Get loan_period_days from member category config
-		const { data: categoryConfig } = await supabase
-			.from('lib_member_categories')
-			.select('loan_period_days, max_items_allowed')
-			.eq('institution_id', institution_id)
-			.eq('category_code', member.member_category)
-			.maybeSingle()
-
+		// 3. They are not already at their limit
 		const loanPeriodDays = body.loan_period_days ?? categoryConfig?.loan_period_days ?? 14
 		const maxItemsAllowed = categoryConfig?.max_items_allowed ?? 3
 
-		// 4. Against the count taken above, alongside the rest
 		if ((booksHeld ?? 0) >= maxItemsAllowed) {
 			return NextResponse.json(
 				{
@@ -116,19 +155,35 @@ export async function POST(request: Request) {
 			)
 		}
 
-		// 5. Compute due_date
+		// 4. Everything has passed, so this person is now a borrower.
+		//
+		// Written no earlier than this on purpose: a refused issue must not
+		// leave a borrower row behind for somebody who never took a book.
+		if (!borrower && person) {
+			const created = await ensureBorrower(supabase, institution_id, person)
+			if (!created.borrower) {
+				return NextResponse.json({ error: created.error ?? 'Could not record who is borrowing' }, { status: 500 })
+			}
+			borrower = created.borrower
+		}
+
+		if (!borrower) {
+			return NextResponse.json({ error: 'Could not identify who is borrowing' }, { status: 400 })
+		}
+
+		// 5. Due date
 		const today = new Date()
 		const dueDate = new Date(today)
 		dueDate.setDate(today.getDate() + loanPeriodDays)
 		const dueDateStr = dueDate.toISOString().split('T')[0]
 
-		// 6. Create lending transaction
+		// 6. The loan itself
 		const { data: transaction, error: txError } = await supabase
 			.from('lib_lending_transactions')
 			.insert({
 				institution_id,
 				item_id,
-				member_id,
+				member_id: borrower.id,
 				issued_at: new Date().toISOString(),
 				due_date: dueDateStr,
 				issued_by: issued_by ?? null,
@@ -143,7 +198,7 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Failed to create lending transaction' }, { status: 500 })
 		}
 
-		// 7. Update item status to on_loan
+		// 7. The copy is now out
 		const { error: itemUpdateError } = await supabase
 			.from('lib_items')
 			.update({ status: 'on_loan', updated_at: new Date().toISOString() })
@@ -164,7 +219,7 @@ export async function POST(request: Request) {
 				checked_out_at: new Date().toISOString(),
 				updated_at: new Date().toISOString(),
 			})
-			.eq('member_id', member_id)
+			.eq('member_id', borrower.id)
 			.eq('item_id', item_id)
 			.eq('hold_status', 'available')
 
@@ -174,7 +229,13 @@ export async function POST(request: Request) {
 			resource_id: '/circulation',
 			institution_id,
 			new_values: transaction,
-			metadata: { member_id, item_id, due_date: dueDateStr, loan_period_days: loanPeriodDays },
+			metadata: {
+				member_id: borrower.id,
+				member_number: borrower.member_number,
+				item_id,
+				due_date: dueDateStr,
+				loan_period_days: loanPeriodDays,
+			},
 		})
 
 		return NextResponse.json(
@@ -183,6 +244,7 @@ export async function POST(request: Request) {
 				transaction,
 				due_date: dueDateStr,
 				loan_period_days: loanPeriodDays,
+				borrower_id: borrower.id,
 			},
 			{ status: 201 }
 		)

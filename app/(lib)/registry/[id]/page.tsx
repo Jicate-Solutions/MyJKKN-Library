@@ -236,7 +236,11 @@ export default function CatalogueDetailPage() {
 					<div className="flex flex-wrap gap-1.5 mt-1.5">
 						<Badge variant="secondary" className="capitalize text-xs">{record.resource_format}</Badge>
 						{record.is_reference_only && <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">Reference Only</Badge>}
+						{/* Whichever number this material carries: a book has an ISBN,
+						    a magazine or journal an ISSN. Showing only the ISBN left a
+						    periodical with no number on screen at all. */}
 						{record.isbn && <Badge variant="outline" className="text-xs">ISBN: {record.isbn}</Badge>}
+						{record.issn && <Badge variant="outline" className="text-xs">ISSN: {record.issn}</Badge>}
 					</div>
 				</div>
 			</div>

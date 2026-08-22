@@ -15,7 +15,7 @@ import {
 	CheckCircle, RefreshCw, RotateCcw, User, BookOpen, AlertTriangle, ArrowRightLeft,
 } from 'lucide-react'
 import { issueItem, returnItem, renewItem } from '@/services/library/lib-circulation-service'
-import type { LibLendingTransaction, LibMember, LibItem } from '@/types/lib'
+import type { LibLendingTransaction, LibMemberCategory, LibItem } from '@/types/lib'
 
 /** One book currently in a member's hands, as the desk lookup returns it. */
 interface MemberLoan {
@@ -34,7 +34,27 @@ interface MemberLoan {
 	estimated_charge: number
 }
 
-interface DeskMember extends LibMember {
+/**
+ * Who the desk lookup found.
+ *
+ * A member is an Active learner or staff member in MyJKKN, so the identity
+ * that matters is `myjkkn_id` — `id` is the borrower row, and that is null
+ * until this person takes their first book. Issuing is therefore made against
+ * MyJKKN's id, and the borrower row is created by the issue itself.
+ */
+interface DeskMember {
+	id: string | null
+	myjkkn_id: string
+	person_kind: 'learner' | 'facilitator'
+	member_number: string
+	member_category: LibMemberCategory
+	display_name: string
+	email: string | null
+	phone: string | null
+	photo_url: string | null
+	role_label: string
+	is_delinquent: boolean
+	has_borrowed: boolean
 	items_on_loan?: number
 	max_items_allowed?: number | null
 	outstanding_charges?: number
@@ -222,7 +242,14 @@ function IssueTab({ institutionId }: { institutionId: string | null }) {
 		if (!member || !item) return
 		try {
 			setIssuing(true)
-			const tx = await issueItem({ member_id: member.id, item_id: item.id, institution_id: institutionId ?? '' })
+			// Issued against who they are in MyJKKN, not against a membership
+			// row — the first book they take is what creates that row.
+			const tx = await issueItem({
+				myjkkn_id: member.myjkkn_id,
+				person_kind: member.person_kind,
+				item_id: item.id,
+				institution_id: institutionId ?? '',
+			})
 			setResult(tx)
 			toast({ title: '✅ Item issued successfully', className: 'bg-green-50 border-green-200 text-green-800' })
 		} catch (err) {

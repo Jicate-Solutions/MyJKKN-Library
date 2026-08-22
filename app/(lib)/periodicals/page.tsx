@@ -173,7 +173,9 @@ export default function PeriodicalSubscriptionsPage() {
 	const paginated = effectivePerPage > 0
 		? filtered.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
 		: filtered
-	const colCount = mustSelectInstitution ? 9 : 8
+	// S.No, Title, Supplier, Frequency, Fiscal Year, Issues, Status, Detail, menu
+	// — plus Institution when every college is being shown at once
+	const colCount = mustSelectInstitution ? 10 : 9
 
 	const resetForm = () => {
 		setForm(defaultForm)
@@ -370,6 +372,7 @@ export default function PeriodicalSubscriptionsPage() {
 								<Table>
 									<TableHeader className="sticky top-0 z-10 bg-muted/50">
 										<TableRow>
+											<TableHead className="text-xs font-semibold w-14">S.No</TableHead>
 											<TableHead className="text-xs font-semibold">Title</TableHead>
 											<TableHead className="text-xs font-semibold">Supplier</TableHead>
 											<TableHead className="text-xs font-semibold">Frequency</TableHead>
@@ -401,8 +404,12 @@ export default function PeriodicalSubscriptionsPage() {
 													</div>
 												</TableCell>
 											</TableRow>
-										) : paginated.map(s => (
+										) : paginated.map((s, index) => (
 											<TableRow key={s.id} className="hover:bg-muted/50">
+												{/* Counted across pages, so page 2 starts at 11 and not at 1 */}
+												<TableCell className="text-sm text-muted-foreground tabular-nums">
+													{(currentPage - 1) * effectivePerPage + index + 1}
+												</TableCell>
 												<TableCell className="max-w-[200px]">
 													<div className="truncate text-sm font-medium">
 														{s.catalogue_record?.title ?? s.catalogue_record_id}

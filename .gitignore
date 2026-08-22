@@ -60,6 +60,10 @@ certificates
 /today-work/
 # performance audit output — internal timings, one file a day, repo is public
 /page-performace-report/
+# MyJKKN API reference dumps — these are real learner records: Aadhaar numbers,
+# dates of birth, parents' names, mobile numbers and home addresses. This repo is
+# public. They are working notes and must never leave this machine.
+/Reference_Documents/
 # requirement docs — hold the librarian's name and internal notes, repo is public
 /LIBRARY-REQUIREMENTS.md
 /LIBRARY-REQUIREMENTS-PHARMACY.md

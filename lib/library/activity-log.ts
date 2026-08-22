@@ -136,7 +136,16 @@ export async function resolveSession(
  * Keyed by token AND by who is being viewed as, because the same token means a
  * different person the moment a super admin views as somebody else.
  */
-const actorCache = new Map<string, { userId: string | null; sessionId: string | null; at: number }>()
+/** Who did something, and enough about them that the log can name them later. */
+export interface Actor {
+	/** MyJKKN's staff id. */
+	userId: string | null
+	sessionId: string | null
+	email: string | null
+	fullName: string | null
+}
+
+const actorCache = new Map<string, Actor & { at: number }>()
 const ACTOR_TTL_MS = 5 * 60 * 1000
 /** A ceiling, so a long-running server cannot grow this map forever. */
 const ACTOR_CACHE_MAX = 500
@@ -153,33 +162,39 @@ function cacheKey(token: string, viewAs: string | null): string {
  * same way every guarded route resolves them, from the token itself, so the
  * name in the log matches the name the rest of the system would use.
  */
-export async function resolveActor(request: Request): Promise<{ userId: string | null; sessionId: string | null }> {
+export async function resolveActor(request: Request): Promise<Actor> {
 	const token = readAccessToken(request)
-	if (!token) return { userId: null, sessionId: null }
+	if (!token) return { userId: null, sessionId: null, email: null, fullName: null }
 
 	const key = cacheKey(token, readCookie(request, IMPERSONATION_COOKIE))
 	const cached = actorCache.get(key)
 	if (cached && Date.now() - cached.at < ACTOR_TTL_MS) {
-		return { userId: cached.userId, sessionId: cached.sessionId }
+		return { userId: cached.userId, sessionId: cached.sessionId, email: cached.email, fullName: cached.fullName }
 	}
 
-	const bySession = await resolveSession(token)
-	let { userId } = bySession
-	const { sessionId } = bySession
+	// The session row is still worth reading — it is the only thing that knows
+	// the session id — but WHO did it comes from the caller, because the id the
+	// rest of this project files everything under is their MyJKKN staff id, and
+	// `sessions.user_id` is from the user table that is no longer consulted.
+	const { sessionId } = await resolveSession(token)
 
-	if (!userId) {
-		try {
-			const { caller } = await getCaller(request)
-			userId = caller?.userId ?? null
-		} catch {
-			// Leave it unnamed rather than lose the line
-		}
+	let userId: string | null = null
+	let email: string | null = null
+	let fullName: string | null = null
+
+	try {
+		const { caller } = await getCaller(request)
+		userId = caller?.userId ?? null
+		email = caller?.email ?? null
+		fullName = caller?.fullName ?? null
+	} catch {
+		// Leave it unnamed rather than lose the line
 	}
 
 	if (actorCache.size >= ACTOR_CACHE_MAX) actorCache.clear()
-	actorCache.set(key, { userId, sessionId, at: Date.now() })
+	actorCache.set(key, { userId, sessionId, email, fullName, at: Date.now() })
 
-	return { userId, sessionId }
+	return { userId, sessionId, email, fullName }
 }
 
 /**
@@ -208,7 +223,7 @@ export function readIpAddress(request: Request): string | null {
  */
 export async function logActivity(request: Request, entry: ActivityEntry): Promise<void> {
 	try {
-		const { userId, sessionId } = await resolveActor(request)
+		const { userId, sessionId, email, fullName } = await resolveActor(request)
 
 		const supabase = getSupabaseServer()
 		const { error } = await supabase.from('lib_activity_log').insert({
@@ -224,7 +239,15 @@ export async function logActivity(request: Request, entry: ActivityEntry): Promi
 			user_agent: request.headers.get('user-agent'),
 			status: entry.status ?? 'success',
 			error_message: entry.error_message ?? null,
-			metadata: entry.metadata ?? {},
+			// The name is written INTO the line rather than looked up when it is
+			// read. There is no user table to join to any more, and a line from
+			// two years ago must still say who did it even after that person has
+			// left MyJKKN entirely.
+			metadata: {
+				...(entry.metadata ?? {}),
+				...(email ? { user_email: email } : {}),
+				...(fullName ? { user_name: fullName } : {}),
+			},
 		})
 
 		if (error) throw error

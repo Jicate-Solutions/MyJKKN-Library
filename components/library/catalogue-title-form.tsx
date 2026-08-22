@@ -24,6 +24,7 @@ import {
 	isbnRequiredFor,
 	usesIssn,
 	usesSupplier,
+	usesBookOnlyFields,
 	departmentRequiredFor,
 } from '@/lib/library/catalogue-options'
 
@@ -90,6 +91,8 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	const departments = departmentsFor(institutionCode)
 	const departmentRequired = departmentRequiredFor(form.book_type)
 	const showSupplier = showCopySection && usesSupplier(form.book_type)
+	/** Author, Edition/Issue and Price belong to a book, not to a periodical. */
+	const bookOnly = usesBookOnlyFields(form.book_type)
 
 	const field = (name: keyof TitleFormFields, label: string, required: boolean, extra?: {
 		placeholder?: string
@@ -162,11 +165,15 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 			<Section title="Book Details">
 				{field('title', 'Title', true, { placeholder: 'Full title as printed on the book' })}
 				{field('subtitle', 'Sub-Title', false, { placeholder: 'Optional' })}
-				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					{field('author', 'Author', true, { placeholder: 'e.g. C.K. Kokate' })}
-					{/* A book has an edition, a magazine or journal has an issue */}
-					{field('edition', 'Edition/Issue', true, { placeholder: 'e.g. 3rd — or Vol 12 Issue 4' })}
-				</div>
+				{/* Not asked of a magazine or journal: it has an author per article
+				    rather than one of its own, and its issue numbers are recorded
+				    issue by issue under Periodicals, not once against the title. */}
+				{bookOnly && (
+					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+						{field('author', 'Author', true, { placeholder: 'e.g. C.K. Kokate' })}
+						{field('edition', 'Edition/Issue', true, { placeholder: 'e.g. 3rd' })}
+					</div>
+				)}
 			</Section>
 
 			<Section title="What It Is">
@@ -234,9 +241,12 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 					</div>
 				)}
 
+				{/* What a library pays for a magazine or journal is a year's
+				    subscription, recorded against that subscription — not a cover
+				    price against the title, so it is not asked for here. */}
 				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 					{field('publication_year', 'Year', true, { placeholder: '2024' })}
-					{field('price', 'Price (INR)', true, { type: 'number', placeholder: '0.00' })}
+					{bookOnly && field('price', 'Price (INR)', true, { type: 'number', placeholder: '0.00' })}
 				</div>
 
 				{/* A book carries an ISBN, a magazine or journal carries an ISSN, and

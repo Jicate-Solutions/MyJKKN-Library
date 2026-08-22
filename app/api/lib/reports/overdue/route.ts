@@ -32,7 +32,7 @@ export async function GET(request: Request) {
 				transaction_status,
 				member_id,
 				item_id,
-				member:lib_members(
+				member:lib_borrowers(
 					id,
 					member_number,
 					display_name,

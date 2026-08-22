@@ -51,7 +51,7 @@ export async function POST(request: Request) {
 		// after the other with the desk watching.
 		const [{ data: member }, { data: item }] = await Promise.all([
 			supabase
-				.from('lib_members')
+				.from('lib_borrowers')
 				.select('member_category, is_delinquent')
 				.eq('id', transaction.member_id)
 				.single(),

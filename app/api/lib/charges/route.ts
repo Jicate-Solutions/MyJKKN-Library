@@ -19,7 +19,7 @@ const CHARGE_COLUMNS = `
 	payment_reference,
 	waiver_reason,
 	created_at,
-	member:lib_members(id, member_number, display_name, member_category),
+	member:lib_borrowers(id, member_number, display_name, member_category),
 	transaction:lib_lending_transactions(
 		id,
 		issued_at,

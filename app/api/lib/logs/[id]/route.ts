@@ -24,7 +24,7 @@ export async function GET(
 		if (!caller) {
 			return NextResponse.json({ error: error ?? 'Not signed in' }, { status: status ?? 401 })
 		}
-		if (!hasAtLeast(caller, 'admin')) {
+		if (!hasAtLeast(caller, 'library_admin')) {
 			return NextResponse.json(
 				{ error: 'Only an admin can read the activity log' },
 				{ status: 403 }
@@ -51,7 +51,7 @@ export async function GET(
 		// admin who oversees every college — reads any of them. The list is
 		// filtered the same way, so this only refuses an id typed by hand.
 		const scope = resolveInstitutionScope(caller, row.institution_id)
-		const readsEveryCollege = caller.isSuperAdmin || (caller.role === 'admin' && !caller.institutionId)
+		const readsEveryCollege = caller.isSuperAdmin || (caller.role === 'library_admin' && !caller.institutionId)
 		if (scope.error || (!readsEveryCollege && row.institution_id !== caller.institutionId)) {
 			return NextResponse.json({ error: 'Not found' }, { status: 404 })
 		}

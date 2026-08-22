@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 		if (!caller) {
 			return NextResponse.json({ error: error ?? 'Not signed in' }, { status: status ?? 401 })
 		}
-		if (!hasAtLeast(caller, 'admin')) {
+		if (!hasAtLeast(caller, 'library_admin')) {
 			return NextResponse.json({ error: 'Only an admin can read the activity log' }, { status: 403 })
 		}
 

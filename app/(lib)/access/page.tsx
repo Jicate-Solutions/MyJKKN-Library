@@ -1,11 +1,16 @@
 'use client'
 
 /**
- * Staff Access — who may sign in to the library system and what they may do.
+ * Staff Access — who may sign in to the library system.
+ *
+ * A report, not a control panel. Roles belong to MyJKKN now: this project keeps
+ * none of its own, so nothing can be granted or taken away here. The screen
+ * lists the MyJKKN staff who hold one of the four library roles, so a super
+ * admin can see at a glance who has access and to which college, and go and fix
+ * it in MyJKKN if that is wrong.
  *
  * Super admin only. The API enforces the same rule, so typing this URL gains
- * nothing — an admin who tries lands on the "access restricted" card below.
- * Running a library, even all of them, does not include deciding who else may.
+ * nothing — anyone else lands on the "access restricted" card below.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
@@ -15,7 +20,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -25,7 +29,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ShieldCheck, Search, RefreshCw, Lock, Users, Eye } from 'lucide-react'
 
-type LibraryRole = 'super_admin' | 'admin' | 'librarian' | 'assistant_librarian' | 'member'
+type LibraryRole = 'super_admin' | 'library_admin' | 'librarian' | 'assistant_librarian' | 'member'
 
 interface StaffUser {
 	id: string
@@ -42,7 +46,7 @@ interface StaffUser {
 
 const ROLE_LABEL: Record<string, string> = {
 	super_admin: 'Super Admin',
-	admin: 'Admin',
+	library_admin: 'Library Admin',
 	librarian: 'Librarian',
 	assistant_librarian: 'Assistant Librarian',
 	member: 'Member',
@@ -50,7 +54,7 @@ const ROLE_LABEL: Record<string, string> = {
 
 const ROLE_STYLE: Record<string, string> = {
 	super_admin: 'bg-brand-green-100 text-brand-green-800 border-brand-green-300 dark:bg-brand-green-900/30 dark:text-brand-green-300 dark:border-brand-green-700',
-	admin: 'bg-brand-green-50 text-brand-green-700 border-brand-green-200 dark:bg-brand-green-900/20 dark:text-brand-green-400 dark:border-brand-green-800',
+	library_admin: 'bg-brand-green-50 text-brand-green-700 border-brand-green-200 dark:bg-brand-green-900/20 dark:text-brand-green-400 dark:border-brand-green-800',
 	librarian: 'bg-brand-yellow-100 text-brand-yellow-900 border-brand-yellow-300 dark:bg-brand-yellow-900/20 dark:text-brand-yellow-500 dark:border-brand-yellow-800',
 	assistant_librarian: 'bg-muted text-muted-foreground border-border',
 	member: 'bg-muted text-muted-foreground border-border',
@@ -66,13 +70,10 @@ export default function StaffAccessPage() {
 	const { toast } = useToast()
 
 	const [users, setUsers] = useState<StaffUser[]>([])
-	const [assignableRoles, setAssignableRoles] = useState<LibraryRole[]>([])
 	const [callerRole, setCallerRole] = useState<string | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [forbidden, setForbidden] = useState<string | null>(null)
 	const [search, setSearch] = useState('')
-	const [pending, setPending] = useState<{ user: StaffUser; role: LibraryRole } | null>(null)
-	const [saving, setSaving] = useState(false)
 	const [viewingAs, setViewingAs] = useState<StaffUser | null>(null)
 	const [switching, setSwitching] = useState(false)
 
@@ -95,7 +96,6 @@ export default function StaffAccessPage() {
 			}
 
 			setUsers(json.data || [])
-			setAssignableRoles(json.assignable_roles || [])
 			setCallerRole(json.caller?.role ?? null)
 		} catch {
 			toast({ title: 'Failed to load staff accounts', variant: 'destructive' })
@@ -118,37 +118,9 @@ export default function StaffAccessPage() {
 
 	const counts = useMemo(() => ({
 		total: users.length,
-		staff: users.filter(u => ['super_admin', 'admin', 'librarian', 'assistant_librarian'].includes(u.effective_role)).length,
+		staff: users.filter(u => ['super_admin', 'library_admin', 'librarian', 'assistant_librarian'].includes(u.effective_role)).length,
 	}), [users])
 
-	const handleAssign = async () => {
-		if (!pending) return
-		try {
-			setSaving(true)
-			const res = await fetch('/api/lib/access/users', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ user_id: pending.user.id, role: pending.role }),
-			})
-			const json = await res.json()
-			if (!res.ok) throw new Error(json.error || 'Failed to assign role')
-
-			toast({
-				title: '✅ Role updated',
-				description: json.message,
-				className: 'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300',
-			})
-			setPending(null)
-			fetchData()
-		} catch (err) {
-			toast({
-				title: '❌ ' + (err instanceof Error ? err.message : 'Failed to assign role'),
-				variant: 'destructive',
-			})
-		} finally {
-			setSaving(false)
-		}
-	}
 
 	const startViewingAs = async () => {
 		if (!viewingAs) return
@@ -225,6 +197,7 @@ export default function StaffAccessPage() {
 								<p className="text-xs text-muted-foreground">
 									{filtered.length} account{filtered.length !== 1 ? 's' : ''}
 									{callerRole && ` · you are ${ROLE_LABEL[callerRole] ?? callerRole}`}
+									{' · '}roles are set in MyJKKN
 								</p>
 							</div>
 							<Tooltip>
@@ -257,8 +230,8 @@ export default function StaffAccessPage() {
 										<TableRow>
 											<TableHead className="text-xs font-semibold">Name</TableHead>
 											<TableHead className="text-xs font-semibold">Email</TableHead>
-											<TableHead className="text-xs font-semibold">Current role</TableHead>
-											<TableHead className="text-xs font-semibold w-[220px]">Change role to</TableHead>
+											<TableHead className="text-xs font-semibold">Library role</TableHead>
+											<TableHead className="text-xs font-semibold w-[260px]">Their MyJKKN roles</TableHead>
 											{callerRole === 'super_admin' && (
 												<TableHead className="text-xs font-semibold w-[110px]">View as</TableHead>
 											)}
@@ -309,28 +282,24 @@ export default function StaffAccessPage() {
 															{ROLE_LABEL[u.effective_role] ?? u.effective_role}
 														</Badge>
 													</TableCell>
+													{/* Read-only. Roles are MyJKKN's — this screen reports
+													    who holds one, and the change is made there. */}
 													<TableCell>
-														{locked ? (
-															<span className="text-xs text-muted-foreground flex items-center gap-1.5">
-																<Lock className="h-3 w-3" /> Super admin only
-															</span>
-														) : (
-															<Select
-																value=""
-																onValueChange={v => setPending({ user: u, role: v as LibraryRole })}
-															>
-																<SelectTrigger className="h-8 text-sm">
-																	<SelectValue placeholder="Select role..." />
-																</SelectTrigger>
-																<SelectContent>
-																	{assignableRoles.map(r => (
-																		<SelectItem key={r} value={r} disabled={r === u.effective_role}>
-																			{ROLE_LABEL[r]}{r === u.effective_role ? ' (current)' : ''}
-																		</SelectItem>
-																	))}
-																</SelectContent>
-															</Select>
-														)}
+														<div className="flex flex-wrap gap-1">
+															{(u.assigned_roles ?? []).length === 0 ? (
+																<span className="text-xs text-muted-foreground">—</span>
+															) : (
+																u.assigned_roles.map(r => (
+																	<Badge
+																		key={r}
+																		variant="outline"
+																		className="text-[10px] font-normal text-muted-foreground"
+																	>
+																		{ROLE_LABEL[r] ?? r}
+																	</Badge>
+																))
+															)}
+														</div>
 													</TableCell>
 													{callerRole === 'super_admin' && (
 														<TableCell>
@@ -388,33 +357,6 @@ export default function StaffAccessPage() {
 				</AlertDialogContent>
 			</AlertDialog>
 
-			<AlertDialog open={!!pending} onOpenChange={o => { if (!o && !saving) setPending(null) }}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle className="font-heading">Change role</AlertDialogTitle>
-						<AlertDialogDescription>
-							{pending && (
-								<>
-									Give <strong>{pending.user.full_name ?? pending.user.email}</strong> the role{' '}
-									<strong>{ROLE_LABEL[pending.role]}</strong>?
-									{pending.role === 'super_admin' && ' This grants full access to every institution.'}
-									{' '}This replaces their current role.
-								</>
-							)}
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={e => { e.preventDefault(); handleAssign() }}
-							disabled={saving}
-							className="bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
-						>
-							{saving ? 'Saving...' : 'Confirm'}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 		</div>
 	)
 }

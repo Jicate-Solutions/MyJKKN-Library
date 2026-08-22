@@ -213,6 +213,26 @@ export function usesSupplier(bookType: string): boolean {
 }
 
 /**
+ * Author, Edition/Issue and Price — a book's fields, and not a periodical's.
+ *
+ * The catalogue registers a magazine or journal once, as a title. What arrives
+ * afterwards is issues: Volume 12 Issue 4, then Issue 5, and after a year's
+ * worth they are bound into one volume. All of that is recorded per issue under
+ * Periodicals, where it belongs — so asking for an issue number here would mean
+ * writing one number onto a title that will hold a hundred of them.
+ *
+ * Author goes with it: a journal has no single author, it has an author per
+ * article. So does Price: what is paid is a year's subscription, recorded
+ * against that subscription, not a cover price against the title.
+ */
+export function usesBookOnlyFields(bookType: string): boolean {
+	return !isPeriodicalType(bookType)
+}
+
+/** The same three, by column key, for the sheet that has to leave them out. */
+export const BOOK_ONLY_KEYS: string[] = ['author', 'edition', 'price']
+
+/**
  * Every book on the shelf is owned by a department. A magazine or journal sits
  * in the reading room for the whole college, so the register does not make the
  * librarian invent a department for it.
@@ -385,6 +405,10 @@ export function templateColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
 	for (const column of TEMPLATE_COLUMNS) {
 		// No ISBN on a periodical, and the department is not forced
 		if (column.key === 'isbn') continue
+		// Nor an author, an issue number or a price — see usesBookOnlyFields. A
+		// sheet carrying them would ask the librarian to write one issue number
+		// against a title that will go on to hold a hundred.
+		if (BOOK_ONLY_KEYS.includes(column.key)) continue
 		if (column.key === 'issn') {
 			columns.push({ ...column, note: 'The ISSN printed on the issue. Leave blank if it does not print one.' })
 			continue
@@ -418,16 +442,17 @@ export function templateColumnsForBookType(bookType: string): TemplateColumn[] {
 /** The filled example row for each sheet, so the shape is seen and not guessed. */
 export function templateExampleFor(kind: CatalogueSheetKind): Record<string, string> {
 	if (kind === 'books') return TEMPLATE_EXAMPLE
+	// No author, issue number or price: those columns are not on this sheet
 	return {
 		...TEMPLATE_EXAMPLE,
+		author: '',
+		edition: '',
+		price: '',
 		title: 'Dental Clinics of North America',
 		subtitle: '',
-		author: 'Elsevier Editorial Board',
-		edition: 'Vol 68 Issue 3',
 		publisher_name: 'Elsevier',
 		publisher_place: 'Philadelphia',
 		publication_year: '2024',
-		price: '5000',
 		isbn: '',
 		issn: '0011-8532',
 		book_type: 'Journals',
