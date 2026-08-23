@@ -32,6 +32,7 @@ import {
 	SlidersHorizontal,
 	Layers,
 	ScrollText,
+	UserCog,
 } from 'lucide-react'
 import {
 	Sidebar,
@@ -54,6 +55,7 @@ import {
 import { ChevronRight } from 'lucide-react'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { isMemberAllowedPage } from '@/lib/auth/member-access'
+import { canOpenPath } from '@/lib/auth/role-pages'
 import { FavouritesSidebarSection } from '@/components/library/favourites-sidebar-section'
 
 export interface NavItem {
@@ -128,6 +130,7 @@ export const navGroups: NavGroup[] = [
 			{ title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
 			{ title: 'Activity Log', url: '/activity-log', icon: ScrollText },
 			{ title: 'Staff Access', url: '/access', icon: ShieldCheck },
+			{ title: 'Role Management', url: '/roles', icon: UserCog },
 		],
 	},
 ]
@@ -135,23 +138,30 @@ export const navGroups: NavGroup[] = [
 /**
  * What this person may be shown.
  *
- * A member sees Circulation and OPAC Search only, and handing out roles is a
- * super admin job — the pages and their APIs refuse everyone else anyway, so
- * this only keeps the menu honest. Shared with the mobile bottom navbar so the
- * two menus can never disagree about who sees what.
+ * Two rules, both decided elsewhere so the menu cannot drift from them:
+ *
+ *   * `canOpenPath` — the pages this role may open. Some are fixed in code
+ *     (Staff Access and Role Management are a super admin's; the Activity Log
+ *     stops at library_admin because its API does), and the rest are whatever a
+ *     super admin has ticked on the Role Management screen.
+ *   * `isMemberAllowedPage` — a member sees Circulation and OPAC only.
+ *
+ * `allowedPages` is null while the answer is still being fetched, and for a
+ * super admin, who is never restricted.
+ *
+ * This only keeps the menu honest; the pages and their APIs refuse the same
+ * people on their own. Shared with the mobile bottom navbar so the two menus
+ * can never disagree about who sees what.
  */
-export function visibleNavGroups(role: string | null | undefined, isMember: boolean): NavGroup[] {
-	// The activity log carries names, addresses and whole records, so it stops
-	// at the two roles that answer for the library rather than run its desk
-	const readsTheLog = role === 'super_admin' || role === 'library_admin'
-
+export function visibleNavGroups(
+	role: string | null | undefined,
+	isMember: boolean,
+	allowedPages: string[] | null = null
+): NavGroup[] {
 	const withoutRestricted = navGroups
 		.map(group => ({
 			...group,
-			items: group.items.filter(i =>
-				(i.url !== '/access' || role === 'super_admin') &&
-				(i.url !== '/activity-log' || readsTheLog)
-			),
+			items: group.items.filter(i => canOpenPath(role, i.url, allowedPages)),
 		}))
 		.filter(group => group.items.length > 0)
 
@@ -165,9 +175,12 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const pathname = usePathname()
 	const { toggleSidebar, state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
-	const { isMember, role } = useLibraryRole()
+	const { isMember, role, pages } = useLibraryRole()
 
-	const visibleGroups = React.useMemo(() => visibleNavGroups(role, isMember), [isMember, role])
+	const visibleGroups = React.useMemo(
+		() => visibleNavGroups(role, isMember, pages),
+		[isMember, role, pages]
+	)
 
 	const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>(() => {
 		const init: Record<string, boolean> = {}

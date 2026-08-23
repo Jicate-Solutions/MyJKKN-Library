@@ -4,6 +4,7 @@ import { AppHeader } from '@/components/layout/app-header'
 import { InstitutionProvider } from '@/context/institution-context'
 import { RequireAuth } from '@/components/common/protected-route'
 import { LibraryAccessGuard } from '@/components/layout/library-access-guard'
+import { RolePageGuard } from '@/components/layout/role-page-guard'
 import { ImpersonationBanner } from '@/components/layout/impersonation-banner'
 import { BottomNavbar } from '@/components/BottomNav'
 import { ActivityTracker } from '@/components/library/activity-tracker'
@@ -27,7 +28,9 @@ export default function LibLayout({ children }: { children: React.ReactNode }) {
 						<main className="flex flex-1 flex-col overflow-hidden">
 							<div className="flex flex-1 flex-col gap-4 p-4 pb-24 md:pb-4 overflow-hidden">
 								<ImpersonationBanner />
-								{children}
+								{/* A page hidden from the menu must not open by typing
+								    its address either */}
+								<RolePageGuard>{children}</RolePageGuard>
 							</div>
 						</main>
 					</SidebarInset>

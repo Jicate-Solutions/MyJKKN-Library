@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/sidebar'
 import { usePageFavourites, type FavouritePage } from '@/hooks/use-page-favourites'
 import { useLibraryRole } from '@/hooks/use-library-role'
+import { canOpenPath } from '@/lib/auth/role-pages'
 import { iconForPath } from '@/lib/library/favourite-pages'
 import { cn } from '@/lib/utils'
 
@@ -49,8 +50,14 @@ export function FavouritesSidebarSection() {
 	const { state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
 	const [isOpen, setIsOpen] = useState(true)
-	const { favourites, remove, togglePin, reorder } = usePageFavourites()
-	const { impersonating } = useLibraryRole()
+	const { favourites: starred, remove, togglePin, reorder } = usePageFavourites()
+	const { impersonating, role, pages } = useLibraryRole()
+
+	// A page starred before a super admin took it away from this role is still
+	// stored against them, and it must not sit here as a working link. Hidden
+	// rather than deleted: the star comes back the moment the page does.
+	const favourites = starred.filter(f => canOpenPath(role, f.path, pages))
+	const hiddenPaths = starred.filter(f => !canOpenPath(role, f.path, pages)).map(f => f.path)
 
 	const sensors = useSensors(
 		// A few pixels of travel before a drag starts, so a plain click still
@@ -104,8 +111,10 @@ export function FavouritesSidebarSection() {
 		const newIndex = favourites.findIndex(f => f.path === over.id)
 		if (oldIndex === -1 || newIndex === -1) return
 
+		// The hidden ones are kept on the end rather than dropped — reordering
+		// what you can see must not quietly forget what you cannot
 		const moved = arrayMove(favourites, oldIndex, newIndex)
-		void reorder(moved.map(f => f.path))
+		void reorder([...moved.map(f => f.path), ...hiddenPaths])
 	}
 
 	const header = (

@@ -64,7 +64,7 @@ function isActivePath(pathname: string, href: string): boolean {
 export function BottomNavbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { role, isMember, isReady } = useLibraryRole();
+  const { role, isMember, isReady, pages } = useLibraryRole();
   const hasHydrated = useBottomNavHydration();
 
   const {
@@ -79,7 +79,7 @@ export function BottomNavbar() {
 
   // The sidebar's own groups, filtered by the sidebar's own rule
   const allNavGroups = useMemo((): BottomNavGroup[] => {
-    return visibleNavGroups(role, isMember).map(group => ({
+    return visibleNavGroups(role, isMember, pages).map(group => ({
       id: groupId(group.label),
       groupLabel: group.label,
       icon: GROUP_ICONS[group.label] ?? Layers,
@@ -90,7 +90,7 @@ export function BottomNavbar() {
         active: isActivePath(pathname, item.url)
       }))
     }));
-  }, [role, isMember, pathname]);
+  }, [role, isMember, pages, pathname]);
 
   const primaryNavGroups = useMemo(() => allNavGroups.slice(0, PRIMARY_COUNT), [allNavGroups]);
   const moreNavGroups = useMemo(() => allNavGroups.slice(PRIMARY_COUNT), [allNavGroups]);

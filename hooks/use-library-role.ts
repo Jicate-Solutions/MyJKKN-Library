@@ -39,6 +39,12 @@ export interface LibraryIdentity {
 	myjkknRoles: string[]
 	/** The roles that would have opened the library. */
 	libraryRoles: string[]
+	/**
+	 * The pages their role may open, as a super admin set them on Role
+	 * Management. null means unrestricted — a super admin, or the answer not
+	 * being in yet.
+	 */
+	pages: string[] | null
 }
 
 const EMPTY: LibraryIdentity = {
@@ -50,6 +56,7 @@ const EMPTY: LibraryIdentity = {
 	reason: null,
 	myjkknRoles: [],
 	libraryRoles: [],
+	pages: null,
 }
 
 let cached: LibraryIdentity | null = null
@@ -76,6 +83,7 @@ async function loadIdentity(): Promise<LibraryIdentity> {
 						reason: json.reason ?? null,
 						myjkknRoles: json.myjkkn_roles ?? [],
 						libraryRoles: json.library_roles ?? [],
+						pages: Array.isArray(json.pages) ? json.pages : null,
 					}
 					: EMPTY
 				return cached
@@ -115,6 +123,7 @@ export function useLibraryRole() {
 		reason: identity.reason,
 		myjkknRoles: identity.myjkknRoles,
 		libraryRoles: identity.libraryRoles,
+		pages: identity.pages,
 		/**
 		 * Kept so the sidebar's signature does not have to change. Nobody is a
 		 * `member` any more — borrowers do not sign in — so this is always false.

@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { identifyCaller } from '@/lib/auth/server-access'
 import { LIBRARY_ROLES } from '@/lib/auth/library-roles'
+import { allowedPagesFor } from '@/lib/auth/role-page-store'
 
 export async function GET(request: Request) {
 	const identity = await identifyCaller(request)
@@ -35,6 +36,7 @@ export async function GET(request: Request) {
 				myjkkn_roles: identity.myjkknRoles ?? [],
 				library_roles: LIBRARY_ROLES,
 				role: null,
+				pages: [],
 			},
 			{ status: notSignedIn ? (identity.status ?? 401) : 200 }
 		)
@@ -42,9 +44,16 @@ export async function GET(request: Request) {
 
 	const { caller } = identity
 
+	// Which pages their role may open, as a super admin has set it. null means a
+	// super admin, who is never restricted. Answered here rather than from a
+	// route of its own because the menu, the page guard and the mobile navbar all
+	// want it and this reply is already fetched once per tab and cached.
+	const pages = await allowedPagesFor(caller.role)
+
 	return NextResponse.json({
 		allowed: true,
 		role: caller.role,
+		pages,
 		myjkkn_roles: caller.myjkknRoles,
 		library_roles: LIBRARY_ROLES,
 		institution_id: caller.institutionId,
