@@ -336,12 +336,21 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 		}
 	}
 
-	for (const myjkknId of myjkknIds) {
+	// A college can map to more than one MyJKKN institution, and those rolls have
+	// nothing to do with each other — read one after another, the second waited
+	// out the whole of the first for no reason. Fetched together, the build costs
+	// the slowest roll rather than the sum of them.
+	const rolls = await Promise.all(myjkknIds.map(async myjkknId => {
 		const [learners, staff] = await Promise.all([
 			myjkknPages(`/api-management/learners/profiles?institution_id=${encodeURIComponent(myjkknId)}`),
 			myjkknPages(`/api-management/staff?institution_id=${encodeURIComponent(myjkknId)}`),
 		])
+		return { learners, staff }
+	}))
 
+	// Recorded in the order the ids were given, not the order they came back in,
+	// so which person keeps a shared card number does not depend on the network.
+	for (const { learners, staff } of rolls) {
 		for (const row of learners) {
 			if (!learnerIsActive(row) || !belongsHere(row, myjkknIds)) continue
 			const person = learnerToPerson(row, institutionId, programNames)

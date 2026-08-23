@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { guardCollection, guardWrite, guardRecord, guardRecordRow } from '@/lib/auth/api-guard'
+
+/** The subscription as the detail page draws it, joins and all. */
+const DETAIL_COLUMNS = `
+	*,
+	catalogue_record:lib_catalogue_records(id, title, issn, resource_format, publisher_name),
+	supplier:lib_suppliers(id, supplier_code, supplier_name, contact_person, email),
+	budget_head:lib_budget_heads(id, budget_head_code, budget_head_name, fiscal_year)
+`
 
 export async function GET(
 	request: Request,
@@ -8,30 +16,19 @@ export async function GET(
 ) {
 	try {
 		const { id } = await params
-		const guard = await guardRecord(request, 'lib_periodical_subscriptions', id)
+
+		// The guard reads the row this route was going to read anyway. It used to
+		// fetch `institution_id` to check scope and then the route fetched the same
+		// row again in full — two queries against one row on every detail load.
+		const guard = await guardRecordRow<{ institution_id: string | null }>(
+			request,
+			'lib_periodical_subscriptions',
+			id,
+			DETAIL_COLUMNS
+		)
 		if (!guard.ok) return guard.response
-		const supabase = getSupabaseServer()
 
-		const { data, error } = await supabase
-			.from('lib_periodical_subscriptions')
-			.select(`
-				*,
-				catalogue_record:lib_catalogue_records(id, title, issn, resource_format, publisher_name),
-				supplier:lib_suppliers(id, supplier_code, supplier_name, contact_person, email),
-				budget_head:lib_budget_heads(id, budget_head_code, budget_head_name, fiscal_year)
-			`)
-			.eq('id', id)
-			.single()
-
-		if (error) {
-			if (error.code === 'PGRST116') {
-				return NextResponse.json({ error: 'Subscription not found' }, { status: 404 })
-			}
-			console.error('Error fetching subscription:', error)
-			return NextResponse.json({ error: 'Failed to fetch subscription' }, { status: 500 })
-		}
-
-		return NextResponse.json(data)
+		return NextResponse.json(guard.row)
 	} catch (error) {
 		console.error('Unexpected error fetching subscription:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

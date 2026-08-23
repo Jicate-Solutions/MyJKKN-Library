@@ -240,14 +240,58 @@ export async function staffById(staffId: string): Promise<MyjkknStaff | null> {
 }
 
 /**
+ * How long the whole-organisation roster is held.
+ *
+ * Staff join and leave a handful of times a year, so a minute of staleness is
+ * invisible — while the walk itself is the most expensive read in the app.
+ */
+const ALL_STAFF_TTL_MS = 60_000
+
+let allStaffCache: { people: MyjkknStaff[]; expiresAt: number } | null = null
+let allStaffInFlight: Promise<MyjkknStaff[]> | null = null
+
+/** Drops the cached roster, for when a change must be seen at once. */
+export function invalidateAllStaff(): void {
+	allStaffCache = null
+}
+
+/**
  * Every staff member MyJKKN has, across every campus.
  *
  * Only used by the Staff Access screen, which lists who holds a library role.
- * Not cached here — that screen is opened rarely and by one person.
+ *
+ * Cached for a minute, because "opened rarely and by one person" turned out to
+ * be the wrong reading: the screen has a Refresh button, and every press walked
+ * the entire organisation's roster again, page by page, to re-derive the same
+ * short list. Simultaneous callers share one walk rather than starting their
+ * own — the pattern already used for `staffById` above.
  */
 export async function allStaff(): Promise<MyjkknStaff[]> {
 	if (!MYJKKN_API_KEY) return []
 
+	if (allStaffCache && allStaffCache.expiresAt > Date.now()) return allStaffCache.people
+	if (allStaffInFlight) return allStaffInFlight
+
+	const work = walkAllStaff()
+		.then(people => {
+			allStaffCache = { people, expiresAt: Date.now() + ALL_STAFF_TTL_MS }
+			return people
+		})
+		.finally(() => { allStaffInFlight = null })
+
+	allStaffInFlight = work
+	return work
+}
+
+/**
+ * The walk itself.
+ *
+ * Kept sequential on purpose: MyJKKN's paging gives no total up front, so the
+ * only way to know a page was the last is to read it and find it short. Asking
+ * for pages that may not exist would trade one slow call for several wasted
+ * ones.
+ */
+async function walkAllStaff(): Promise<MyjkknStaff[]> {
 	const people: MyjkknStaff[] = []
 	const seen = new Set<string>()
 

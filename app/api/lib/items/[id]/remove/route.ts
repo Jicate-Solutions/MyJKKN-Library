@@ -22,7 +22,14 @@
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardRecord } from '@/lib/auth/api-guard'
+import { guardRecordRow } from '@/lib/auth/api-guard'
+
+interface ItemRow {
+	id: string
+	institution_id: string | null
+	accession_number: string
+	catalogue_record_id: string | null
+}
 
 export async function DELETE(
 	request: Request,
@@ -30,20 +37,20 @@ export async function DELETE(
 ) {
 	try {
 		const { id } = await params
-		const guard = await guardRecord(request, 'lib_items', id)
+
+		// The guard reads the copy this route needs anyway — it used to fetch
+		// `institution_id` to check scope and then the route fetched the same row
+		// again for its accession number, two queries against one row.
+		const guard = await guardRecordRow<ItemRow>(
+			request,
+			'lib_items',
+			id,
+			'id, institution_id, accession_number, catalogue_record_id'
+		)
 		if (!guard.ok) return guard.response
 
 		const supabase = getSupabaseServer()
-
-		const { data: item } = await supabase
-			.from('lib_items')
-			.select('id, accession_number, catalogue_record_id')
-			.eq('id', id)
-			.maybeSingle()
-
-		if (!item) {
-			return NextResponse.json({ error: 'That copy is no longer in the register' }, { status: 404 })
-		}
+		const item = guard.row
 
 		const { data: loans } = await supabase
 			.from('lib_lending_transactions')

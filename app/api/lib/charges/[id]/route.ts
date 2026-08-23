@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
-import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
+import { guardCollection, guardWrite, guardRecord, guardRecordRow } from '@/lib/auth/api-guard'
 import { setDelinquent } from '@/lib/library/borrower'
+
+/** Every field this route reads off the charge it is about to update. */
+interface ChargeRow {
+	id: string
+	institution_id: string | null
+	payment_status: string
+	total_charge: number
+	net_payable: number
+	member_id: string
+}
 
 export async function PUT(
 	request: Request,
@@ -9,7 +19,11 @@ export async function PUT(
 ) {
 	try {
 		const { id } = await params
-		const guard = await guardRecord(request, 'lib_late_charges', id)
+
+		// The guard reads the charge this route needs anyway. It used to select
+		// `institution_id` to check scope and then the route selected the same row
+		// again in full — two queries against one row per payment or waiver.
+		const guard = await guardRecordRow<ChargeRow>(request, 'lib_late_charges', id, '*')
 		if (!guard.ok) return guard.response
 		const supabase = getSupabaseServer()
 		const body = await request.json()
@@ -23,16 +37,7 @@ export async function PUT(
 			)
 		}
 
-		// Fetch existing charge to check current state
-		const { data: existing, error: fetchError } = await supabase
-			.from('lib_late_charges')
-			.select('*')
-			.eq('id', id)
-			.single()
-
-		if (fetchError || !existing) {
-			return NextResponse.json({ error: 'Charge not found' }, { status: 404 })
-		}
+		const existing = guard.row
 
 		if (existing.payment_status === 'paid') {
 			return NextResponse.json({ error: 'Charge has already been paid' }, { status: 400 })

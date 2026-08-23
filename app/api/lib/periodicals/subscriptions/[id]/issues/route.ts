@@ -14,14 +14,15 @@ export async function GET(
 		const supabase = getSupabaseServer()
 
 		// A weekly running for twenty years is past a thousand issues, and a
-		// single request stops there without saying so
+		// single request stops there without saying so.
+		//
+		// The accessioned copy used to be joined on too, but the issues table
+		// reads none of it — every column it draws is already on the issue row —
+		// so that join was fetched and discarded on every load.
 		const { data, error } = await fetchAllRows<Record<string, any>>(range =>
 			supabase
 				.from('lib_periodical_issues')
-				.select(`
-					*,
-					item:lib_items(id, accession_number, barcode, status)
-				`)
+				.select('*')
 				.eq('subscription_id', id)
 				.order('issue_date', { ascending: false })
 				.range(range.from, range.to)

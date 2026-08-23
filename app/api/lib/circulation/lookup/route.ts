@@ -38,17 +38,23 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: `No book found for "${barcode}"` }, { status: 404 })
 		}
 
-		const { data: loan } = await supabase
-			.from('lib_lending_transactions')
-			.select(`
-				*,
-				member:lib_borrowers(id, member_number, display_name, member_category, email, phone)
-			`)
-			.eq('item_id', item.id)
-			.in('transaction_status', ['active', 'overdue'])
-			.order('issued_at', { ascending: false })
-			.limit(1)
-			.maybeSingle()
+		// The open loan needs the item's id and the rules need its institution, but
+		// neither needs the other — read one after the other, the settings waited
+		// out the loan query for nothing. The scanner is at a desk with a queue.
+		const [{ data: loan }, settings] = await Promise.all([
+			supabase
+				.from('lib_lending_transactions')
+				.select(`
+					*,
+					member:lib_borrowers(id, member_number, display_name, member_category, email, phone)
+				`)
+				.eq('item_id', item.id)
+				.in('transaction_status', ['active', 'overdue'])
+				.order('issued_at', { ascending: false })
+				.limit(1)
+				.maybeSingle(),
+			getInstitutionSettings(item.institution_id),
+		])
 
 		if (!loan) {
 			return NextResponse.json(
@@ -57,7 +63,6 @@ export async function GET(request: Request) {
 			)
 		}
 
-		const settings = await getInstitutionSettings(item.institution_id)
 		const today = new Date().toISOString().split('T')[0]
 		const lateDays = chargeableLateDays(loan.due_date, today, settings)
 
