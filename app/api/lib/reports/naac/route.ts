@@ -3,6 +3,37 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { collegeMemberCount } from '@/lib/library/myjkkn-directory'
 
+/**
+ * The colleges "All Institutions" covers.
+ *
+ * Only those with MyJKKN institutions mapped against them: a row with none has
+ * no learners or staff behind it, so counting it would add nothing but would
+ * make an empty college look like a real one with no books.
+ */
+async function everyLibraryInstitution(
+	supabase: ReturnType<typeof getSupabaseServer>
+): Promise<string[]> {
+	const { data } = await supabase
+		.from('institutions')
+		.select('id, myjkkn_institution_ids')
+
+	return (data || [])
+		.filter(row => Array.isArray(row.myjkkn_institution_ids) && row.myjkkn_institution_ids.length > 0)
+		.map(row => row.id as string)
+}
+
+/**
+ * Active members across the colleges asked for.
+ *
+ * Each college's roll is read on its own — they are separate MyJKKN
+ * institutions — but all of them together, not one after another, and each is
+ * already cached for five minutes with simultaneous callers sharing one read.
+ */
+async function memberCountFor(institutionIds: string[]): Promise<number> {
+	const counts = await Promise.all(institutionIds.map(id => collegeMemberCount(id)))
+	return counts.reduce((total, count) => total + count, 0)
+}
+
 export async function GET(request: Request) {
 	try {
 		const supabase = getSupabaseServer()
@@ -13,8 +44,21 @@ export async function GET(request: Request) {
 		const institutionId = guard.institutionId
 		const academicYear = searchParams.get('academic_year') // e.g., "2024-25"
 
-		if (!institutionId) {
-			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
+		// A null institution is "All Institutions", and only a caller who spans
+		// campuses can reach it — `guardCollection` has already refused anyone
+		// else. It used to be rejected outright, which left the dashboard with
+		// nothing to show whenever no single college was chosen.
+		//
+		// Both cases become one list of colleges, so every query below keeps the
+		// same shape: `.in('institution_id', …)` over one id or over all seven.
+		// The whole-organisation figures are therefore the same eight queries a
+		// single college costs, not eight per college.
+		const institutionIds = institutionId
+			? [institutionId]
+			: await everyLibraryInstitution(supabase)
+
+		if (institutionIds.length === 0) {
+			return NextResponse.json({ error: 'No institutions are set up yet' }, { status: 400 })
 		}
 
 		// Determine academic year date range
@@ -53,14 +97,14 @@ export async function GET(request: Request) {
 			supabase
 				.from('lib_items')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('is_active', true),
 
 			// Volumes added this academic year
 			supabase
 				.from('lib_items')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('is_active', true)
 				.gte('accession_date', yearStartDate)
 				.lte('accession_date', yearEndDate),
@@ -69,14 +113,14 @@ export async function GET(request: Request) {
 			supabase
 				.from('lib_catalogue_records')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('is_active', true),
 
 			// 4.2.5 — Annual footfall
 			supabase
 				.from('lib_member_visits')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.gte('visit_date', yearStartDate)
 				.lte('visit_date', yearEndDate),
 
@@ -84,7 +128,7 @@ export async function GET(request: Request) {
 			supabase
 				.from('lib_digital_resources')
 				.select('id, resource_type, resource_title, annual_cost')
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('is_active', true)
 				.eq('naac_reportable', true),
 
@@ -92,14 +136,14 @@ export async function GET(request: Request) {
 			supabase
 				.from('lib_periodical_subscriptions')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('subscription_status', 'active'),
 
 			// Lending transactions this academic year
 			supabase
 				.from('lib_lending_transactions')
 				.select('*', { count: 'exact', head: true })
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.gte('issued_at', `${yearStartDate}T00:00:00Z`)
 				.lte('issued_at', `${yearEndDate}T23:59:59Z`),
 
@@ -107,7 +151,7 @@ export async function GET(request: Request) {
 			supabase
 				.from('lib_budget_heads')
 				.select('resource_type, spent_amount, allocated_amount')
-				.eq('institution_id', institutionId)
+				.in('institution_id', institutionIds)
 				.eq('is_active', true),
 
 			// Total active members.
@@ -115,7 +159,7 @@ export async function GET(request: Request) {
 			// Read from MyJKKN, not from a roll of our own: every Active learner
 			// and staff member of this college is a member of its library, so
 			// that count IS the membership. Nobody is enrolled here to be counted.
-			collegeMemberCount(institutionId),
+			memberCountFor(institutionIds),
 		])
 
 		// Aggregate budget by resource type

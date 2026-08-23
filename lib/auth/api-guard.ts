@@ -121,7 +121,7 @@ export async function guardRecord(
 
 
 	// Spans every institution: a super admin, or a library admin overseeing all
-	if (caller.isSuperAdmin || (caller.role === 'library_admin' && !caller.institutionId)) {
+	if (caller.isSuperAdmin || caller.role === 'library_admin') {
 		noteIfImpersonated(caller, request, null)
 		return { ok: true, caller, institutionId: null }
 	}
@@ -187,7 +187,7 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 	const record = row as unknown as T
 
 	// Spans every institution: a super admin, or a library admin overseeing all
-	if (caller.isSuperAdmin || (caller.role === 'library_admin' && !caller.institutionId)) {
+	if (caller.isSuperAdmin || caller.role === 'library_admin') {
 		noteIfImpersonated(caller, request, null)
 		return { ok: true, caller, institutionId: null, row: record }
 	}

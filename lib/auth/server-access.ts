@@ -217,18 +217,23 @@ async function callerFromStaff(
 		}
 	}
 
-	// A super admin is not tied to one college. Nor is a library admin whose
-	// MyJKKN institution is not one of the seven libraries — that is the CEO's
-	// case, an overseer rather than a member of one campus.
-	const isSuperAdmin = role === 'super_admin'
-	const institutionId = isSuperAdmin
+	// Neither a super admin nor a library admin is tied to one college — both
+	// oversee all seven and switch between them.
+	//
+	// This ignores the college MyJKKN files them under, deliberately. The CEO is
+	// recorded against Engineering there, as everyone must be against something,
+	// and reading that as "the CEO runs the Engineering library" pinned them to
+	// one campus and took the switcher away. What MyJKKN's institution field
+	// means for these two roles is where the person sits, not what they run.
+	const spansEveryCollege = role === 'super_admin' || role === 'library_admin'
+	const institutionId = spansEveryCollege
 		? null
 		: await collegeForMyjkknInstitution(staff.myjkknInstitutionId)
 
 	// A librarian must belong to a college; without one there is nothing for
 	// them to run, and letting them through unscoped would show them every
 	// campus at once.
-	if (!institutionId && !isSuperAdmin && role !== 'library_admin') {
+	if (!institutionId && !spansEveryCollege) {
 		return {
 			ok: false,
 			reason: 'no_institution',
@@ -249,7 +254,7 @@ async function callerFromStaff(
 			role,
 			myjkknRoles: allRoleKeys,
 			institutionId,
-			isSuperAdmin,
+			isSuperAdmin: role === 'super_admin',
 			impersonatedBy: null,
 		},
 	}
@@ -452,10 +457,11 @@ export function resolveInstitutionScope(
 		return { institutionId: requestedInstitutionId }
 	}
 
-	// A library admin with no college attached oversees all of them — the CEO's
-	// case. Deliberately narrow: it reads every library but, unlike super_admin,
-	// it cannot open Staff Access or view as another user.
-	if (caller.role === 'library_admin' && !caller.institutionId) {
+	// A library admin oversees all seven and switches between them, exactly as a
+	// super admin does. Deliberately narrower in one respect: it reads every
+	// library but, unlike super_admin, it cannot open Staff Access or view as
+	// another user — running the libraries is not the same as deciding who may.
+	if (caller.role === 'library_admin') {
 		return { institutionId: requestedInstitutionId }
 	}
 

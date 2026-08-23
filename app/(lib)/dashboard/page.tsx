@@ -18,8 +18,12 @@ export default function LibDashboard() {
 	const [stats, setStats] = useState<LibNaacCriterion4Report | null>(null)
 	const [loading, setLoading] = useState(true)
 
+	// No institution means "All Institutions", which the report now answers with
+	// every college's figures added together — so this no longer waits for one to
+	// be chosen. It used to, which is why the whole dashboard sat empty for a
+	// super admin who had not picked a campus.
 	const fetchStats = useCallback(async () => {
-		if (!isReady || !institutionId) return
+		if (!isReady) return
 		try {
 			setLoading(true)
 			const url = appendToUrl('/api/lib/reports/naac')
@@ -32,7 +36,7 @@ export default function LibDashboard() {
 		} finally {
 			setLoading(false)
 		}
-	}, [isReady, institutionId, appendToUrl, toast])
+	}, [isReady, appendToUrl, toast])
 
 	useEffect(() => { fetchStats() }, [fetchStats])
 
@@ -49,13 +53,14 @@ export default function LibDashboard() {
 				</Button>
 			</div>
 
-			{/* Institution selection prompt for super_admin */}
+			{/* Says what the figures below cover, rather than refusing to show them */}
 			{isReady && mustSelectInstitution && (
 				<Card className="border-dashed border-2 bg-muted/30">
-					<CardContent className="p-6 text-center">
-						<Users className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-						<p className="text-sm font-medium">Select an institution to view dashboard statistics</p>
-						<p className="text-xs text-muted-foreground mt-1">Use the institution switcher in the sidebar to choose one</p>
+					<CardContent className="p-4 text-center">
+						<p className="text-sm font-medium">Showing every college together</p>
+						<p className="text-xs text-muted-foreground mt-1">
+							Pick one in the institution switcher to see it on its own
+						</p>
 					</CardContent>
 				</Card>
 			)}
