@@ -54,6 +54,12 @@ export interface CatalogueGroup {
  * A page added there but forgotten here is not a lockout — an unknown path is
  * allowed rather than refused (see `canOpenPath`) — it simply cannot be
  * configured until it is listed.
+ *
+ * Staff Access is the one entry with no menu item behind it, on purpose. It was
+ * taken out of the sidebar and is now reached by typing `/access`, but it stays
+ * listed here because that is what holds its lock: drop it from the catalogue
+ * and `canOpenPath` would find no page for the path, let anyone through the
+ * guard, and leave the API as the only thing refusing them.
  */
 export const PAGE_CATALOGUE: CatalogueGroup[] = [
 	{

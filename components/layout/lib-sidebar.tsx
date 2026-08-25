@@ -27,7 +27,7 @@ import {
 	Wrench,
 	PanelLeftClose,
 	PanelLeft,
-	Crown,  ShieldCheck,
+	Crown,
 	ScanLine,
 	SlidersHorizontal,
 	Layers,
@@ -129,7 +129,11 @@ export const navGroups: NavGroup[] = [
 			{ title: 'Library Rules', url: '/settings', icon: SlidersHorizontal },
 			{ title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
 			{ title: 'Activity Log', url: '/activity-log', icon: ScrollText },
-			{ title: 'Staff Access', url: '/access', icon: ShieldCheck },
+			// Staff Access (/access) is deliberately absent. It is still a live
+			// page and still super_admin's alone — the page guard and its API both
+			// say so — but it is reached by typing the address rather than from
+			// the menu. Adding it back here would put it in the sidebar and the
+			// mobile navbar at once, which is exactly what was not wanted.
 			{ title: 'Role Management', url: '/roles', icon: UserCog },
 		],
 	},
