@@ -17,6 +17,27 @@ import { NextResponse } from 'next/server'
 import { getCaller, resolveInstitutionScope } from '@/lib/auth/server-access'
 import { LIBRARY_ROLES, highestLibraryRole } from '@/lib/auth/library-roles'
 import { allStaff, collegeForMyjkknInstitution, myjkknStaffConfigured } from '@/lib/auth/myjkkn-staff'
+import { listGrants, idForGrantedEmail } from '@/lib/auth/role-grants'
+
+/** One line on the Staff Access screen. */
+interface AccessRow {
+	id: string
+	email: string
+	full_name: string | null
+	role: string
+	is_super_admin: boolean
+	is_active: boolean
+	institution_id: string | null
+	last_login: string | null
+	staff_code: string | null
+	/** Every MyJKKN role they hold, not only the library one. */
+	assigned_roles: string[]
+	effective_role: string
+	/** Where their access comes from. MyJKKN, for everybody normal. */
+	access_source: 'myjkkn' | 'grant'
+	/** The last day a temporary grant works, when there is one. */
+	grant_expires_on: string | null
+}
 
 export async function GET(request: Request) {
 	try {
@@ -42,7 +63,7 @@ export async function GET(request: Request) {
 
 		const staff = await allStaff()
 
-		const rows = []
+		const rows: AccessRow[] = []
 		for (const person of staff) {
 			// Only the people this screen is about
 			const role = highestLibraryRole(person.roleKeys)
@@ -66,9 +87,44 @@ export async function GET(request: Request) {
 				institution_id: institutionId,
 				last_login: null,
 				staff_code: person.staffCode,
-				/** Every MyJKKN role they hold, not only the library one. */
 				assigned_roles: person.roleKeys,
 				effective_role: role,
+				access_source: 'myjkkn',
+				grant_expires_on: null,
+			})
+		}
+
+		// Anybody holding a temporary grant, listed alongside the real staff.
+		//
+		// Shown whatever college is selected, and shown even once lapsed. Two
+		// people carrying super_admin that the access screen does not mention is
+		// exactly the kind of thing nobody notices until it matters, and a grant
+		// that has quietly expired is worth seeing too — it is usually the answer
+		// to "why can they not sign in any more".
+		for (const grant of listGrants()) {
+			const already = rows.find(r => r.email.toLowerCase() === grant.email)
+			if (already) {
+				// They are staff with a library role of their own; the grant adds
+				// nothing, so say so on their existing row rather than twice over
+				already.access_source = 'myjkkn'
+				already.grant_expires_on = grant.expiresOn
+				continue
+			}
+
+			rows.push({
+				id: idForGrantedEmail(grant.email),
+				email: grant.email,
+				full_name: null,
+				role: grant.role,
+				is_super_admin: grant.role === 'super_admin',
+				is_active: !grant.isExpired,
+				institution_id: null,
+				last_login: null,
+				staff_code: null,
+				assigned_roles: [],
+				effective_role: grant.role,
+				access_source: 'grant',
+				grant_expires_on: grant.expiresOn,
 			})
 		}
 

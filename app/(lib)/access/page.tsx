@@ -42,6 +42,17 @@ interface StaffUser {
 	last_login: string | null
 	assigned_roles: string[]
 	effective_role: string
+	/** 'grant' means a temporary grant in the environment, not a MyJKKN role. */
+	access_source?: 'myjkkn' | 'grant'
+	/** The last day that grant works, 'YYYY-MM-DD'. */
+	grant_expires_on?: string | null
+}
+
+/** '2026-09-25' reads better as '25 Sep 2026' on a screen meant to be scanned. */
+function readableDate(iso: string): string {
+	const date = new Date(`${iso}T00:00:00Z`)
+	if (Number.isNaN(date.getTime())) return iso
+	return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -271,7 +282,9 @@ export default function StaffAccessPage() {
 															<div>
 																<div className="text-sm font-medium">{u.full_name ?? '—'}</div>
 																{!u.is_active && (
-																	<div className="text-[10px] text-destructive">Inactive</div>
+																	<div className="text-[10px] text-destructive">
+																		{u.access_source === 'grant' ? 'Grant expired' : 'Inactive'}
+																	</div>
 																)}
 															</div>
 														</div>
@@ -286,8 +299,20 @@ export default function StaffAccessPage() {
 													    who holds one, and the change is made there. */}
 													<TableCell>
 														<div className="flex flex-wrap gap-1">
+															{u.grant_expires_on && (
+																// Temporary access from the environment, not a MyJKKN
+																// role. Named plainly: a grant nobody can see is a
+																// grant nobody remembers to take away.
+																<Badge
+																	variant="outline"
+																	className="text-[10px] font-normal border-brand-yellow-400 text-brand-yellow-800 dark:text-brand-yellow-500"
+																>
+																	{u.is_active ? 'Temporary until ' : 'Expired '}
+																	{readableDate(u.grant_expires_on)}
+																</Badge>
+															)}
 															{(u.assigned_roles ?? []).length === 0 ? (
-																<span className="text-xs text-muted-foreground">—</span>
+																!u.grant_expires_on && <span className="text-xs text-muted-foreground">—</span>
 															) : (
 																u.assigned_roles.map(r => (
 																	<Badge
@@ -303,7 +328,11 @@ export default function StaffAccessPage() {
 													</TableCell>
 													{callerRole === 'super_admin' && (
 														<TableCell>
-															{u.is_active ? (
+															{/* Viewing as somebody works off their MyJKKN staff
+															    record, which a granted person does not have */}
+															{u.access_source === 'grant' ? (
+																<span className="text-xs text-muted-foreground">—</span>
+															) : u.is_active ? (
 																<Button
 																	variant="outline"
 																	size="sm"

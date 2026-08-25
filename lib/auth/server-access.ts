@@ -15,6 +15,12 @@
  *
  * The `users` and `user_roles` tables are no longer read. They are left in the
  * database untouched, but nothing here consults them.
+ *
+ * One narrow exception exists: `role-grants.ts`, a list of email addresses in
+ * the environment that are given a library role for a fixed number of days.
+ * It is not a second login — a granted person still signs in through MyJKKN
+ * and is still validated the same way — it only answers the question MyJKKN
+ * could not, for somebody who has no staff record yet.
  */
 
 import { authConfig } from './config'
@@ -32,6 +38,7 @@ import {
 	invalidateStaff,
 	type MyjkknStaff,
 } from './myjkkn-staff'
+import { grantFor, idForGrantedEmail } from './role-grants'
 
 export type { LibraryRole } from './library-roles'
 export { LIBRARY_ROLES, ROLE_LABEL } from './library-roles'
@@ -398,8 +405,10 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 	}
 
 	const staff = await staffByEmail(identity.email)
-	if (!staff) {
-		return {
+
+	let real: Identity = staff
+		? await callerFromStaff(staff, identity.roleKeys)
+		: {
 			ok: false,
 			reason: 'not_staff',
 			error: 'MyJKKN has no staff record for this account',
@@ -408,9 +417,37 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 			fullName: identity.fullName,
 			myjkknRoles: identity.roleKeys,
 		}
+
+	// Turned away by MyJKKN, but named in the grant list.
+	//
+	// Only these two refusals are overridden. `inactive` deliberately is not: an
+	// account switched off in MyJKKN stays off, and a grant must never be a way
+	// back in for somebody who has been deactivated on purpose.
+	//
+	// It covers `role_not_allowed` as well as `not_staff` because of what
+	// happens next in real life — a granted person is usually added as staff
+	// soon afterwards. Without this, the day their staff record appears with an
+	// ordinary MyJKKN role would be the day their access silently vanished,
+	// weeks before the date it was meant to last until.
+	if (!real.ok && (real.reason === 'not_staff' || real.reason === 'role_not_allowed')) {
+		const grant = grantFor(identity.email)
+		if (grant) {
+			// Resolved through exactly the same function as everybody else, so
+			// there is no second, laxer path into the system — only a different
+			// answer to "what roles does this person hold".
+			const granted = await callerFromStaff({
+				id: staff?.id ?? idForGrantedEmail(identity.email),
+				email: identity.email,
+				fullName: staff?.fullName ?? identity.fullName,
+				staffCode: staff?.staffCode ?? null,
+				roleKeys: [grant.role],
+				myjkknInstitutionId: staff?.myjkknInstitutionId ?? null,
+				isActive: true,
+			})
+			if (granted.ok) real = granted
+		}
 	}
 
-	const real = await callerFromStaff(staff, identity.roleKeys)
 	if (!real.ok) return real
 
 	// Only a super admin can be viewing as someone else. If anyone else has the
