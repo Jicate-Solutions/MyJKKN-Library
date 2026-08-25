@@ -2,11 +2,17 @@
  * Who a college's library members are — read from MyJKKN, never stored here.
  *
  * The rule this file exists to keep: every Active learner and every Active
- * staff member in MyJKKN is a member of their own college's library, and
- * nobody else is. There is no roll to enrol into, nothing to keep in step, and
- * no learner or staff record of any kind in this project's database. The role
- * a person holds is the role MyJKKN gives them; this library does not set a
- * second one.
+ * TEACHING staff member in MyJKKN is a member of their own college's library,
+ * and nobody else is. There is no roll to enrol into, nothing to keep in step,
+ * and no learner or staff record of any kind in this project's database. The
+ * role a person holds is the role MyJKKN gives them; this library does not set
+ * a second one.
+ *
+ * Teaching is MyJKKN's own answer, not a list of job titles kept here: every
+ * staff category carries an `is_teaching` flag, and that flag alone decides it.
+ * So Teaching, Facilitator and Principal are members, while Ayaah, Attender,
+ * Admin Office, Maintenance and the rest are not — and a category added in
+ * MyJKKN tomorrow lands on the right side without a change here.
  *
  * A college is only ever asked about its own people. Which MyJKKN institutions
  * a college covers is read from our `institutions` table — never from the
@@ -30,7 +36,8 @@
  *   * A learner is active when `lifecycle_status` is 'active'. There is no
  *     `is_active` on a learner at all.
  *   * A staff member is active when `is_active` is true, and carries an
- *     explicit `role` object — that is the role this library uses.
+ *     explicit `role` object — that is the role this library uses. Their
+ *     `category` object says whether they teach.
  *   * Most learners have no `roll_number`. Their `application_id` is always
  *     there, so it stands in as the number they are found by.
  */
@@ -221,6 +228,26 @@ function staffIsActive(row: MyJKKNRow): boolean {
 	return row.is_active === true
 }
 
+/**
+ * Only teaching staff are members.
+ *
+ * MyJKKN files every staff member under a category, and the category itself
+ * says whether it teaches. Reading that flag rather than matching job titles is
+ * the point: there are 23 categories today and 94 spellings of a designation
+ * between them, and a new one appears whenever somebody is hired into a job
+ * nobody had before. A list kept here would be wrong within the month.
+ *
+ * So Teaching, Facilitator and Principal are members; Ayaah, Attender, Admin
+ * Office, Library, Lab Assistant, Maintenance, Warden and the rest are not.
+ *
+ * A record with no category at all is not a member. That is the safe direction
+ * — this rule says who to let in, so anything it cannot answer for stays out —
+ * and it costs nothing today, as every active staff member has one.
+ */
+function staffIsTeaching(row: MyJKKNRow): boolean {
+	return row.category?.is_teaching === true
+}
+
 /** Belongs to one of the MyJKKN institutions this college covers. */
 function belongsHere(row: MyJKKNRow, myjkknIds: string[]): boolean {
 	const rowInstitution = text(row.institution_id)
@@ -358,7 +385,7 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 		}
 
 		for (const row of staff) {
-			if (!staffIsActive(row) || !belongsHere(row, myjkknIds)) continue
+			if (!staffIsActive(row) || !staffIsTeaching(row) || !belongsHere(row, myjkknIds)) continue
 			const person = staffToPerson(row, institutionId)
 			if (person) remember(person, [person.member_number].filter(Boolean))
 		}
@@ -481,7 +508,7 @@ async function searchOnePerson(institutionId: string, cardNumber: string): Promi
 	])
 
 	for (const row of staff) {
-		if (!staffIsActive(row) || !belongsHere(row, myjkknIds)) continue
+		if (!staffIsActive(row) || !staffIsTeaching(row) || !belongsHere(row, myjkknIds)) continue
 		if (normalise(realNumber(text(row.staff_id))) !== wanted) continue
 		return staffToPerson(row, institutionId)
 	}
@@ -540,7 +567,7 @@ export async function personByMyjkknId(
 		return learnerToPerson(row, institutionId, programNames)
 	}
 
-	if (!staffIsActive(row)) return null
+	if (!staffIsActive(row) || !staffIsTeaching(row)) return null
 	return staffToPerson(row, institutionId)
 }
 
