@@ -225,7 +225,9 @@ export default function ReportsDashboardPage() {
 					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 						{[
 							{ label: 'Accession Register', href: '/registry', icon: BookOpen, color: 'text-blue-600' },
-							{ label: 'Circulation Summary', href: '/circulation', icon: ArrowLeftRight, color: 'text-indigo-600' },
+							// Opens the reports, not the desk. The desk is where books are
+						// issued; this tile is where questions about them are answered.
+						{ label: 'Circulation Summary', href: '/reports/circulation', icon: ArrowLeftRight, color: 'text-indigo-600' },
 							{ label: 'Overdue Analysis', href: '/circulation/overdue', icon: TrendingUp, color: 'text-rose-600' },
 							{ label: 'Budget Utilisation', href: '/acquisition/budget', icon: DollarSign, color: 'text-emerald-600' },
 							{ label: 'Member Statistics', href: '/members', icon: Users, color: 'text-purple-600' },
