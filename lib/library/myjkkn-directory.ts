@@ -25,9 +25,9 @@
  *     counts on the dashboard. Several paginated calls to MyJKKN, so the
  *     answer is held briefly and shared. Nothing is written to Supabase.
  *   * `personByCardNumber` / `personByMyjkknId` — one person, for the desk and
- *     the gate. Answered from the roll, and asked of MyJKKN directly when it
- *     is not there, so somebody admitted this morning can borrow this
- *     afternoon.
+ *     the gate. Answered from the roll where it is in hand; a staff member can
+ *     also be asked for directly, and a person already identified once is
+ *     re-checked by their MyJKKN id in a single call.
  *
  * Field names here follow what MyJKKN actually returns (see
  * `Reference_Documents/learners-staff-api-reference-data.md`), which is not the
@@ -49,7 +49,25 @@ const MYJKKN_API_URL = process.env.MYJKKN_API_URL || 'https://www.jkkn.ai/api'
 const MYJKKN_API_KEY = process.env.MYJKKN_API_KEY || ''
 
 const PAGE_SIZE = 200
-const MAX_PAGES = 40
+/**
+ * A ceiling, not a plan. The learner endpoint reports its own total, so only
+ * the pages that exist are ever asked for; this is here so a broken envelope
+ * cannot spin forever. It used to be 40, which is 8,000 people — close enough
+ * to the 4,945 MyJKKN holds today that growth would have silently cut the roll
+ * short, and a learner who was simply never fetched looks exactly like one who
+ * does not exist.
+ */
+const MAX_PAGES = 200
+
+/**
+ * Pages read at once.
+ *
+ * The roll is 25 pages of learners and 5 of staff. Read one after another that
+ * is 7.4 seconds of a librarian standing at the counter; read four at a time it
+ * is 2.6. Four is the same width that proved fastest against Supabase — wider
+ * batches stopped paying and started being throttled.
+ */
+const PARALLEL_PAGES = 4
 
 /** A whole college is many calls; one person is one. They get different budgets. */
 const LIST_TIMEOUT_MS = 20_000
@@ -113,9 +131,20 @@ function rowsOf(payload: any): MyJKKNRow[] {
 	return body && typeof body === 'object' && body.id ? [body] : []
 }
 
-/** One GET to MyJKKN. Never throws — an unreachable MyJKKN is an empty list. */
-async function myjkknGet(path: string, timeoutMs: number): Promise<MyJKKNRow[]> {
-	if (!MYJKKN_API_KEY) return []
+/** How many records the endpoint says it has in all, where it says so. */
+function countOf(payload: any): number | null {
+	const body = payload?.data ?? payload
+	const raw = body?.count ?? payload?.count
+	const total = Number(raw)
+	return Number.isFinite(total) && total >= 0 ? total : null
+}
+
+/** One page, with the total the envelope reported alongside it. */
+async function myjkknPage(
+	path: string,
+	timeoutMs: number
+): Promise<{ rows: MyJKKNRow[]; total: number | null }> {
+	if (!MYJKKN_API_KEY) return { rows: [], total: null }
 
 	const controller = new AbortController()
 	const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -129,29 +158,61 @@ async function myjkknGet(path: string, timeoutMs: number): Promise<MyJKKNRow[]> 
 			cache: 'no-store',
 			signal: controller.signal,
 		})
-		if (!res.ok) return []
-		return rowsOf(await res.json())
+		if (!res.ok) return { rows: [], total: null }
+		const payload = await res.json()
+		return { rows: rowsOf(payload), total: countOf(payload) }
 	} catch {
-		return []
+		return { rows: [], total: null }
 	} finally {
 		clearTimeout(timeout)
 	}
 }
 
+/** One GET to MyJKKN. Never throws — an unreachable MyJKKN is an empty list. */
+async function myjkknGet(path: string, timeoutMs: number): Promise<MyJKKNRow[]> {
+	return (await myjkknPage(path, timeoutMs)).rows
+}
+
 /**
- * Walks pages until one comes back short.
+ * Walks every page of a list.
  *
- * MyJKKN reports no page count on these endpoints, so a fixed number of pages
- * would either miss people or waste calls.
+ * The first page answers two questions: what is on it, and how many records
+ * there are in all. Where a total comes back, exactly the pages that exist are
+ * read, four at a time — the roll used to be walked one page after another,
+ * each waiting on the one before, which is most of the time a librarian spends
+ * looking at nothing after typing a number.
+ *
+ * The staff endpoint reports no total, so there the batches keep going until a
+ * short page says the list has ended. Pages requested past the end come back
+ * empty, which costs a call and breaks nothing.
  */
 async function myjkknPages(path: string): Promise<MyJKKNRow[]> {
-	const rows: MyJKKNRow[] = []
 	const join = path.includes('?') ? '&' : '?'
-	for (let page = 1; page <= MAX_PAGES; page++) {
-		const batch = await myjkknGet(`${path}${join}limit=${PAGE_SIZE}&page=${page}`, LIST_TIMEOUT_MS)
-		rows.push(...batch)
-		if (batch.length < PAGE_SIZE) break
+	const page = (n: number) => myjkknPage(`${path}${join}limit=${PAGE_SIZE}&page=${n}`, LIST_TIMEOUT_MS)
+
+	const first = await page(1)
+	const rows = [...first.rows]
+	if (first.rows.length < PAGE_SIZE) return rows
+
+	const lastPage = first.total !== null
+		? Math.min(Math.ceil(first.total / PAGE_SIZE), MAX_PAGES)
+		: MAX_PAGES
+
+	for (let next = 2; next <= lastPage; next += PARALLEL_PAGES) {
+		const width = Math.min(PARALLEL_PAGES, lastPage - next + 1)
+		const batch = await Promise.all(Array.from({ length: width }, (_, i) => page(next + i)))
+
+		let ended = false
+		for (const result of batch) {
+			rows.push(...result.rows)
+			if (result.rows.length < PAGE_SIZE) ended = true
+		}
+
+		// Without a reported total, a short page is the only sign the list is
+		// finished. With one, the page count above is already exact.
+		if (ended && first.total === null) break
 	}
+
 	return rows
 }
 
@@ -453,17 +514,22 @@ export async function collegeMemberCount(institutionId: string): Promise<number>
 /**
  * The person whose card carries this number, in this college.
  *
- * Three steps, in this order, and the order is the point — the desk must never
- * wait on the whole college being read:
+ * Three steps, in this order:
  *
  *   1. The roll, if it happens to be in hand already. No network at all, so a
- *      queue of scans after the members page has been opened costs nothing.
- *   2. Otherwise ask MyJKKN about this one person — two calls, seconds at
- *      worst, and always current, so somebody admitted this morning is not
- *      turned away this afternoon.
- *   3. Only if both come up empty, read the college's roll and look again.
- *      This is what covers a number MyJKKN's own search does not match on, and
- *      it is the slow path precisely because it is the rare one.
+ *      queue of scans costs nothing once the first one has been answered.
+ *   2. Otherwise ask MyJKKN about this one person. Staff only — their endpoint
+ *      honours a search and answers in one call, so a teacher hired this
+ *      morning is not turned away this afternoon.
+ *   3. Otherwise read the college's roll and look again. Learners always come
+ *      this way, because MyJKKN's learner endpoint has no search to ask.
+ *
+ * Step three is what a librarian meets when they open the desk and type a roll
+ * number without having opened anything else first, so it is not a rare path
+ * and is not treated as one: the roll is read four pages at a time, about two
+ * and a half seconds for the whole college, and held for five minutes
+ * afterwards. It used to be read one page after another, and the desk gave up
+ * before it finished.
  */
 export async function personByCardNumber(
 	institutionId: string,
@@ -488,12 +554,23 @@ export async function personByCardNumber(
 }
 
 /**
- * Asks MyJKKN about one person by their number.
+ * Asks MyJKKN about one staff member by their number.
  *
- * MyJKKN's search is a contains-match across every campus, so two things
- * decide it here and both must hold: the record belongs to one of this
- * college's institutions, and one of the numbers it answers to matches whole.
- * `PB2300` therefore finds nobody where `PB23001` finds one person.
+ * Staff only, and deliberately. The staff endpoint documents `search` and
+ * honours it, so one person costs one call. The learner endpoint documents no
+ * search at all, and measurement on 2026-08-25 confirmed it: asking it for
+ * `?search=JKKN-CNR-588` returned the same total of 4,945 and simply handed
+ * back the first fifty learners in the organisation. This used to ask anyway
+ * and match the number itself, which found a learner only if they happened to
+ * be in that arbitrary fifty — so a roll number typed at the desk on a cold
+ * server found nobody, over and over, while the same number worked once the
+ * Members page had been opened.
+ *
+ * Learners are therefore found through the college's roll, which is what the
+ * caller falls through to. Two things still decide a match and both must hold:
+ * the record belongs to one of this college's institutions, and one of the
+ * numbers it answers to matches whole — `PB2300` finds nobody where `PB23001`
+ * finds one person.
  */
 async function searchOnePerson(institutionId: string, cardNumber: string): Promise<DirectoryPerson | null> {
 	const myjkknIds = await myjkknInstitutionIdsFor(institutionId)
@@ -502,25 +579,12 @@ async function searchOnePerson(institutionId: string, cardNumber: string): Promi
 	const wanted = normalise(cardNumber)
 	const query = encodeURIComponent(cardNumber.trim())
 
-	const [learners, staff] = await Promise.all([
-		myjkknGet(`/api-management/learners/profiles?search=${query}&limit=50`, ONE_TIMEOUT_MS),
-		myjkknGet(`/api-management/staff?search=${query}&limit=50`, ONE_TIMEOUT_MS),
-	])
+	const staff = await myjkknGet(`/api-management/staff?search=${query}&limit=50`, ONE_TIMEOUT_MS)
 
 	for (const row of staff) {
 		if (!staffIsActive(row) || !staffIsTeaching(row) || !belongsHere(row, myjkknIds)) continue
 		if (normalise(realNumber(text(row.staff_id))) !== wanted) continue
 		return staffToPerson(row, institutionId)
-	}
-
-	const matchingLearner = learners.find(row =>
-		learnerIsActive(row)
-		&& belongsHere(row, myjkknIds)
-		&& learnerNumbers(row).some(number => normalise(number) === wanted)
-	)
-	if (matchingLearner) {
-		const programNames = await programNamesFor(institutionId, myjkknIds)
-		return learnerToPerson(matchingLearner, institutionId, programNames)
 	}
 
 	return null
