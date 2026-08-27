@@ -11,10 +11,18 @@ import { BarcodeScannerInput } from '@/components/library/barcode-scanner-input'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
 import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+	Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import {
 	CheckCircle, RefreshCw, RotateCcw, BookOpen, AlertTriangle, ArrowRightLeft, Loader2, UserPlus,
+	Bookmark, IndianRupee, X,
 } from 'lucide-react'
-import { issueItem, returnItem, renewItem } from '@/services/library/lib-circulation-service'
+import { issueItem, returnItem, renewItem, cancelHold } from '@/services/library/lib-circulation-service'
+import { collectPayment, waiveCharge } from '@/services/library/lib-late-charges-service'
 import type { LibLendingTransaction, LibMemberCategory, LibItem } from '@/types/lib'
 
 /** One book currently in a member's hands, as the desk lookup returns it. */
@@ -32,6 +40,34 @@ interface MemberLoan {
 	is_overdue: boolean
 	overdue_days: number
 	estimated_charge: number
+}
+
+/** A title this member is waiting for, still live. */
+interface MemberHold {
+	id: string
+	catalogue_record_id: string
+	hold_status: 'pending' | 'available'
+	hold_placed_at: string
+	hold_expires_at: string | null
+	notified_at: string | null
+	title: string
+	call_number: string | null
+}
+
+/** A late charge with money still on it — unpaid, or part paid. */
+interface MemberCharge {
+	id: string
+	overdue_days: number
+	charge_per_day: number
+	total_charge: number
+	waiver_amount: number
+	net_payable: number
+	payment_status: 'unpaid' | 'partial'
+	created_at: string
+	due_date: string | null
+	returned_at: string | null
+	accession_number: string | null
+	title: string
 }
 
 /**
@@ -60,7 +96,12 @@ interface DeskMember {
 	outstanding_charges?: number
 	category_name?: string
 	loans?: MemberLoan[]
+	holds?: MemberHold[]
+	charges?: MemberCharge[]
 }
+
+const rupees = (amount: number) =>
+	`₹${amount.toLocaleString('en-IN', { minimumFractionDigits: amount % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`
 
 /**
  * A copy as the desk lookup returns it.
@@ -260,6 +301,277 @@ function MemberLoansPanel({
 }
 
 // ─── Issue Tab ────────────────────────────────────────────────────────────────
+
+/**
+ * What this member is waiting for, and the one action the desk has on it.
+ *
+ * A hold lives on its own page, but the question "am I still in the queue for
+ * that book?" is asked at the counter with the card already in hand — so it is
+ * answered here, and can be dropped here, rather than sending the librarian to
+ * another screen with a member number written on a slip.
+ *
+ * Nothing is drawn when there are none: an empty section on every scan is
+ * noise at a desk that is read at a glance.
+ */
+function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged: () => void }) {
+	const { toast } = useToast()
+	const [busyId, setBusyId] = useState<string | null>(null)
+
+	if (holds.length === 0) return null
+
+	const drop = async (hold: MemberHold) => {
+		try {
+			setBusyId(hold.id)
+			await cancelHold(hold.id, 'Cancelled at the desk')
+			toast({
+				title: `✅ Hold cancelled — ${hold.title}`,
+				className: 'bg-green-50 border-green-200 text-green-800',
+			})
+			onChanged()
+		} catch (err) {
+			toast({ title: '❌ ' + messageOf(err, 'Could not cancel the hold'), variant: 'destructive' })
+		} finally {
+			setBusyId(null)
+		}
+	}
+
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+					Waiting for
+				</p>
+				<span className="text-xs text-muted-foreground">{holds.length} on hold</span>
+			</div>
+
+			<div className="divide-y rounded-md border">
+				{holds.map(hold => (
+					<div key={hold.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium">{hold.title}</p>
+							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+								{hold.call_number && <span className="font-mono">{hold.call_number}</span>}
+								<span>Since {asDate(hold.hold_placed_at)}</span>
+								{hold.hold_expires_at && <span>Held until {asDate(hold.hold_expires_at)}</span>}
+							</div>
+						</div>
+
+						{hold.hold_status === 'available' ? (
+							<Badge className="bg-emerald-100 text-emerald-800 border-emerald-200 text-xs">
+								<Bookmark className="mr-1 h-3 w-3" />
+								Ready to collect
+							</Badge>
+						) : (
+							<Badge variant="outline" className="text-xs">In the queue</Badge>
+						)}
+
+						<Button
+							size="sm"
+							variant="outline"
+							className="h-8 text-xs"
+							disabled={busyId === hold.id}
+							title="Take this member out of the queue"
+							onClick={() => drop(hold)}
+						>
+							{busyId === hold.id
+								? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+								: <X className="mr-1 h-3 w-3" />}
+							Cancel
+						</Button>
+					</div>
+				))}
+			</div>
+		</div>
+	)
+}
+
+/**
+ * What this member owes, settled where they are standing.
+ *
+ * Collecting needs a reference and waiving needs a reason — both are what the
+ * charges page asks for, and neither is invented here, so a fine settled at the
+ * desk is recorded exactly as one settled from that page.
+ */
+function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; onChanged: () => void }) {
+	const { toast } = useToast()
+	const [settling, setSettling] = useState<{ charge: MemberCharge; mode: 'collect' | 'waive' } | null>(null)
+	const [reference, setReference] = useState('')
+	const [reason, setReason] = useState('')
+	const [amount, setAmount] = useState('')
+	const [saving, setSaving] = useState(false)
+	const [formError, setFormError] = useState<string | null>(null)
+
+	if (charges.length === 0) return null
+
+	const owed = charges.reduce((sum, charge) => sum + charge.net_payable, 0)
+
+	const open = (charge: MemberCharge, mode: 'collect' | 'waive') => {
+		setSettling({ charge, mode })
+		setReference('')
+		setReason('')
+		// The whole of what is still owed, which is what is waived most of the
+		// time; a librarian letting off only part of it types over this.
+		setAmount(String(charge.net_payable))
+		setFormError(null)
+	}
+
+	const submit = async () => {
+		if (!settling) return
+		const { charge, mode } = settling
+
+		if (mode === 'collect' && !reference.trim()) {
+			setFormError('A receipt or reference number is needed to record the payment')
+			return
+		}
+		if (mode === 'waive' && !reason.trim()) {
+			setFormError('Say why the charge is being let off')
+			return
+		}
+
+		try {
+			setSaving(true)
+			setFormError(null)
+			if (mode === 'collect') {
+				await collectPayment(charge.id, { payment_reference: reference.trim() })
+				toast({
+					title: `✅ ${rupees(charge.net_payable)} collected`,
+					description: charge.title,
+					className: 'bg-green-50 border-green-200 text-green-800',
+				})
+			} else {
+				const asked = Number(amount)
+				await waiveCharge(charge.id, {
+					waiver_amount: Number.isFinite(asked) && asked > 0 ? asked : charge.net_payable,
+					waiver_reason: reason.trim(),
+				})
+				toast({
+					title: '✅ Charge waived',
+					description: charge.title,
+					className: 'bg-green-50 border-green-200 text-green-800',
+				})
+			}
+			setSettling(null)
+			onChanged()
+		} catch (err) {
+			setFormError(messageOf(err, 'Could not settle the charge'))
+		} finally {
+			setSaving(false)
+		}
+	}
+
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+					Owing
+				</p>
+				<span className="text-xs font-medium text-destructive">{rupees(owed)} on {charges.length} {charges.length === 1 ? 'charge' : 'charges'}</span>
+			</div>
+
+			<div className="divide-y rounded-md border">
+				{charges.map(charge => (
+					<div key={charge.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium">{charge.title}</p>
+							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+								{charge.accession_number && <span className="font-mono">{charge.accession_number}</span>}
+								{charge.due_date && <span>Was due {asDate(charge.due_date)}</span>}
+								{charge.overdue_days > 0 && (
+									<span>{charge.overdue_days} day{charge.overdue_days === 1 ? '' : 's'} late</span>
+								)}
+								{charge.waiver_amount > 0 && <span>{rupees(charge.waiver_amount)} already let off</span>}
+							</div>
+						</div>
+
+						<Badge
+							variant="outline"
+							className="border-destructive/30 bg-destructive/10 text-xs text-destructive"
+						>
+							{rupees(charge.net_payable)}
+							{charge.payment_status === 'partial' ? ` of ${rupees(charge.total_charge)}` : ''}
+						</Badge>
+
+						<div className="flex items-center gap-2">
+							<Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => open(charge, 'waive')}>
+								Waive
+							</Button>
+							<Button size="sm" className="h-8 text-xs" onClick={() => open(charge, 'collect')}>
+								<IndianRupee className="mr-1 h-3 w-3" />
+								Collect
+							</Button>
+						</div>
+					</div>
+				))}
+			</div>
+
+			<Dialog open={settling !== null} onOpenChange={o => { if (!o && !saving) setSettling(null) }}>
+				<DialogContent className="sm:max-w-[440px]">
+					<DialogHeader>
+						<DialogTitle>
+							{settling?.mode === 'collect' ? 'Collect payment' : 'Waive the charge'}
+						</DialogTitle>
+						<DialogDescription>
+							{settling?.charge.title} — {settling ? rupees(settling.charge.net_payable) : ''} owing
+						</DialogDescription>
+					</DialogHeader>
+
+					<div className="space-y-4">
+						{settling?.mode === 'collect' ? (
+							<div className="space-y-2">
+								<Label htmlFor="charge-reference">Receipt or reference number</Label>
+								<Input
+									id="charge-reference"
+									value={reference}
+									onChange={e => setReference(e.target.value)}
+									placeholder="e.g. RCPT/2026/0148"
+									autoFocus
+								/>
+							</div>
+						) : (
+							<>
+								<div className="space-y-2">
+									<Label htmlFor="charge-amount">How much to let off</Label>
+									<Input
+										id="charge-amount"
+										type="number"
+										min="0"
+										step="0.01"
+										value={amount}
+										onChange={e => setAmount(e.target.value)}
+									/>
+									<p className="text-xs text-muted-foreground">
+										Less than the full amount leaves the rest still owed.
+									</p>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="charge-reason">Why</Label>
+									<Textarea
+										id="charge-reason"
+										value={reason}
+										onChange={e => setReason(e.target.value)}
+										placeholder="e.g. Library was closed for three of those days"
+										rows={3}
+									/>
+								</div>
+							</>
+						)}
+
+						{formError && <ScanFeedback busy={false} code={null} error={formError} />}
+					</div>
+
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setSettling(null)} disabled={saving}>Cancel</Button>
+						<Button onClick={submit} disabled={saving}>
+							{saving
+								? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</>
+								: settling?.mode === 'collect' ? 'Record payment' : 'Waive'}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</div>
+	)
+}
 
 /** One book handed over in this sitting, kept on screen as the pile grows. */
 interface IssuedLine {
@@ -476,12 +788,23 @@ function IssueTab({ institutionId }: { institutionId: string | null }) {
 							</div>
 						</div>
 
-						{/* What they already have, and the actions on each */}
-						<div className="mt-3 border-t pt-3">
+						{/* Everything the counter is asked about, on the one card: what
+						    they are holding, what they are waiting for, what they owe —
+						    each with the action that settles it, so the librarian never
+						    leaves this page carrying a member number to another screen */}
+						<div className="mt-3 space-y-3 border-t pt-3">
 							<MemberLoansPanel
 								loans={member.loans ?? []}
 								maxItems={limit}
 								institutionId={institutionId}
+								onChanged={() => lookupMember(member.member_number, true)}
+							/>
+							<MemberHoldsPanel
+								holds={member.holds ?? []}
+								onChanged={() => lookupMember(member.member_number, true)}
+							/>
+							<MemberChargesPanel
+								charges={member.charges ?? []}
 								onChanged={() => lookupMember(member.member_number, true)}
 							/>
 						</div>
