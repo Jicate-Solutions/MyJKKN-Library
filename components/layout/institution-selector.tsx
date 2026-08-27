@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, memo, useCallback } from 'react'
-import { Building2, Check, ChevronsUpDown, Globe, Sparkles } from 'lucide-react'
+import { Building2, Check, ChevronsUpDown, Globe, Sparkles, Lock, LockOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -74,7 +74,10 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 		canSwitchInstitution,
 		isLoading,
 		selectInstitution,
-		clearInstitutionSelection
+		clearInstitutionSelection,
+		lockedInstitutionCode,
+		lockInstitution,
+		unlockInstitution
 	} = useInstitution()
 
 	const [open, setOpen] = useState(false)
@@ -87,6 +90,22 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 		}
 		setOpen(false)
 	}, [selectInstitution, clearInstitutionSelection])
+
+	// The padlock sits inside the row, and the row itself picks a college on
+	// click — so the event is stopped here or every lock would also switch.
+	// The list deliberately stays open: locking is not choosing.
+	const handleToggleLock = useCallback((
+		event: React.MouseEvent,
+		institution: Institution
+	) => {
+		event.preventDefault()
+		event.stopPropagation()
+		if (lockedInstitutionCode === institution.institution_code) {
+			unlockInstitution()
+		} else {
+			lockInstitution(institution)
+		}
+	}, [lockedInstitutionCode, lockInstitution, unlockInstitution])
 
 	// Find color for current selection
 	const selectedIndex = selectedInstitution
@@ -195,6 +214,14 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 							</>
 						)}
 						<span className={cn("truncate", isCompact && "max-w-[72px] sm:max-w-[100px]")}>{displayText}</span>
+						{/* Says a college is pinned even while another one is on screen */}
+						{lockedInstitutionCode && (
+							<Lock
+								className={cn(isCompact ? "h-3 w-3" : "h-3.5 w-3.5", "shrink-0 opacity-80")}
+								strokeWidth={2.5}
+								aria-label={`Locked on ${lockedInstitutionCode}`}
+							/>
+						)}
 					</div>
 					<ChevronsUpDown className={cn(isCompact ? "h-3.5 w-3.5" : "h-4 w-4", "shrink-0 opacity-60 group-hover:opacity-100 transition-opacity")} />
 				</Button>
@@ -273,6 +300,8 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 								{availableInstitutions.map((institution, index) => {
 									const color = getInstitutionColor(index)
 									const isSelected = selectedInstitution?.institution_code === institution.institution_code
+									const isLocked = lockedInstitutionCode === institution.institution_code
+									const label = institution.institution_name || institution.institution_code
 
 									return (
 										<CommandItem
@@ -310,6 +339,29 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 												{isSelected && (
 													<Check className={cn("h-4 w-4 shrink-0", color.text)} strokeWidth={2.5} />
 												)}
+												{/* Locking is a separate act from choosing, so this is a
+												    button of its own and the list stays open behind it */}
+												<button
+													type="button"
+													aria-label={isLocked ? `Unlock ${label}` : `Lock on ${label}`}
+													aria-pressed={isLocked}
+													title={isLocked
+														? 'Locked — a refresh comes back here. Click to unlock.'
+														: 'Lock on this college so a refresh comes back here'}
+													onClick={(e) => handleToggleLock(e, institution)}
+													className={cn(
+														"shrink-0 rounded-md p-2 transition-colors",
+														isLocked
+															? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+															: "text-slate-400 hover:bg-slate-200 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+													)}
+												>
+													{/* The list forces every icon inside it to 16px, so these
+													    are written at the size they will actually render */}
+													{isLocked
+														? <Lock className="h-4 w-4" strokeWidth={2.5} />
+														: <LockOpen className="h-4 w-4" />}
+												</button>
 											</div>
 										</CommandItem>
 									)
@@ -317,6 +369,20 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 							</div>
 						</CommandGroup>
 					</CommandList>
+
+					{/* The padlock is easy to miss otherwise, and this is also where a
+					    pin set on another day gets explained */}
+					<div className="border-t border-slate-100 dark:border-slate-800 px-3 py-2">
+						<p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+							{lockedInstitutionCode ? (
+								<>
+									Locked on <span className="font-semibold">{lockedInstitutionCode}</span> — a refresh comes back here.
+								</>
+							) : (
+								<>Tap a padlock to stay on that college after a refresh.</>
+							)}
+						</p>
+					</div>
 				</Command>
 			</PopoverContent>
 		</Popover>

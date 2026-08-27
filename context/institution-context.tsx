@@ -35,6 +35,10 @@ interface InstitutionContextValue {
 	isInitialized: boolean
 	selectInstitution: (institution: Institution) => void
 	clearInstitutionSelection: () => void
+	/** The college pinned to survive a refresh, by code. Null when none is. */
+	lockedInstitutionCode: string | null
+	lockInstitution: (institution: Institution) => void
+	unlockInstitution: () => void
 }
 
 const InstitutionContext = createContext<InstitutionContextValue>({
@@ -52,10 +56,48 @@ const InstitutionContext = createContext<InstitutionContextValue>({
 	isInitialized: true,
 	selectInstitution: () => {},
 	clearInstitutionSelection: () => {},
+	lockedInstitutionCode: null,
+	lockInstitution: () => {},
+	unlockInstitution: () => {},
 })
 
 /** One shared empty list, so "no ids" is always the same value. */
 const EMPTY_IDS: string[] = []
+
+/**
+ * Where a pinned college is remembered, in this browser only.
+ *
+ * Kept per signed-in person: two people sharing a machine must not inherit
+ * each other's campus, and the pin is a convenience, not an access decision —
+ * every /api/lib/* route still checks the caller's own scope, so a pin naming
+ * a college someone may not see buys them nothing.
+ */
+const LOCK_KEY_PREFIX = 'myjkkn-library.locked-institution.'
+
+const lockKeyFor = (email?: string | null) => (email ? `${LOCK_KEY_PREFIX}${email}` : null)
+
+function readLockedCode(email?: string | null): string | null {
+	const key = lockKeyFor(email)
+	if (!key || typeof window === 'undefined') return null
+	try {
+		return window.localStorage.getItem(key)
+	} catch {
+		// A private window, or a browser set to block site data. No pin, which
+		// is exactly how the app behaved before there were any.
+		return null
+	}
+}
+
+function writeLockedCode(email: string | null | undefined, code: string | null) {
+	const key = lockKeyFor(email)
+	if (!key || typeof window === 'undefined') return
+	try {
+		if (code) window.localStorage.setItem(key, code)
+		else window.localStorage.removeItem(key)
+	} catch {
+		// Nothing to do — the choice still stands for as long as this tab is open.
+	}
+}
 
 export function InstitutionProvider({ children }: { children: ReactNode }) {
 	const { user } = useAuth()
@@ -63,6 +105,7 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 	const [availableInstitutions, setAvailableInstitutions] = useState<Institution[]>([])
 	const [selectedInstitution, setSelectedInstitution] = useState<Institution | null>(null)
 	const [currentInstitution, setCurrentInstitution] = useState<Institution | null>(null)
+	const [lockedInstitutionCode, setLockedInstitutionCode] = useState<string | null>(null)
 	const [isLoading, setIsLoading] = useState(true)
 
 	useEffect(() => {
@@ -83,6 +126,39 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 						setCurrentInstitution(data[0])
 					} else {
 						setCurrentInstitution(null)
+					}
+
+					// A pinned college is put back before anything reads this context,
+					// so a refresh lands where the librarian left off rather than on
+					// "All Institutions". React batches this with the loading flags
+					// below, so no page fetches the wrong scope first and corrects
+					// itself a moment later.
+					const list = (data || []) as Institution[]
+					const email = user?.email
+					const pinned = email ? readLockedCode(email) : null
+					const match = pinned ? list.find(i => i.institution_code === pinned) : undefined
+
+					if (match) {
+						setLockedInstitutionCode(match.institution_code)
+						setSelectedInstitution(match)
+					} else {
+						// A pin naming a college this person can no longer reach is a
+						// lock nobody can open from the list, so it goes. Only touched
+						// once the signed-in person is known: this effect also runs
+						// before that, and a pin must survive that first pass.
+						if (pinned) writeLockedCode(email, null)
+						if (email) setLockedInstitutionCode(null)
+
+						// Whatever was chosen stays chosen — this effect re-runs on a
+						// sign-in, not only on first load, and wiping the selection
+						// outright would throw a librarian back to "All Institutions"
+						// mid-task. Only a college that has left their list is dropped.
+						setSelectedInstitution(previous => {
+							if (!previous) return null
+							return list.some(i => i.institution_code === previous.institution_code)
+								? previous
+								: null
+						})
 					}
 				}
 			} catch {
@@ -133,6 +209,20 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 
 	const clearInstitutionSelection = useCallback(() => setSelectedInstitution(null), [])
 
+	// The padlock is the only thing that moves the padlock. Picking a college
+	// from the list changes what is on screen and nothing else, so a librarian
+	// who pins their own campus can look at another one without losing the pin.
+	const lockInstitution = useCallback((institution: Institution) => {
+		setSelectedInstitution(institution)
+		setLockedInstitutionCode(institution.institution_code)
+		writeLockedCode(user?.email, institution.institution_code)
+	}, [user?.email])
+
+	const unlockInstitution = useCallback(() => {
+		setLockedInstitutionCode(null)
+		writeLockedCode(user?.email, null)
+	}, [user?.email])
+
 	// Likewise the value itself: a new object here re-renders every page that
 	// reads the context, whether or not anything about the institution moved.
 	const value = useMemo<InstitutionContextValue>(
@@ -151,6 +241,9 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 			isInitialized,
 			selectInstitution: setSelectedInstitution,
 			clearInstitutionSelection,
+			lockedInstitutionCode,
+			lockInstitution,
+			unlockInstitution,
 		}),
 		[
 			selectedInstitution,
@@ -166,6 +259,9 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 			isLoading,
 			isInitialized,
 			clearInstitutionSelection,
+			lockedInstitutionCode,
+			lockInstitution,
+			unlockInstitution,
 		]
 	)
 
