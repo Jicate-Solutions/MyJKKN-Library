@@ -167,10 +167,17 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Failed to update item status' }, { status: 500 })
 		}
 
-		// 6. Check for pending holds on this catalogue record and notify
+		// 6. Hand the copy to whoever is next in the queue, if anyone is.
+		//
+		// Once the head of the queue is known, marking their hold available and
+		// putting the copy aside for them are two writes that do not need each
+		// other's answer — so they go together. The log line does not need any of
+		// this, so it goes alongside the whole block rather than after it.
 		const item = updatedItem
 
-		if (item?.catalogue_record_id) {
+		const passToNextInQueue = async () => {
+			if (!item?.catalogue_record_id) return
+
 			const { data: pendingHold } = await supabase
 				.from('lib_resource_holds')
 				.select('id, member_id')
@@ -180,8 +187,10 @@ export async function POST(request: Request) {
 				.limit(1)
 				.maybeSingle()
 
-			if (pendingHold) {
-				await supabase
+			if (!pendingHold) return
+
+			await Promise.all([
+				supabase
 					.from('lib_resource_holds')
 					.update({
 						hold_status: 'available',
@@ -189,16 +198,16 @@ export async function POST(request: Request) {
 						notified_at: now.toISOString(),
 						updated_at: now.toISOString(),
 					})
-					.eq('id', pendingHold.id)
+					.eq('id', pendingHold.id),
 
-				await supabase
+				supabase
 					.from('lib_items')
 					.update({ status: 'on_hold', updated_at: now.toISOString() })
-					.eq('id', returnedItemId)
-			}
+					.eq('id', returnedItemId),
+			])
 		}
 
-		await logActivity(request, {
+		await Promise.all([passToNextInQueue(), logActivity(request, {
 			action: 'update',
 			resource_type: 'loan',
 			resource_id: '/circulation',
@@ -210,7 +219,7 @@ export async function POST(request: Request) {
 				overdue_days: overdueDays,
 				late_charge: chargeRecord?.charge_amount ?? 0,
 			},
-		})
+		})])
 
 		return NextResponse.json({
 			success: true,
