@@ -85,6 +85,24 @@ const ONE_TIMEOUT_MS = 5_000
  */
 const DIRECTORY_TTL_MS = 5 * 60 * 1000
 
+/**
+ * How long past that a roll may still be handed out while its replacement is
+ * being built behind the caller.
+ *
+ * Without this, every fifth minute somebody opened the members page and paid
+ * the whole three seconds again — the cache made four people fast and the
+ * fifth slow, over and over. Now the first request after the roll goes off is
+ * answered from memory at once and starts the rebuild on its way out, so the
+ * only person who ever waits is the first one after the server starts.
+ *
+ * It is a ceiling, not a target: a roll is normally replaced within seconds of
+ * going stale, because replacing it is what the next request triggers. Half an
+ * hour is how old it may get if MyJKKN is unreachable that whole time, and
+ * past it the caller waits for a real answer rather than being told something
+ * that old.
+ */
+const DIRECTORY_STALE_MS = 30 * 60 * 1000
+
 /** A college MyJKKN had nothing for is re-asked sooner. */
 const EMPTY_TTL_MS = 60 * 1000
 
@@ -391,7 +409,18 @@ interface CachedDirectory {
 	people: DirectoryPerson[]
 	/** Every number each person answers to, for the desk's exact-match lookup. */
 	byNumber: Map<string, DirectoryPerson>
-	expiresAt: number
+	/** Handed out without question until this moment. */
+	freshUntil: number
+	/** Handed out with a rebuild started behind it until this one. */
+	usableUntil: number
+}
+
+/** Nothing, held briefly, so an unreachable MyJKKN is retried soon. */
+function emptyDirectory(): CachedDirectory {
+	const until = Date.now() + EMPTY_TTL_MS
+	// Deliberately not servable while stale: an empty roll is not an answer
+	// worth repeating for half an hour, it is a reason to ask again shortly.
+	return { people: [], byNumber: new Map(), freshUntil: until, usableUntil: until }
 }
 
 const directoryCache = new Map<string, CachedDirectory>()
@@ -403,7 +432,7 @@ const normalise = (value: string): string => value.trim().toLowerCase()
 async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 	const myjkknIds = await myjkknInstitutionIdsFor(institutionId)
 	if (myjkknIds.length === 0) {
-		return { people: [], byNumber: new Map(), expiresAt: Date.now() + EMPTY_TTL_MS }
+		return emptyDirectory()
 	}
 
 	const programNames = await programNamesFor(institutionId, myjkknIds)
@@ -454,32 +483,34 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 
 	people.sort((a, b) => a.display_name.localeCompare(b.display_name))
 
+	if (people.length === 0) return emptyDirectory()
+
+	const now = Date.now()
 	return {
 		people,
 		byNumber,
-		expiresAt: Date.now() + (people.length > 0 ? DIRECTORY_TTL_MS : EMPTY_TTL_MS),
+		freshUntil: now + DIRECTORY_TTL_MS,
+		usableUntil: now + DIRECTORY_TTL_MS + DIRECTORY_STALE_MS,
 	}
 }
 
 /**
- * The college's roll, built or reused.
+ * Reads the college's roll again, once.
  *
- * Shared between callers that arrive together — a page opening the members
+ * Callers arriving together share the one read — a page opening the members
  * list and its scorecards at the same moment makes one trip, not two.
  */
-async function directoryFor(institutionId: string): Promise<CachedDirectory> {
-	const cached = directoryCache.get(institutionId)
-	if (cached && cached.expiresAt > Date.now()) return cached
-
+function rebuildDirectory(institutionId: string): Promise<CachedDirectory> {
 	const running = directoryInFlight.get(institutionId)
 	if (running) return running
-
-	const empty: CachedDirectory = { people: [], byNumber: new Map(), expiresAt: Date.now() + EMPTY_TTL_MS }
 
 	const work = buildDirectory(institutionId)
 		.catch(error => {
 			console.error('[directory] Could not read the college roll from MyJKKN:', error)
-			return empty
+			// A failed read must not throw away a roll that still works. Yesterday's
+			// answer is worth more than an empty one, which would tell the members
+			// page this college has nobody in it.
+			return directoryCache.get(institutionId) ?? emptyDirectory()
 		})
 		.then(built => {
 			directoryCache.set(institutionId, built)
@@ -493,10 +524,49 @@ async function directoryFor(institutionId: string): Promise<CachedDirectory> {
 	return work
 }
 
-/** The roll only if it is already in hand. Never builds, never waits. */
+/**
+ * The college's roll, built or reused.
+ *
+ * Three cases, and only the last of them waits on MyJKKN:
+ *
+ *   1. Fresh — handed back as it is.
+ *   2. Stale but usable — handed back as it is, and a rebuild is started on the
+ *      way out. The caller does not wait for it. This is what keeps the members
+ *      page in milliseconds all day instead of every fifth minute costing
+ *      somebody the full three seconds.
+ *   3. Nothing, or too old to stand behind — the caller waits for a real read.
+ *
+ * `mustBeFresh` forces case 3. The desk asks for it when a card number was not
+ * in the roll it already had: a learner enrolled ten minutes ago is missing
+ * from a stale roll, and "no such member" is the one answer that must never be
+ * given from an old copy.
+ */
+async function directoryFor(institutionId: string, mustBeFresh = false): Promise<CachedDirectory> {
+	const cached = directoryCache.get(institutionId)
+	const now = Date.now()
+
+	if (!mustBeFresh && cached) {
+		if (cached.freshUntil > now) return cached
+
+		if (cached.usableUntil > now) {
+			// Started, not awaited. If the server is frozen before it finishes,
+			// nothing is lost — the next request simply starts it again.
+			void rebuildDirectory(institutionId).catch(() => {})
+			return cached
+		}
+	}
+
+	return rebuildDirectory(institutionId)
+}
+
+/**
+ * The roll only if it is already in hand and still fresh. Never builds, never
+ * waits. Stale copies are deliberately not offered here: every caller of this
+ * treats a miss as "this person does not exist", which an old roll cannot say.
+ */
 function cachedDirectory(institutionId: string): CachedDirectory | null {
 	const cached = directoryCache.get(institutionId)
-	return cached && cached.expiresAt > Date.now() ? cached : null
+	return cached && cached.freshUntil > Date.now() ? cached : null
 }
 
 /** Every member of one college: its Active learners and its Active staff. */
@@ -526,10 +596,14 @@ export async function collegeMemberCount(institutionId: string): Promise<number>
  *
  * Step three is what a librarian meets when they open the desk and type a roll
  * number without having opened anything else first, so it is not a rare path
- * and is not treated as one: the roll is read four pages at a time, about two
- * and a half seconds for the whole college, and held for five minutes
- * afterwards. It used to be read one page after another, and the desk gave up
- * before it finished.
+ * and is not treated as one: the roll is read four pages at a time, about
+ * three seconds for the whole college. It used to be read one page after
+ * another, and the desk gave up before it finished.
+ *
+ * That third step insists on a genuinely fresh read. Everywhere else a roll
+ * that has just gone stale is good enough to hand over while a new one is
+ * built, but not here — a number missing from a ten-minute-old roll would turn
+ * away a learner who enrolled this morning.
  */
 export async function personByCardNumber(
 	institutionId: string,
@@ -550,7 +624,9 @@ export async function personByCardNumber(
 	// Already looked through this roll above and it did not have them
 	if (inHand) return null
 
-	return (await directoryFor(institutionId)).byNumber.get(wanted) ?? null
+	// A real read, not a stale copy handed over while one is built: turning
+	// somebody away is the answer that must never come from an old roll.
+	return (await directoryFor(institutionId, true)).byNumber.get(wanted) ?? null
 }
 
 /**
