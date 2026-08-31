@@ -1,29 +1,35 @@
 /**
  * Server-side access control for library APIs.
  *
- * MyJKKN proves WHO the caller is and decides WHAT they are. This project keeps
- * no roll of users and no roles of its own: the sign-in token is exchanged for
- * an email, the email is matched to a MyJKKN staff record, and that record's
- * roles decide everything — whether the library opens at all, and which college
- * they see.
+ * Two questions, two answers, two different places — neither of them the
+ * library's own `users` table.
  *
- * Only four roles open this application: super_admin, library_admin, librarian
- * and assistant_librarian. A person may hold several MyJKKN roles at once and
- * only one of them needs to be a library role; where more than one matches, the
- * highest wins. Anyone else — including senior roles like `ceo` — is refused
- * and shown the restricted page.
+ * WHO is this? Supabase Auth, on the project in `NEXT_PUBLIC_SUPABASE_URL1`.
+ * The sign-in token is checked there and what comes back is an email address,
+ * plus any MyJKKN roles the auth user already carries.
  *
- * The `users` and `user_roles` tables are no longer read. They are left in the
- * database untouched, but nothing here consults them.
+ * WHAT may they do? Their MyJKKN role. The email is matched to a MyJKKN staff
+ * record, and that record's roles — pooled with whatever the token already
+ * named — decide everything: whether the library opens at all, and which
+ * college they see. Nothing is assigned in this module.
+ *
+ * Only four MyJKKN roles open this application: super_admin, library_admin,
+ * librarian and assistant_librarian. A person may hold several at once and only
+ * one of them needs to be a library role; where more than one matches, the
+ * highest wins. Super Admin (`super_admin`) has full access — every college,
+ * every page, no further grant required. Anyone else — including senior roles
+ * like `ceo` — is refused and shown the restricted page.
+ *
+ * The library `users` and `user_roles` tables are no longer read. They are
+ * left in the database untouched, but nothing here consults them.
  *
  * One narrow exception exists: `role-grants.ts`, a list of email addresses in
- * the environment that are given a library role for a fixed number of days.
- * It is not a second login — a granted person still signs in through MyJKKN
- * and is still validated the same way — it only answers the question MyJKKN
- * could not, for somebody who has no staff record yet.
+ * the environment that are given a library role for a fixed number of days. It
+ * is not a second login — a granted person still signs in the same way and is
+ * still validated the same way — it only answers the question MyJKKN could
+ * not, for somebody who has no staff record yet.
  */
 
-import { authConfig } from './config'
 import {
 	LIBRARY_ROLES,
 	ROLE_LABEL,
@@ -38,13 +44,15 @@ import {
 	invalidateStaff,
 	type MyjkknStaff,
 } from './myjkkn-staff'
+import { verifyAccessToken } from './supabase-auth-server'
+import { ACCESS_TOKEN_COOKIE } from './supabase-auth'
 import { grantFor, idForGrantedEmail } from './role-grants'
 
 export type { LibraryRole } from './library-roles'
 export { LIBRARY_ROLES, ROLE_LABEL } from './library-roles'
 
 export interface Caller {
-	/** MyJKKN's staff id. The identity every record in this project is filed under. */
+	/** MyJKKN's staff id, or the auth user id when they have no staff record. */
 	userId: string
 	email: string
 	fullName: string | null
@@ -112,74 +120,7 @@ function readToken(request: Request): string | null {
 	const header = request.headers.get('authorization')
 	if (header?.startsWith('Bearer ')) return header.slice(7)
 
-	return readCookie(request, 'access_token')
-}
-
-/**
- * The name as MyJKKN spells it.
- *
- * Different sign-in paths fill different fields, so the first non-empty one
- * wins, falling back to first + last. Returns null rather than an empty string
- * when MyJKKN sends no name at all.
- */
-export function nameFromParent(user: any): string | null {
-	if (!user) return null
-
-	const joined = [user.first_name, user.last_name].filter(Boolean).join(' ')
-	const name = String(user.full_name || user.name || user.display_name || user.displayName || joined || '')
-		.replace(/\s+/g, ' ')
-		.trim()
-
-	return name.length > 0 ? name : null
-}
-
-interface ParentIdentity {
-	email: string
-	fullName: string | null
-	/** Roles the token itself carries, when MyJKKN puts any there. */
-	roleKeys: string[]
-}
-
-/** Roles named anywhere in the validate response, whatever shape they take. */
-function roleKeysFromToken(user: any): string[] {
-	if (!user) return []
-
-	const found: unknown[] = [user.role, user.role_key]
-	for (const field of ['roles', 'role_keys']) {
-		const list = user[field]
-		if (Array.isArray(list)) {
-			for (const entry of list) {
-				found.push(entry && typeof entry === 'object' ? entry.role_key ?? entry.name : entry)
-			}
-		}
-	}
-
-	return found.filter(Boolean).map(String)
-}
-
-/** Asks MyJKKN who this token belongs to. Returns their email and name, or null. */
-async function resolveIdentity(token: string): Promise<ParentIdentity | null> {
-	try {
-		const response = await fetch(`${authConfig.parentAppUrl}/api/auth/validate`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ access_token: token, child_app_id: authConfig.appId }),
-		})
-		if (!response.ok) return null
-
-		const data = await response.json()
-		const email = data?.user?.email ?? null
-		if (!email) return null
-
-		return {
-			email,
-			fullName: nameFromParent(data.user),
-			roleKeys: roleKeysFromToken(data.user),
-		}
-	} catch (error) {
-		console.error('[access] Token validation failed:', error)
-		return null
-	}
+	return readCookie(request, ACCESS_TOKEN_COOKIE)
 }
 
 /**
@@ -224,14 +165,9 @@ async function callerFromStaff(
 		}
 	}
 
-	// Neither a super admin nor a library admin is tied to one college — both
-	// oversee all seven and switch between them.
-	//
-	// This ignores the college MyJKKN files them under, deliberately. The CEO is
-	// recorded against Engineering there, as everyone must be against something,
-	// and reading that as "the CEO runs the Engineering library" pinned them to
-	// one campus and took the switcher away. What MyJKKN's institution field
-	// means for these two roles is where the person sits, not what they run.
+	// Super Admin and Library Admin oversee every college. The college MyJKKN
+	// files them under is where they sit, not what they run — reading it as a
+	// pin took the switcher away.
 	const spansEveryCollege = role === 'super_admin' || role === 'library_admin'
 	const institutionId = spansEveryCollege
 		? null
@@ -239,7 +175,7 @@ async function callerFromStaff(
 
 	// A librarian must belong to a college; without one there is nothing for
 	// them to run, and letting them through unscoped would show them every
-	// campus at once.
+	// campus at once. Super Admin is never in this branch.
 	if (!institutionId && !spansEveryCollege) {
 		return {
 			ok: false,
@@ -270,10 +206,10 @@ async function callerFromStaff(
 /**
  * How long a resolved caller is reused before being worked out again.
  *
- * Answering "who is this" costs a round trip to MyJKKN to validate the token —
- * measured at 1.0–2.9 seconds — plus the staff lookup. Every `/api/lib/*` route
- * starts with it, and opening one page fires several at once, so the desk would
- * pay that toll several times over before anything appeared.
+ * Answering "who is this" costs a round trip to Supabase to check the token,
+ * plus the MyJKKN staff lookup. Every `/api/lib/*` route starts with it, and
+ * opening one page fires several at once, so the desk would pay that toll
+ * several times over before anything appeared.
  *
  * So the answer is held briefly and shared. The rules themselves are untouched
  * — the same validation, the same role resolution, the same institution scope,
@@ -392,9 +328,33 @@ export async function getCaller(request: Request): Promise<AccessResult> {
 	return { caller: null, error: identity.error, status: identity.status }
 }
 
+/**
+ * A person MyJKKN has no staff row for, but whose token already names a role
+ * that spans every college — Super Admin, or Library Admin.
+ *
+ * Super Admin has full access on that role alone. Nothing is assigned here.
+ */
+function callerFromTokenRoles(
+	identity: { authUserId: string; email: string; fullName: string | null },
+	roleKeys: string[]
+): Promise<Identity> | null {
+	const role = highestLibraryRole(roleKeys)
+	if (role !== 'super_admin' && role !== 'library_admin') return null
+
+	return callerFromStaff({
+		id: identity.authUserId,
+		email: identity.email,
+		fullName: identity.fullName,
+		staffCode: null,
+		roleKeys,
+		myjkknInstitutionId: null,
+		isActive: true,
+	})
+}
+
 /** The work behind identifyCaller, unchanged apart from being callable. */
 async function resolveIdentityFor(token: string, viewAsId: string | null): Promise<Identity> {
-	const identity = await resolveIdentity(token)
+	const identity = await verifyAccessToken(token)
 	if (!identity) {
 		return {
 			ok: false,
@@ -418,23 +378,22 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 			myjkknRoles: identity.roleKeys,
 		}
 
+	// No staff row, but the token already names Super Admin (or Library Admin).
+	// They span every college, so the missing staff record costs them nothing
+	// — Super Admin has full access from the MyJKKN role alone.
+	if (!real.ok && real.reason === 'not_staff') {
+		const fromToken = await callerFromTokenRoles(identity, identity.roleKeys)
+		if (fromToken) real = fromToken
+	}
+
 	// Turned away by MyJKKN, but named in the grant list.
 	//
 	// Only these two refusals are overridden. `inactive` deliberately is not: an
 	// account switched off in MyJKKN stays off, and a grant must never be a way
 	// back in for somebody who has been deactivated on purpose.
-	//
-	// It covers `role_not_allowed` as well as `not_staff` because of what
-	// happens next in real life — a granted person is usually added as staff
-	// soon afterwards. Without this, the day their staff record appears with an
-	// ordinary MyJKKN role would be the day their access silently vanished,
-	// weeks before the date it was meant to last until.
 	if (!real.ok && (real.reason === 'not_staff' || real.reason === 'role_not_allowed')) {
 		const grant = grantFor(identity.email)
 		if (grant) {
-			// Resolved through exactly the same function as everybody else, so
-			// there is no second, laxer path into the system — only a different
-			// answer to "what roles does this person hold".
 			const granted = await callerFromStaff({
 				id: staff?.id ?? idForGrantedEmail(identity.email),
 				email: identity.email,

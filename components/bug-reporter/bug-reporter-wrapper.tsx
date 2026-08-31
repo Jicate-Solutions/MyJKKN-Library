@@ -22,7 +22,7 @@
  */
 
 import { BugReporterProvider } from '@boobalan_jkkn/bug-reporter-sdk'
-import { useAuth } from '@/lib/auth/auth-context-parent'
+import { useAuth } from '@/lib/auth/auth-context'
 
 /**
  * Stand-ins used only until the real ones are set. Both must be non-empty or
@@ -44,11 +44,13 @@ export function BugReporterWrapper({ children }: { children: React.ReactNode }) 
 			enabled
 			debug={process.env.NODE_ENV === 'development'}
 			// So a report arrives with a name on it rather than "someone". Absent
-			// before sign-in, which is when nobody has a name to give.
+			// before sign-in, which is when nobody has a name to give. The id is
+			// left off for somebody signed in without a library account yet —
+			// their name and email still identify them on the report.
 			userContext={
 				user
 					? {
-						userId: user.id,
+						userId: user.id ?? undefined,
 						name: user.full_name,
 						email: user.email,
 					}

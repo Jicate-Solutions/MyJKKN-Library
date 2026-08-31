@@ -2,7 +2,7 @@
 
 import { ReactNode, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { useAuth } from '@/lib/auth/auth-context-parent'
+import { useAuth } from '@/lib/auth/auth-context'
 
 interface ProtectedRouteProps {
 	children: ReactNode
@@ -49,6 +49,7 @@ export function ProtectedRoute({
 
 	const checkAuthorization = (): boolean => {
 		if (!user) return false
+		if (user.is_super_admin) return true
 
 		// Check permissions
 		if (requiredPermissions.length > 0) {

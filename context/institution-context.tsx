@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from 'react'
-import { useAuth } from '@/lib/auth/auth-context-parent'
+import { useAuth } from '@/lib/auth/auth-context'
 
 export interface Institution {
 	id?: string

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import Image from 'next/image';
-import { useAuth } from '@/lib/auth/auth-context-parent';
+import { useAuth } from '@/lib/auth/auth-context';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Info, Users as UsersIcon, Shield, Lock, ArrowRight, CheckCircle, Crown } from 'lucide-react';
@@ -24,19 +24,21 @@ function LoginContent() {
   const [showFeatures, setShowFeatures] = useState(false);
   const [currentYear, setCurrentYear] = useState<number>(new Date().getFullYear());
 
-  // Check if we're processing OAuth callback (token in URL)
-  const hasTokenInUrl = searchParams.get('token') !== null;
+  // Only a path within this app — a `redirect` from the address bar must not
+  // be able to bounce somebody off-site the moment they sign in.
+  const safeRedirect = (value: string | null) =>
+    value && value.startsWith('/') && !value.startsWith('//') ? value : '/dashboard';
 
   useEffect(() => {
-		if (isAuthenticated && !hasTokenInUrl) {
-			const redirectParam = searchParams.get('redirect');
+		if (isAuthenticated) {
+			const target = safeRedirect(searchParams.get('redirect'));
 			if (typeof window !== 'undefined') {
-				window.location.replace(redirectParam || '/dashboard');
+				window.location.replace(target);
 			} else {
-				router.replace(redirectParam || '/dashboard');
+				router.replace(target);
 			}
 		}
-  }, [isAuthenticated, router, searchParams, hasTokenInUrl]);
+  }, [isAuthenticated, router, searchParams]);
 
 	useEffect(() => {
 		// Prefetch dashboard to speed up post-login navigation
@@ -66,16 +68,14 @@ function LoginContent() {
     if (errorParam) {
       if (errorParam === 'session_expired') {
         setFormError('Your session expired. Please sign in again to continue.');
-      } else if (errorParam === 'oauth_state_invalid') {
-        setFormError('Authentication session expired. Please try logging in again.');
-      } else if (errorParam === 'oauth_code_expired') {
-        setFormError('Authentication code expired. Please try logging in again.');
-      } else if (errorParam === 'oauth_invalid_request') {
-        setFormError('Invalid authentication request. Please try logging in again.');
-      } else if (errorParam === 'invalid_request' && errorDescription?.includes('bad_oauth_state')) {
-        setFormError('Authentication session expired. Please try logging in again.');
+      } else if (errorParam === 'missing_code' || errorParam === 'exchange_failed') {
+        setFormError('Sign-in didn\'t complete. Please try again.');
+      } else if (errorParam === 'access_denied') {
+        setFormError('Sign-in was cancelled. Choose your account to continue.');
+      } else if (errorParam === 'server_error') {
+        setFormError('Something went wrong while signing you in. Please try again.');
       } else {
-        setFormError('Your account wasn\'t found in our system. Check your login details, or contact support if you need help.');
+        setFormError(errorDescription || 'Your account wasn\'t found in our system. Check your login details, or contact support if you need help.');
       }
       // Clean the URL, but keep `redirect` so an expired session returns the
       // user to the page they were on rather than dropping them on /dashboard
@@ -89,25 +89,12 @@ function LoginContent() {
 
   const handleGoogleLogin = () => {
     setFormError(null);
-    const redirectParam = searchParams.get('redirect');
-    loginWithGoogle(redirectParam || undefined);
+    loginWithGoogle(safeRedirect(searchParams.get('redirect')));
   };
 
   // Don't show loading screen if user is already authenticated
   if (isAuthenticated) {
     return null;
-  }
-
-  // Show fast loading screen when processing OAuth callback (token in URL)
-  if (hasTokenInUrl) {
-    return (
-      <div className='flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 via-green-50 to-emerald-100 dark:from-slate-900 dark:via-slate-800 dark:to-green-900/20'>
-        <div className='flex flex-col items-center space-y-4'>
-          <div className='animate-spin rounded-full h-12 w-12 border-4 border-green-500 border-t-transparent'></div>
-          <p className='text-sm text-muted-foreground animate-pulse'>Completing authentication...</p>
-        </div>
-      </div>
-    );
   }
 
   // Only show loading screen during actual login process, not during initial auth check

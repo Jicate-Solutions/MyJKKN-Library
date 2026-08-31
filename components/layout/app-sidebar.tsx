@@ -74,7 +74,7 @@ import {
 } from "lucide-react"
 
 import { NavMain } from "@/components/layout/nav-main"
-import { useAuth } from "@/lib/auth/auth-context-parent"
+import { useAuth } from "@/lib/auth/auth-context"
 import {
   Sidebar,
   SidebarContent,

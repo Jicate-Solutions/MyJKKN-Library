@@ -1,125 +1,100 @@
+/**
+ * Where Google sends people back to.
+ *
+ * Supabase hands over a one-time code; this turns it into a session and writes
+ * it to cookies, then sends the person on to wherever they were headed. The
+ * exchange happens here on the server rather than in the browser so the session
+ * cookies exist before the first page renders — otherwise the dashboard's own
+ * requests would fire against a session that is not written yet and come back
+ * 401, which reads to the user as "signed in, but nothing loads".
+ *
+ * Nothing is put in the URL. The previous arrangement passed the token and the
+ * whole user object as query parameters for the login page to pick up, which
+ * meant the access token was written into browser history, server logs and any
+ * referrer header the next page sent.
+ */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { getAuthRouteClient } from '@/lib/auth/supabase-auth-server'
+import { ACCESS_TOKEN_COOKIE } from '@/lib/auth/supabase-auth'
+
+/**
+ * Only a path within this application, never an absolute URL.
+ *
+ * `?redirect=` comes in from the address bar, so without this an emailed link
+ * could carry somebody straight off to another site immediately after signing
+ * in — with the sign-in itself having appeared to work.
+ */
+function safeRedirect(value: string | null): string {
+	if (!value) return '/dashboard'
+	if (!value.startsWith('/') || value.startsWith('//')) return '/dashboard'
+	return value
+}
 
 export async function GET(request: NextRequest) {
 	const requestUrl = new URL(request.url)
 	const code = requestUrl.searchParams.get('code')
-	const state = requestUrl.searchParams.get('state')
 	const error = requestUrl.searchParams.get('error')
 	const errorDescription = requestUrl.searchParams.get('error_description')
+	const redirectTo = safeRedirect(requestUrl.searchParams.get('redirect'))
 
-	// Use environment variable, fallback to request origin for production
-	// Use environment variable, fallback to request origin for production
-	const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || requestUrl.origin
+	// The request's own origin is used rather than NEXT_PUBLIC_SITE_URL: this
+	// route is only ever reached by the browser being sent here, so the origin
+	// is right by construction, and a misconfigured site URL cannot bounce
+	// somebody to a host they are not signed in on.
+	const siteUrl = requestUrl.origin
 
-	console.log('OAuth Callback:', {
-		code: !!code,
-		state: !!state,
-		error,
-		errorDescription,
-		siteUrl,
-		requestOrigin: requestUrl.origin,
-		envSiteUrl: process.env.NEXT_PUBLIC_SITE_URL,
-	})
-
-	// Handle OAuth errors
-	if (error) {
-		console.error('OAuth error:', error, errorDescription)
-
-		if (error === 'invalid_request' && errorDescription?.includes('bad_oauth_state')) {
-			const loginUrl = new URL('/login', siteUrl)
-			loginUrl.searchParams.set('error', 'oauth_state_invalid')
-			loginUrl.searchParams.set('error_description', 'Authentication session expired. Please try logging in again.')
-			return NextResponse.redirect(loginUrl)
-		}
-
+	const failWith = (reason: string, description?: string | null) => {
 		const loginUrl = new URL('/login', siteUrl)
-		loginUrl.searchParams.set('error', error)
-		if (errorDescription) {
-			loginUrl.searchParams.set('error_description', errorDescription)
-		}
+		loginUrl.searchParams.set('error', reason)
+		if (description) loginUrl.searchParams.set('error_description', description)
+		if (redirectTo !== '/dashboard') loginUrl.searchParams.set('redirect', redirectTo)
 		return NextResponse.redirect(loginUrl)
 	}
 
-	// Validate required params
+	// Google or Supabase refused before we ever saw a code
+	if (error) {
+		console.error('[auth] Sign-in refused:', error, errorDescription)
+		return failWith(error, errorDescription)
+	}
+
 	if (!code) {
-		console.log('No code found, redirecting to login')
-		const loginUrl = new URL('/login', siteUrl)
-		loginUrl.searchParams.set('error', 'missing_code')
-		loginUrl.searchParams.set('error_description', 'Authorization code not received')
-		return NextResponse.redirect(loginUrl)
+		return failWith('missing_code', 'No sign-in code was returned')
 	}
 
 	try {
-		// Exchange code for tokens via internal API
-		const tokenResponse = await fetch(`${siteUrl}/api/auth/token`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ code, state }),
-		})
+		const supabase = await getAuthRouteClient()
+		const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
 
-		if (!tokenResponse.ok) {
-			const errorData = await tokenResponse.json()
-			console.error('Token exchange failed:', errorData)
-			const loginUrl = new URL('/login', siteUrl)
-			loginUrl.searchParams.set('error', errorData.error || 'token_exchange_failed')
-			loginUrl.searchParams.set('error_description', errorData.error_description || 'Failed to exchange code for tokens')
-			return NextResponse.redirect(loginUrl)
+		if (exchangeError || !data?.session) {
+			console.error('[auth] Code exchange failed:', exchangeError?.message)
+			return failWith('exchange_failed', exchangeError?.message ?? 'Could not complete sign-in')
 		}
 
-		const { access_token, refresh_token, user, expires_in } = await tokenResponse.json()
+		const response = NextResponse.redirect(new URL(redirectTo, siteUrl))
 
-		console.log('Token exchange successful:', {
-			hasAccessToken: !!access_token,
-			hasRefreshToken: !!refresh_token,
-			hasUser: !!user,
-		})
+		// The readable copy every /api/lib/* route reads. Supabase's own session
+		// cookies were already written by the exchange above; this is the single
+		// plain name the guard looks for, kept in step by the browser from here
+		// on (see `mirrorAccessTokenCookie`).
+		const { access_token, expires_at } = data.session
+		const maxAge = expires_at
+			? Math.max(0, Math.floor(expires_at - Date.now() / 1000))
+			: 3600
 
-		// Redirect to login page with tokens in URL params
-		// The login page will handle storing tokens client-side and redirecting
-		// This avoids the middleware redirect loop since /login is a public route
-		const loginUrl = new URL('/login', siteUrl)
-		loginUrl.searchParams.set('token', access_token)
-		if (refresh_token) {
-			loginUrl.searchParams.set('refresh_token', refresh_token)
-		}
-		if (expires_in) {
-			loginUrl.searchParams.set('expires_in', expires_in.toString())
-		}
-		if (user) {
-			loginUrl.searchParams.set('user', encodeURIComponent(JSON.stringify(user)))
-		}
-
-		// Create response with redirect
-		const response = NextResponse.redirect(loginUrl)
-
-		// Set access_token cookie server-side to prevent middleware redirect loop
-		// Cookie will be available immediately on next request
-		const maxAge = expires_in || 3600 // Default 1 hour
-		response.cookies.set('access_token', access_token, {
+		response.cookies.set(ACCESS_TOKEN_COOKIE, access_token, {
 			path: '/',
-			maxAge: maxAge,
-			httpOnly: false, // Allow client-side access for auth checks
-			secure: process.env.NODE_ENV === 'production',
+			maxAge,
+			// Read in the browser so the auth context can tell at a glance
+			// whether a session exists without waiting on a round trip.
+			httpOnly: false,
+			secure: requestUrl.protocol === 'https:',
 			sameSite: 'lax',
 		})
 
-		if (refresh_token) {
-			response.cookies.set('refresh_token', refresh_token, {
-				path: '/',
-				maxAge: 30 * 24 * 60 * 60, // 30 days
-				httpOnly: false,
-				secure: process.env.NODE_ENV === 'production',
-				sameSite: 'lax',
-			})
-		}
-
 		return response
 	} catch (err) {
-		console.error('Callback error:', err)
-		const loginUrl = new URL('/login', siteUrl)
-		loginUrl.searchParams.set('error', 'server_error')
-		loginUrl.searchParams.set('error_description', 'An unexpected error occurred')
-		return NextResponse.redirect(loginUrl)
+		console.error('[auth] Callback error:', err)
+		return failWith('server_error', 'An unexpected error occurred')
 	}
 }

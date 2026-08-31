@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter, Space_Grotesk } from 'next/font/google'
 import '@/styles/globals.css'
-import { AuthProvider } from '@/lib/auth/auth-context-parent'
+import { AuthProvider } from '@/lib/auth/auth-context'
 import { ThemeProvider } from '@/components/common/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
 import { BugReporterWrapper } from '@/components/bug-reporter/bug-reporter-wrapper'
@@ -35,8 +35,10 @@ export default function RootLayout({
 	return (
 		<html lang="en" suppressHydrationWarning className={`${inter.variable} ${spaceGrotesk.variable}`}>
 			<head>
-				<link rel="preconnect" href={process.env.NEXT_PUBLIC_PARENT_APP_URL} crossOrigin="anonymous" />
-				<link rel="dns-prefetch" href={process.env.NEXT_PUBLIC_PARENT_APP_URL} />
+				{/* Sign-in goes straight to Supabase, so the connection is worth
+				    opening before the login button is pressed. */}
+				<link rel="preconnect" href={process.env.NEXT_PUBLIC_SUPABASE_URL1} crossOrigin="anonymous" />
+				<link rel="dns-prefetch" href={process.env.NEXT_PUBLIC_SUPABASE_URL1} />
 				<link rel="preconnect" href="https://fonts.googleapis.com" crossOrigin="anonymous" />
 				<link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
 			</head>

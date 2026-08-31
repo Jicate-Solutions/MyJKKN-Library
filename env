@@ -1,0 +1,41 @@
+
+# .env.local
+# Supabase Configuration
+NEXT_PUBLIC_SUPABASE_URL=https://lbmkvwwpxaoojfhmvtlz.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibWt2d3dweGFvb2pmaG12dGx6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5OTkyODgsImV4cCI6MjA4OTU3NTI4OH0.xKyQBxSh1A8e888cw0avJpy0zFgtB1lJqZMOhDgPrsE
+
+NEXT_PUBLIC_SUPABASE_URL1=https://kvizhngldtiuufknvehv.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY1=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2aXpobmdsZHRpdXVma252ZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjk5MTk4MTQsImV4cCI6MjA0NTQ5NTgxNH0.ZJeXSLnkgYwvudeeKb2o2067CJ9an24FZLJVqAAreZg
+
+
+# Supabase Service Role Key (for server-side operations)
+# Note: You need to get this from your Supabase dashboard > Settings > API
+# For now, using anon key as fallback
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibWt2d3dweGFvb2pmaG12dGx6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk5OTI4OCwiZXhwIjoyMDg5NTc1Mjg4fQ.WmEOANQOl-JIfBA6ShpQcNnj5yJ63hYbqbHHE0idNBc
+
+
+
+
+NEXT_PUBLIC_SITE_URL= https://localhost:3000
+# Parent App Authentication Configuration
+NEXT_PUBLIC_PARENT_APP_URL=https://auth.jkkn.ai
+NEXT_PUBLIC_APP_ID= myjkkn_library_mnd0794o
+NEXT_PUBLIC_API_KEY=app_14008769e8a36a71_20a88eb0d2934629
+#NEXT_PUBLIC_API_KEY=jk_8d1f70a4d6317109fced563a5626eaa8_miwpchif
+NEXT_PUBLIC_REDIRECT_URI= https://localhost:3000/auth/callback
+
+# Server-side only API key (used in token exchange)
+API_KEY=app_14008769e8a36a71_20a88eb0d2934629
+
+
+# API Key format: jk_xxxxx_xxxxx (provided by administrator)
+MYJKKN_API_KEY=jk_8d1f70a4d6317109fced563a5626eaa8_miwpchif
+MYJKKN_API_URL=https://www.jkkn.ai/api
+# JKKN Bug Reporter (bug bounty widget)
+NEXT_PUBLIC_BUG_REPORTER_API_KEY=br_j09MgWpVYXmLER4UCIOQ61ki8Tr7-wP7
+NEXT_PUBLIC_BUG_REPORTER_API_URL=https://jkkn-centralized-bug-reporter.vercel.app
+NEXT_PUBLIC_BUG_REPORTER_FORCE_ENABLE=false
+
+# Temporary library access for people MyJKKN has no library role for.
+# Format: email:role:LAST-DAY  (comma separated). Lapses on its own.
+LIBRARY_ACCESS_GRANTS="director@jkkn.ac.in:super_admin:2026-09-25,isvarya@jkkn.ac.in:super_admin:2026-09-25"

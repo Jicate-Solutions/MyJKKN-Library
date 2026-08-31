@@ -9,7 +9,7 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { useAuth } from "@/lib/auth/auth-context-parent"
+import { useAuth } from "@/lib/auth/auth-context"
 // Bug reporter removed during LIB migration
 import {
   DropdownMenu,
@@ -46,7 +46,7 @@ export function NavUser({ variant = "compact" }: NavUserProps) {
   const lastLogin = user?.last_login
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null)
 
-  // Use institution_name directly from user object (populated by sync-session)
+  // Use institution_name directly from user object (populated by /api/auth/session)
   const institutionName = user?.institution_name || null
 
   const initials = (displayName || "U")

@@ -11,9 +11,11 @@
  * is an employee code, is missing on some records, and is therefore never used
  * as an identity.
  *
- * Someone MyJKKN has no staff record for — a learner, or an address that does
- * not belong to staff at all — simply does not resolve, and the library shows
- * them the restricted page. That is the intended outcome, not an error.
+ * Someone MyJKKN has no staff record for simply does not resolve here, and that
+ * is not an error — `server-access.ts` then falls back to the roles the sign-in
+ * token itself carries. What is lost without a record is the college, so a
+ * librarian is still refused; a super admin or library admin, who span every
+ * college, are let in on their role alone.
  */
 
 import { getSupabaseServer } from '@/lib/supabase-server'

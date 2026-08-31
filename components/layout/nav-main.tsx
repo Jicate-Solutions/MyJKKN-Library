@@ -27,7 +27,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { useAuth } from "@/lib/auth/auth-context-parent"
+import { useAuth } from "@/lib/auth/auth-context"
 import { useNavigationLog } from "@/hooks/use-transaction-log"
 
 export function NavMain({
