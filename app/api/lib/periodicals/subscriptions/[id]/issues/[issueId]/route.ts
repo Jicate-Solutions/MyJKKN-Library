@@ -109,7 +109,11 @@ export async function PUT(
 				volume_number: body.volume_number ?? null,
 				issue_number: body.issue_number ?? null,
 				issue_date: body.issue_date ?? null,
-				received_date: body.received_date ?? issue.received_date,
+				// A date given is used. With none given, an issue put back to
+				// expected loses the one it had — it has not arrived after all —
+				// while any other status keeps the day it was recorded as arriving.
+				received_date: body.received_date
+					?? (receiptStatus === 'expected' ? null : issue.received_date),
 				cover_date: body.cover_date ?? null,
 				pages: body.pages ?? null,
 				receipt_status: receiptStatus,

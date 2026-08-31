@@ -46,15 +46,24 @@ interface Policy {
 	requires_no_dues: boolean
 }
 
-const CATEGORY_ORDER = ['learner', 'facilitator', 'other', 'team_member', 'guest', 'alumni']
+/**
+ * The categories a library actually lends to.
+ *
+ * Members come from MyJKKN, and MyJKKN gives exactly two kinds: a learner or a
+ * teaching staff member. Every borrower on record is one of those two, and
+ * `lib_member_categories` holds rules for those two and nothing else.
+ *
+ * Other, Team Member, Guest and Alumni used to be listed here as well. They
+ * were not read from the database — they were invented on this screen, shown as
+ * rows of zeros, and then WRITTEN on Save, creating four rules per college that
+ * nothing would ever look up. A row of zeros also reads as a real rule that
+ * allows nothing, which is worse than not being there.
+ */
+const CATEGORY_ORDER = ['learner', 'facilitator']
 
 const CATEGORY_LABEL: Record<string, string> = {
 	learner: 'Learner',
 	facilitator: 'Facilitator',
-	other: 'Other',
-	team_member: 'Team Member',
-	guest: 'Guest',
-	alumni: 'Alumni',
 }
 
 export default function LibrarySettingsPage() {
@@ -122,8 +131,8 @@ export default function LibrarySettingsPage() {
 		try {
 			setSaving(true)
 
-			// Six category rules and the policy row, all independent of each other.
-			// Saved one after another this was seven round trips deep; sent
+			// The category rules and the policy row, all independent of each other.
+			// Saved one after another this was several round trips deep; sent
 			// together it is as slow as the slowest one.
 			const saves: Promise<void>[] = rules.map(async rule => {
 				const res = await fetch('/api/lib/settings/categories', {

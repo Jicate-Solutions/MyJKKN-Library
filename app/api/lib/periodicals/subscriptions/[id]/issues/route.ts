@@ -19,12 +19,18 @@ export async function GET(
 		// The accessioned copy used to be joined on too, but the issues table
 		// reads none of it — every column it draws is already on the issue row —
 		// so that join was fetched and discarded on every load.
+		// Newest first by the date on the issue — but an issue still expected has
+		// no date yet, and every one of a year's twelve would otherwise come back
+		// in whatever order the database found them, so Issue 7 could sit above
+		// Issue 2 on the register. Undated rows go last, in the order they were
+		// laid out, which is 1, 2, 3 and so on.
 		const { data, error } = await fetchAllRows<Record<string, any>>(range =>
 			supabase
 				.from('lib_periodical_issues')
 				.select('*')
 				.eq('subscription_id', id)
-				.order('issue_date', { ascending: false })
+				.order('issue_date', { ascending: false, nullsFirst: false })
+				.order('created_at', { ascending: true })
 				.range(range.from, range.to)
 		)
 
@@ -80,7 +86,10 @@ export async function POST(
 				volume_number: body.volume_number ?? null,
 				issue_number: body.issue_number ?? null,
 				issue_date: body.issue_date ?? null,
-				received_date: body.received_date ?? new Date().toISOString().split('T')[0],
+				// An issue still expected has not been received, so it carries no
+				// received date. Only one actually in hand falls back to today.
+				received_date: body.received_date
+					|| (body.receipt_status === 'expected' ? null : new Date().toISOString().split('T')[0]),
 				cover_date: body.cover_date ?? null,
 				pages: body.pages ?? null,
 				receipt_status: body.receipt_status ?? 'received',

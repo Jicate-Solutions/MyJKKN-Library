@@ -26,6 +26,11 @@ import {
 	usesSupplier,
 	usesBookOnlyFields,
 	departmentRequiredFor,
+	usesTypedAccessionNumber,
+	usesPageCount,
+	isReferenceOnlyForced,
+	isPeriodicalType,
+	PERIODICAL_ACCESSION_PREFIX,
 } from '@/lib/library/catalogue-options'
 
 export interface TitleFormFields {
@@ -93,6 +98,23 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	const showSupplier = showCopySection && usesSupplier(form.book_type)
 	/** Author, Edition/Issue and Price belong to a book, not to a periodical. */
 	const bookOnly = usesBookOnlyFields(form.book_type)
+	/** A book's number is written inside it; a magazine's is allotted. */
+	const typedAccession = usesTypedAccessionNumber(form.book_type)
+	const showPages = usesPageCount(form.book_type)
+	const lendingFixed = isReferenceOnlyForced(form.book_type)
+
+	/**
+	 * Choosing Magazine or Journals settles Reference Only on the spot.
+	 *
+	 * Set here rather than only on save so the librarian sees the answer the
+	 * moment they pick the type, instead of a field that says Lendable and then
+	 * saves as something else. Switching back to Books leaves the value alone —
+	 * the field is editable again, and a non-lendable book is a real thing.
+	 */
+	const chooseBookType = (value: string) =>
+		set(isReferenceOnlyForced(value)
+			? { book_type: value, is_reference_only: true }
+			: { book_type: value })
 
 	const field = (name: keyof TitleFormFields, label: string, required: boolean, extra?: {
 		placeholder?: string
@@ -121,7 +143,7 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 			<Section title="What Are You Adding?">
 				<div className="space-y-2">
 					<Label className="text-sm font-semibold">Book Type <Required /></Label>
-					<Select value={form.book_type} onValueChange={v => set({ book_type: v })}>
+					<Select value={form.book_type} onValueChange={chooseBookType}>
 						<SelectTrigger className={errors.book_type ? 'border-red-500' : ''}>
 							<SelectValue placeholder="Choose" />
 						</SelectTrigger>
@@ -132,8 +154,8 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 					{errors.book_type
 						? <p className="text-xs text-red-500">{errors.book_type}</p>
 						: <p className="text-xs text-muted-foreground">
-							{usesIssn(form.book_type)
-								? 'A magazine or journal is asked for its ISSN and its supplier.'
+							{isPeriodicalType(form.book_type)
+								? `A magazine or journal is asked for its ISSN and its supplier, is numbered ${PERIODICAL_ACCESSION_PREFIX}1, ${PERIODICAL_ACCESSION_PREFIX}2… automatically, and never leaves the library.`
 								: 'This decides what the rest of the form asks for.'}
 						</p>}
 				</div>
@@ -155,8 +177,27 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 
 			{showCopySection && (
 				<Section title="The Book in Hand" hint="Saving records this book as copy 1. Further copies are added from the title's own page.">
+					{/* Nobody writes an accession number on the cover of a magazine, so
+					    asking for one would only get an invented number typed in. The
+					    register allots the next in this college's own JM series
+					    instead, and says so rather than leaving a gap the librarian
+					    has to wonder about. */}
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						{field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })}
+						{typedAccession
+							? field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })
+							: (
+								<div className="space-y-2">
+									<Label className="text-sm font-semibold">Accession Number</Label>
+									<div className="flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+										{PERIODICAL_ACCESSION_PREFIX}… given on saving
+									</div>
+									<p className="text-xs text-muted-foreground">
+										Magazines and journals are numbered {PERIODICAL_ACCESSION_PREFIX}1,{' '}
+										{PERIODICAL_ACCESSION_PREFIX}2… in their own series, so your book
+										register keeps running unbroken.
+									</p>
+								</div>
+							)}
 						{field('accession_date', 'Date of Adding', true, { type: 'date' })}
 					</div>
 				</Section>
@@ -190,15 +231,25 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 						</Select>
 						{errors.language && <p className="text-xs text-red-500">{errors.language}</p>}
 					</div>
-					{field('pages', 'Total Pages', true, { type: 'number', placeholder: 'e.g. 624' })}
+					{/* A book has one page count for its whole life. A magazine title
+					    will hold a hundred issues of different lengths, so a single
+					    figure written against the title says nothing — the same reason
+					    its issue number is not asked for here. */}
+					{showPages && field('pages', 'Total Pages', true, { type: 'number', placeholder: 'e.g. 624' })}
 				</div>
 
 				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 					<div className="space-y-2">
-						<Label className="text-sm font-semibold">Reference Only <Required /></Label>
+						<Label className="text-sm font-semibold">Reference Only {!lendingFixed && <Required />}</Label>
+						{/* Not a choice for a magazine or journal: every college keeps
+						    the current issues in the reading room and they do not go
+						    out. Left editable, one mis-click would put a journal on
+						    loan, and once it is out the desk cannot tell it apart from
+						    a book that was meant to go. */}
 						<Select
 							value={form.is_reference_only ? 'Non-lendable' : 'Lendable'}
 							onValueChange={v => set({ is_reference_only: v === 'Non-lendable' })}
+							disabled={lendingFixed}
 						>
 							<SelectTrigger><SelectValue /></SelectTrigger>
 							<SelectContent>
@@ -206,7 +257,9 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 							</SelectContent>
 						</Select>
 						<p className="text-xs text-muted-foreground">
-							Non-lendable books stay in the library and cannot be issued.
+							{lendingFixed
+								? 'Magazines and journals stay in the reading room, so this is fixed at Non-lendable and cannot be issued or returned.'
+								: 'Non-lendable books stay in the library and cannot be issued.'}
 						</p>
 					</div>
 				</div>

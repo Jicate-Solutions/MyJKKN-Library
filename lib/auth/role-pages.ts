@@ -72,6 +72,7 @@ export const PAGE_CATALOGUE: CatalogueGroup[] = [
 		label: 'Knowledge Registry',
 		pages: [
 			{ title: 'Catalogue', url: '/registry' },
+			{ title: 'Department Libraries', url: '/departments' },
 			{ title: 'Members', url: '/members' },
 		],
 	},

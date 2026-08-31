@@ -1009,15 +1009,21 @@ function ReturnTab({ institutionId }: { institutionId: string | null }) {
 							</div>
 							<div>
 								<p className="text-xs text-muted-foreground">Due Date</p>
-								<p className={`mt-0.5 ${transaction.overdue_days && transaction.overdue_days > 0 ? 'text-red-600 font-medium' : ''}`}>
+								<p className={`mt-0.5 ${(transaction.overdue_days ?? 0) > 0 ? 'text-red-600 font-medium' : ''}`}>
 									{new Date(transaction.due_date).toLocaleDateString('en-IN')}
 								</p>
 							</div>
 						</div>
-						{transaction.overdue_days && transaction.overdue_days > 0 && (
+						{/* `days && days > 0 && …` printed a bare 0 on every book that was
+						    not late: the first term short-circuits to the number itself,
+						    and React draws a 0 where it draws nothing for false. */}
+						{(transaction.overdue_days ?? 0) > 0 && (
 							<div className="flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-red-700 text-sm">
 								<AlertTriangle className="h-4 w-4 shrink-0" />
-								<span>{transaction.overdue_days} days overdue — Charge: ₹{loanLateCharge(transaction).toFixed(2)}</span>
+								<span>
+									{transaction.overdue_days} day{transaction.overdue_days === 1 ? '' : 's'} overdue
+									{' — '}Charge: ₹{loanLateCharge(transaction).toFixed(2)}
+								</span>
 							</div>
 						)}
 						{error && <ScanFeedback busy={false} code={null} error={error} />}
@@ -1178,7 +1184,10 @@ export default function CirculationPage() {
 			{/* Tabs Card */}
 			<Card className="flex-1">
 				<CardContent className="p-4 sm:p-6">
-					<div className="max-w-lg mx-auto">
+					{/* 512px was tight once the member card carried loans, holds and
+				    charges. 672px is the next step up and almost exactly a third
+				    wider; it still centres, and still fits a narrow laptop. */}
+				<div className="max-w-2xl mx-auto">
 						<Tabs defaultValue="issue">
 							<TabsList className="w-full grid grid-cols-3 h-9">
 								<TabsTrigger value="issue" className="text-sm">

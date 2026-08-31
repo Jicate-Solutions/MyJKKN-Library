@@ -46,6 +46,13 @@ export interface RegisterRow {
 	book_location: string | null
 	is_reference_only: boolean
 	total_copies: number
+	/**
+	 * The vendor this copy came from. Per copy, not per title: two copies of the
+	 * same journal can arrive from two suppliers. Shown in place of Author when
+	 * the register is filtered to Magazine or Journals.
+	 */
+	supplier_id: string | null
+	supplier_name: string | null
 }
 
 interface Props {
@@ -224,6 +231,23 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 
 	const colCount = 7
 
+	/**
+	 * One column, holding whichever of the two the material actually has.
+	 *
+	 * A journal has no author — it has an author per article — and what a
+	 * librarian looks a periodical up by is the vendor it comes from, issue after
+	 * issue. A book is the other way round: it has one author and its supplier
+	 * belongs to the purchase order, not to the shelf.
+	 *
+	 * Driven by the filter rather than by each row, because a column heading that
+	 * changed meaning line by line would be unreadable. With Books, or with
+	 * everything shown at once, it stays Author.
+	 */
+	const showSupplier = isPeriodicalType(typeFilter)
+	const bylineHeader = showSupplier ? 'Supplier' : 'Author'
+	const byline = (row: RegisterRow): string | null =>
+		showSupplier ? row.supplier_name : row.author
+
 	return (
 		<TooltipProvider delayDuration={300}>
 			<div className="flex flex-1 flex-col gap-4 min-h-0">
@@ -361,7 +385,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 										<TableRow>
 											<TableHead className="text-xs font-semibold w-[130px]">Accession #</TableHead>
 											<TableHead className="text-xs font-semibold">Title</TableHead>
-											<TableHead className="text-xs font-semibold w-[160px]">Author</TableHead>
+											<TableHead className="text-xs font-semibold w-[160px]">{bylineHeader}</TableHead>
 											<TableHead className="text-xs font-semibold w-[110px]">Type</TableHead>
 											<TableHead className="text-xs font-semibold w-[150px]">ISBN/ISSN</TableHead>
 											<TableHead className="text-xs font-semibold w-[120px]">Status</TableHead>
@@ -400,7 +424,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 													</div>
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground max-w-[160px]">
-													<span className="truncate block">{r.author ?? '—'}</span>
+													<span className="truncate block">{byline(r) ?? '—'}</span>
 												</TableCell>
 												<TableCell>
 													<Badge variant="outline" className="text-xs">{r.book_type ?? '—'}</Badge>
@@ -465,7 +489,7 @@ export function AccessionRegisterTable({ rows, loading, onRefresh, onEdit, onDel
 										<div className="flex-1 min-w-0">
 											<p className="text-sm font-mono font-semibold">{r.accession_number}</p>
 											<p className="font-medium text-sm truncate mt-0.5">{r.title}</p>
-											<p className="text-xs text-muted-foreground truncate">{r.author ?? '—'}</p>
+											<p className="text-xs text-muted-foreground truncate">{byline(r) ?? '—'}</p>
 										</div>
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>

@@ -28,17 +28,38 @@ export async function GET(request: Request) {
 		// Shelves are created a rack at a time, up to 500 in one go, so a college
 		// that has laid out its cupboards over a few sittings can hold more than
 		// the thousand a single request returns.
-		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+		//
+		// `shelvesOnly` leaves out department libraries. They live in this same
+		// table — that is what lets a book sent to a department keep one accession
+		// number and show up correctly on every shelf report — but they are not
+		// racks and they are not managed from here. This screen offers a Delete,
+		// and `lib_items.location_id` is ON DELETE SET NULL, so removing one from
+		// here would take the shelf away and leave its books with no record of
+		// where they are. They belong to /departments.
+		const read = (shelvesOnly: boolean) => fetchAllRows<Record<string, any>>(range => {
 			let query = supabase
 				.from('lib_locations')
 				.select('*')
-				.order('sort_order', { ascending: true })
-				.order('location_code', { ascending: true })
 
+			if (shelvesOnly) query = query.eq('location_kind', 'shelf')
 			if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
 
-			return query.range(range.from, range.to)
+			return query
+				.order('sort_order', { ascending: true })
+				.order('location_code', { ascending: true })
+				.range(range.from, range.to)
 		})
+
+		let { data, error } = await read(true)
+
+		// A database where the department libraries migration has not been run yet
+		// has no `location_kind` column, and this page worked perfectly well before
+		// it existed. It must keep working: the filter is dropped and every shelf
+		// is listed, exactly as it was.
+		if (error && (error as { code?: string })?.code === '42703') {
+			;({ data, error } = await read(false))
+		}
+
 		if (error) {
 			console.error('Error listing locations:', error)
 			return NextResponse.json({ error: 'Failed to load locations' }, { status: 500 })

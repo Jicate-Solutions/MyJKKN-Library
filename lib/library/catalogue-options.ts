@@ -233,6 +233,57 @@ export function usesBookOnlyFields(bookType: string): boolean {
 export const BOOK_ONLY_KEYS: string[] = ['author', 'edition', 'price']
 
 /**
+ * The series a magazine or journal is numbered in: JM1, JM2, JM3…
+ *
+ * Deliberately not the book series. A college with 12,000 books would otherwise
+ * see the next magazine take 12,001 and the next real book 12,002, and the
+ * accession register — the one bound book a library is audited on — would have
+ * periodicals scattered through it. A separate prefix keeps the book register
+ * unbroken and still answers "how many magazines do we hold" by counting JM.
+ *
+ * Per college, like every other accession number: `lib_items` is unique on
+ * (institution_id, accession_number), so each of the seven libraries has its
+ * own JM1 and none of them can collide with another's.
+ */
+export const PERIODICAL_ACCESSION_PREFIX = 'JM'
+
+/**
+ * Does the librarian type the accession number for this material?
+ *
+ * A book carries its number written inside it, so it is typed from the book in
+ * hand. A magazine does not — nobody writes JM47 on the cover of an issue — so
+ * the system allots the next one in the JM series instead of asking for a
+ * number that does not exist.
+ */
+export function usesTypedAccessionNumber(bookType: string): boolean {
+	return !isPeriodicalType(bookType)
+}
+
+/**
+ * Total Pages, which a magazine or journal does not have as a title.
+ *
+ * A book has one page count for its whole life. A magazine title will hold a
+ * hundred issues of different lengths, so a single figure written against the
+ * title is meaningless — the same reason its issue number is not asked for
+ * here. Page counts, where a library wants them, belong to the issue.
+ */
+export function usesPageCount(bookType: string): boolean {
+	return !isPeriodicalType(bookType)
+}
+
+/**
+ * Magazines and journals never circulate — so Reference Only is not a choice.
+ *
+ * Every college said the same thing: the reading room keeps the current issues
+ * and they do not go out of the building. Leaving the field editable would let
+ * one mis-click put a journal on loan and, once it is out, the desk has no way
+ * to tell it apart from a book that was meant to go.
+ */
+export function isReferenceOnlyForced(bookType: string): boolean {
+	return isPeriodicalType(bookType)
+}
+
+/**
  * Every book on the shelf is owned by a department. A magazine or journal sits
  * in the reading room for the whole college, so the register does not make the
  * librarian invent a department for it.

@@ -54,11 +54,34 @@ const defaultIssueForm: IssueFormData = {
 	volume_number: '',
 	issue_number: '',
 	issue_date: '',
-	received_date: new Date().toISOString().split('T')[0],
+	// Empty, not today: the form now opens on 'expected', and an issue that has
+	// not arrived has no received date. Filled in the moment the status is
+	// changed to received — see the Status field.
+	received_date: '',
 	cover_date: '',
 	pages: '',
-	receipt_status: 'received',
+	receipt_status: 'expected',
 	remarks: '',
+}
+
+const today = () => new Date().toISOString().split('T')[0]
+
+/**
+ * The next issue number in the run.
+ *
+ * A subscription lays its year out in advance, so the numbers are already
+ * there — this finds the highest and offers the one after it, which is what a
+ * librarian adding a thirteenth issue to a twelve-issue year would write
+ * anyway. Numbers that are not numbers ("Special", "Suppl") are skipped rather
+ * than guessed at.
+ */
+function nextIssueNumber(issues: LibPeriodicalIssue[]): string {
+	let highest = 0
+	for (const issue of issues) {
+		const value = Number((issue.issue_number ?? '').trim())
+		if (Number.isInteger(value) && value > highest) highest = value
+	}
+	return String(highest + 1)
 }
 
 /** A plain date, as the rest of the register writes them. */
@@ -144,7 +167,21 @@ export default function SubscriptionDetailPage() {
 		? issues.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
 		: issues
 
-	const resetForm = () => { setForm(defaultIssueForm); setErrors({}); setEditingIssue(null) }
+	/**
+	 * A blank Record Issue sheet, already carrying what this subscription says.
+	 *
+	 * The volume and the issue number are not questions a librarian standing at
+	 * the counter should have to answer — the subscription was registered with
+	 * its volume, and the issues before this one give the number. Everything
+	 * else stays empty, because everything else is read off the issue in hand.
+	 */
+	const blankIssueForm = useCallback((): IssueFormData => ({
+		...defaultIssueForm,
+		volume_number: subscription?.start_volume ?? '',
+		issue_number: nextIssueNumber(issues),
+	}), [subscription?.start_volume, issues])
+
+	const resetForm = () => { setForm(blankIssueForm()); setErrors({}); setEditingIssue(null) }
 
 	const startEdit = (issue: LibPeriodicalIssue) => {
 		setEditingIssue(issue)
@@ -165,7 +202,11 @@ export default function SubscriptionDetailPage() {
 
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
-		if (!form.received_date) e.received_date = 'Received date is required'
+		// An issue still expected has not arrived, so there is no date to give.
+		// Every other status says it is here, or was, and that day matters.
+		if (form.receipt_status !== 'expected' && !form.received_date) {
+			e.received_date = 'Received date is required'
+		}
 		setErrors(e)
 		return Object.keys(e).length === 0
 	}
@@ -180,6 +221,9 @@ export default function SubscriptionDetailPage() {
 				institution_id: subscription?.institution_id ?? '',
 				pages: form.pages ? Number(form.pages) : undefined,
 				issue_date: form.issue_date || undefined,
+				// Sent as null rather than left out, so an issue put back to
+				// expected loses the date it had instead of keeping it.
+				received_date: form.received_date || null,
 				cover_date: form.cover_date || undefined,
 				remarks: form.remarks.trim() || undefined,
 			}
@@ -436,7 +480,6 @@ export default function SubscriptionDetailPage() {
 											<TableHead className="text-xs font-semibold">Cover Date</TableHead>
 											<TableHead className="text-xs font-semibold">Issue Date</TableHead>
 											<TableHead className="text-xs font-semibold">Received Date</TableHead>
-											<TableHead className="text-xs font-semibold">Pages</TableHead>
 											<TableHead className="text-xs font-semibold">Status</TableHead>
 											<TableHead className="text-xs font-semibold w-10"></TableHead>
 										</TableRow>
@@ -444,7 +487,7 @@ export default function SubscriptionDetailPage() {
 									<TableBody>
 										{paginated.length === 0 ? (
 											<TableRow>
-												<TableCell colSpan={9} className="h-32 text-center">
+												<TableCell colSpan={8} className="h-32 text-center">
 													<div className="flex flex-col items-center gap-1 text-muted-foreground">
 														<BookMarked className="h-8 w-8 opacity-20" />
 														<span className="text-sm">No issues recorded yet</span>
@@ -463,7 +506,6 @@ export default function SubscriptionDetailPage() {
 												<TableCell className="text-sm">{coverDateLabel(issue.cover_date)}</TableCell>
 												<TableCell className="text-sm">{dateLabel(issue.issue_date)}</TableCell>
 												<TableCell className="text-sm">{dateLabel(issue.received_date)}</TableCell>
-												<TableCell className="text-sm">{issue.pages ?? '—'}</TableCell>
 												<TableCell>
 													<Badge variant="outline" className={`text-xs ${receiptColors[issue.receipt_status]}`}>
 														{issue.receipt_status}
@@ -546,7 +588,6 @@ export default function SubscriptionDetailPage() {
 											</DropdownMenu>
 										</div>
 									</div>
-									{issue.pages && <p className="text-xs text-muted-foreground">{issue.pages} pages</p>}
 									{issue.remarks && <p className="text-xs text-muted-foreground italic">{issue.remarks}</p>}
 								</div>
 							))}
@@ -617,14 +658,25 @@ export default function SubscriptionDetailPage() {
 									<Input type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Received Date <span className="text-red-500">*</span></Label>
+									<Label className="text-sm font-semibold">
+										Received Date {form.receipt_status !== 'expected' && <span className="text-red-500">*</span>}
+									</Label>
+									{/* An issue still expected has not been received, so there is
+									    nothing to date. Demanded again the moment the status says
+									    it has arrived. */}
 									<Input
 										type="date"
 										value={form.received_date}
 										onChange={e => setForm(f => ({ ...f, received_date: e.target.value }))}
 										className={errors.received_date ? 'border-red-500' : ''}
 									/>
-									{errors.received_date && <p className="text-xs text-red-500">{errors.received_date}</p>}
+									{errors.received_date
+										? <p className="text-xs text-red-500">{errors.received_date}</p>
+										: form.receipt_status === 'expected' && (
+											<p className="text-xs text-muted-foreground">
+												Not needed while the issue is still expected.
+											</p>
+										)}
 								</div>
 							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -648,7 +700,20 @@ export default function SubscriptionDetailPage() {
 							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Receipt Status</h3>
 							<div className="space-y-2">
 								<Label className="text-sm font-semibold">Status</Label>
-								<Select value={form.receipt_status} onValueChange={v => setForm(f => ({ ...f, receipt_status: v as LibIssueReceiptStatus }))}>
+								{/* Saying an issue has arrived fills in the day it arrived, if
+								    nothing else has been put there. That is the one thing the
+								    librarian would otherwise have to type straight after
+								    choosing 'received', every single time. */}
+								<Select
+									value={form.receipt_status}
+									onValueChange={v => setForm(f => ({
+										...f,
+										receipt_status: v as LibIssueReceiptStatus,
+										received_date: v === 'expected'
+											? f.received_date
+											: (f.received_date || today()),
+									}))}
+								>
 									<SelectTrigger><SelectValue /></SelectTrigger>
 									<SelectContent>
 										{(Object.keys(receiptColors) as LibIssueReceiptStatus[]).map(s => (
@@ -657,7 +722,7 @@ export default function SubscriptionDetailPage() {
 									</SelectContent>
 								</Select>
 								<p className="text-xs text-muted-foreground">
-									An issue marked missing can be set to received here the day it arrives.
+									An issue marked expected or missing can be set to received here the day it arrives.
 								</p>
 							</div>
 							<div className="space-y-2">

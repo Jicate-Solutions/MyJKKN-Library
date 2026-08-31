@@ -15,16 +15,37 @@ export async function GET(request: Request) {
 		const resourceFormat = searchParams.get('resource_format')
 		const search = searchParams.get('search')
 		const isActive = searchParams.get('is_active')
+		/**
+		 * Only titles the library physically holds, with the supplier they came
+		 * from. Off by default, so every existing caller sees exactly the list it
+		 * saw before.
+		 *
+		 * Asked for by the subscription form. A title with no accessioned copy is
+		 * a line somebody typed and nothing more — offering it there produced
+		 * subscriptions against journals that were not on any shelf, and the
+		 * register could not show them because the register lists copies.
+		 *
+		 * The supplier rides along because it is entered once, on the title, and
+		 * every screen that needs it reads it from there rather than asking the
+		 * librarian again.
+		 */
+		const withCopies = searchParams.get('with_copies') === 'true'
 
 		// Sliced, because one request returns at most a thousand rows and a
 		// college holding more titles than that would silently lose the rest.
 		const { data, error } = await fetchAllRows(range => {
 			let query = supabase
 				.from('lib_catalogue_records')
-				.select(`
-					*,
-					authors:lib_catalogue_authors(id, author_name, author_type, sort_order)
-				`)
+				.select(withCopies
+					? `
+						*,
+						authors:lib_catalogue_authors(id, author_name, author_type, sort_order),
+						copies:lib_items(id, accession_number, supplier:lib_suppliers(id, supplier_name))
+					`
+					: `
+						*,
+						authors:lib_catalogue_authors(id, author_name, author_type, sort_order)
+					`)
 
 			if (institutionId) query = query.eq('institution_id', institutionId)
 			if (resourceFormat) query = query.eq('resource_format', resourceFormat)
@@ -45,7 +66,27 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Failed to fetch catalogue records' }, { status: 500 })
 		}
 
-		return NextResponse.json(data || [])
+		if (!withCopies) return NextResponse.json(data || [])
+
+		// A title with nothing on the shelf is dropped, and the supplier is lifted
+		// off the copies onto the title where the caller expects it. The first
+		// copy that names one wins: a journal is one subscription from one vendor,
+		// and a title whose copies disagree is a data question, not a choice this
+		// list should be making silently.
+		const held = ((data || []) as Array<Record<string, any>>)
+			.filter(record => Array.isArray(record.copies) && record.copies.length > 0)
+			.map(record => {
+				const copies = record.copies as Array<{ supplier?: { id: string; supplier_name: string } | null }>
+				const supplier = copies.find(copy => copy.supplier)?.supplier ?? null
+				return {
+					...record,
+					copy_count: copies.length,
+					supplier_id: supplier?.id ?? null,
+					supplier_name: supplier?.supplier_name ?? null,
+				}
+			})
+
+		return NextResponse.json(held)
 	} catch (error) {
 		console.error('Unexpected error fetching catalogue:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

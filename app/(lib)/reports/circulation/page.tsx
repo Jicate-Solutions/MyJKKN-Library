@@ -394,20 +394,47 @@ export default function CirculationReportsPage() {
 					</Button>
 				</div>
 
-				<div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-					{/* The menu of reports */}
-					<Card className="h-fit lg:sticky lg:top-2">
-						<CardHeader className="border-b px-4 py-3">
-							<h2 className="text-sm font-semibold font-heading">Reports</h2>
-							<p className="text-xs text-muted-foreground">{ALL_REPORTS.length} to choose from</p>
-						</CardHeader>
+				<div className="flex min-w-0 flex-col gap-4">
+					{/*
+					 * The fourteen reports, across the top.
+					 *
+					 * They used to sit in a 260px column down the left, which took a quarter
+					 * of the width from the thing people actually came to read. These tables
+					 * are wide — the transaction log alone carries nine columns including two
+					 * long ones, member name and title — and every pixel spent on a menu was a
+					 * title truncated with an ellipsis.
+					 *
+					 * It WRAPS. Nothing scrolls.
+					 *
+					 * The first attempt let the strip scroll sideways, and that was worse than
+					 * the column it replaced: the whole PAGE scrolled horizontally. A flex
+					 * item's default minimum width is its own content, so the card grew past
+					 * the screen instead of clipping, and took the page with it. Wrapping has
+					 * no such failure mode — there is no width it cannot fit into.
+					 *
+					 * Every chip and every group label is a direct child of one wrapping row,
+					 * deliberately flat rather than each group boxed as an unbreakable unit: a
+					 * four-chip group would otherwise become the thing that cannot fit on a
+					 * narrow screen, and the overflow would be back.
+					 */}
+					<Card>
 						<CardContent className="p-2">
-							{REPORT_GROUPS.map(group => (
-								<div key={group.group} className="mb-2 last:mb-0">
-									<p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+							<div className="flex flex-wrap items-center gap-1">
+								{REPORT_GROUPS.map((group, index) => [
+									index > 0 && (
+										<Separator
+											key={`${group.group}-divider`}
+											orientation="vertical"
+											className="mx-1.5 hidden h-6 sm:block"
+										/>
+									),
+									<span
+										key={`${group.group}-label`}
+										className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+									>
 										{group.group}
-									</p>
-									{group.reports.map(entry => {
+									</span>,
+									...group.reports.map(entry => {
 										const active = entry.key === report
 										return (
 											<Tooltip key={entry.key}>
@@ -416,21 +443,21 @@ export default function CirculationReportsPage() {
 														type="button"
 														onClick={() => setReport(entry.key)}
 														className={
-															'w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ' +
+															'rounded-md border px-2.5 py-1.5 text-sm transition-colors ' +
 															(active
-																? 'bg-brand-green-50 font-medium text-brand-green-800 dark:bg-brand-green-900/25 dark:text-brand-green-300'
-																: 'hover:bg-muted/60')
+																? 'border-brand-green-200 bg-brand-green-50 font-medium text-brand-green-800 dark:border-brand-green-700 dark:bg-brand-green-900/25 dark:text-brand-green-300'
+																: 'border-transparent hover:bg-muted/60')
 														}
 													>
 														{entry.label}
 													</button>
 												</TooltipTrigger>
-												<TooltipContent side="right" className="max-w-56">{entry.hint}</TooltipContent>
+												<TooltipContent side="bottom" className="max-w-56">{entry.hint}</TooltipContent>
 											</Tooltip>
 										)
-									})}
-								</div>
-							))}
+									}),
+								])}
+							</div>
 						</CardContent>
 					</Card>
 

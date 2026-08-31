@@ -33,11 +33,11 @@ export async function GET(request: Request) {
 		// title was built roughly seven times, and the join cost four times what
 		// the plain rows cost. Read apart and paired up here, the same register
 		// comes back in under half the time.
-		const [items, records] = await Promise.all([
+		const [items, records, suppliers] = await Promise.all([
 			fetchAllRows(range => {
 				let query = supabase
 					.from('lib_items')
-					.select('id, accession_number, copy_number, status, is_lendable, accession_date, catalogue_record_id')
+					.select('id, accession_number, copy_number, status, is_lendable, accession_date, catalogue_record_id, supplier_id')
 
 				if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
 
@@ -58,9 +58,24 @@ export async function GET(request: Request) {
 
 				return query.range(range.from, range.to)
 			}),
+			// A college's whole supplier list — a handful of rows, read once and
+			// paired up here for the same reason the titles are: joining it onto
+			// every copy would have the database rebuild one vendor thousands of
+			// times over. The register shows this in place of Author when the
+			// filter is Magazine or Journals, where a supplier is what a librarian
+			// is actually looking for.
+			fetchAllRows(range => {
+				let query = supabase
+					.from('lib_suppliers')
+					.select('id, supplier_name')
+
+				if (guard.institutionId) query = query.eq('institution_id', guard.institutionId)
+
+				return query.range(range.from, range.to)
+			}),
 		])
 
-		const error = items.error ?? records.error
+		const error = items.error ?? records.error ?? suppliers.error
 		if (error) {
 			console.error('Error fetching the accession register:', error)
 			return NextResponse.json({ error: 'Failed to load the register' }, { status: 500 })
@@ -88,6 +103,11 @@ export async function GET(request: Request) {
 		const titlesById = new Map<string, CatalogueRow>()
 		for (const record of (records.data || []) as CatalogueRow[]) {
 			titlesById.set(record.id, record)
+		}
+
+		const supplierNames = new Map<string, string>()
+		for (const supplier of (suppliers.data || []) as Array<{ id: string; supplier_name: string }>) {
+			supplierNames.set(supplier.id, supplier.supplier_name)
 		}
 
 		// How many copies each title holds, worked out from the rows already in
@@ -125,6 +145,10 @@ export async function GET(request: Request) {
 				publication_year: catalogue?.publication_year ?? null,
 				is_reference_only: catalogue?.is_reference_only ?? false,
 				total_copies: catalogue?.id ? copiesByTitle.get(catalogue.id) ?? 1 : 1,
+				// Belongs to this copy, not to the title: two copies of a journal
+				// can come from two vendors, and the register is a list of copies.
+				supplier_id: row.supplier_id ?? null,
+				supplier_name: row.supplier_id ? supplierNames.get(row.supplier_id) ?? null : null,
 			}
 		})
 

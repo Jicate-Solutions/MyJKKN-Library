@@ -35,7 +35,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -254,8 +254,12 @@ export default function RegistryPage() {
 				e.book_type_other = 'Say what kind of material this is'
 			}
 			if (!form.language.trim()) e.language = 'Language is required'
-			if (!form.pages.trim()) e.pages = 'Total pages is required'
-			else if (isNaN(Number(form.pages)) || Number(form.pages) <= 0) e.pages = 'Total pages must be a number'
+			// A magazine title holds a hundred issues of different lengths, so one
+			// page count against it says nothing and the form does not ask for it.
+			if (usesPageCount(form.book_type)) {
+				if (!form.pages.trim()) e.pages = 'Total pages is required'
+				else if (isNaN(Number(form.pages)) || Number(form.pages) <= 0) e.pages = 'Total pages must be a number'
+			}
 			// A magazine or journal is shelved for the whole college, so it is not
 			// made to name a department.
 			if (departmentRequiredFor(form.book_type) && !form.department.trim()) {
@@ -265,7 +269,12 @@ export default function RegistryPage() {
 			// Copy-level, and only when adding — an existing title's copies are
 			// managed on its own page
 			if (!editingItem) {
-				if (!form.accession_number.trim()) e.accession_number = 'Accession number is required'
+				// Only a book carries a number written inside it. A magazine's is
+				// allotted by the server from this college's JM series, so there is
+				// nothing here to demand.
+				if (usesTypedAccessionNumber(form.book_type) && !form.accession_number.trim()) {
+					e.accession_number = 'Accession number is required'
+				}
 				if (!form.accession_date.trim()) e.accession_date = 'Date of adding is required'
 			}
 		}
@@ -303,7 +312,13 @@ export default function RegistryPage() {
 				...bibliographic,
 				institution_id: instId ?? '',
 				publication_year: form.publication_year ? Number(form.publication_year) : undefined,
-				pages: form.pages ? Number(form.pages) : undefined,
+				// Not asked of a magazine or journal, so not sent either — a page
+				// count left over from a type the librarian changed their mind about
+				// must not follow the title into the register.
+				pages: usesPageCount(book_type) && form.pages ? Number(form.pages) : undefined,
+				// Magazines and journals never leave the reading room, so the choice
+				// is settled by what this is, not by what the form last held.
+				is_reference_only: isReferenceOnlyForced(book_type) || form.is_reference_only,
 				edition: bookOnly ? (form.edition || undefined) : undefined,
 				price: bookOnly && form.price ? Number(form.price) : undefined,
 				subtitle: form.subtitle || undefined,
@@ -334,7 +349,12 @@ export default function RegistryPage() {
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
 						...payload,
-						accession_number: accession_number.trim(),
+						// Left out for a magazine or journal: the server allots the
+						// next JM number itself, and sending an empty string would
+						// only look like a librarian who forgot to type one.
+						accession_number: usesTypedAccessionNumber(book_type)
+							? accession_number.trim()
+							: undefined,
 						accession_date: accession_date || undefined,
 						// Belongs to the copy, not to the title, and only a magazine
 						// or journal is asked for one.
@@ -402,9 +422,11 @@ export default function RegistryPage() {
 			book_type_other: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? '' : (r.book_type ?? ''),
 			department: r.department ?? '',
 			book_location: r.book_location ?? '',
-			// Belongs to a copy, and copies are managed on the title's own page, so
-			// editing a title never carries one.
-			supplier_name: '',
+			// The supplier lives on the copy rather than the title, so it is read
+			// off this title's copies in the register. It used to be blanked here,
+			// which made a magazine look as though nobody had ever entered one — the
+			// value was in the database all along, just never fetched.
+			supplier_name: registerRows.find(row => row.catalogue_record_id === r.id && row.supplier_name)?.supplier_name ?? '',
 		})
 		setSheetOpen(true)
 	}

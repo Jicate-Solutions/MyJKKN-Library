@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { fetchAllRows } from '@/lib/library/fetch-all'
+import { createExpectedIssues } from '@/lib/library/expected-issues'
 
 /**
  * The columns this list and its edit sheet actually use.
@@ -138,7 +139,24 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Failed to create subscription' }, { status: 500 })
 		}
 
-		return NextResponse.json(data, { status: 201 })
+		// The year's issues, laid out now rather than recorded one at a time as
+		// they arrive. Until this, the register could only say what had come and
+		// never what was owed — an issue that never turned up looked exactly like
+		// one nobody had entered yet.
+		//
+		// A failure here does not fail the subscription: it is reported alongside
+		// it, and the librarian can still enter issues by hand.
+		const issues = await createExpectedIssues(supabase, {
+			id: data.id,
+			institution_id: data.institution_id,
+			start_volume: data.start_volume ?? null,
+			expected_issues: data.expected_issues ?? null,
+		})
+
+		return NextResponse.json(
+			{ ...data, expected_issues_created: issues.created, issues_warning: issues.reason },
+			{ status: 201 }
+		)
 	} catch (error) {
 		console.error('Unexpected error creating subscription:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

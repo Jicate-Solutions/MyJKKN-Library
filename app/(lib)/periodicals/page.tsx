@@ -35,33 +35,58 @@ const STATUS_COLORS: Record<LibSubscriptionStatus, string> = {
 const STATUSES: LibSubscriptionStatus[] = ['active', 'expired', 'cancelled', 'gratis', 'suspended']
 const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'bi-monthly', 'quarterly', 'semi-annual', 'annual'] as const
 
+/**
+ * How many issues a year's subscription brings, by how often it arrives.
+ *
+ * This was typed by hand into every subscription, which is arithmetic a form
+ * should not ask a librarian to do — and it went wrong quietly: a monthly
+ * journal entered as 10 reads later as two issues never delivered, and the
+ * chase goes out to a supplier who sent everything they owed.
+ *
+ * Fortnightly is 26 and weekly 52 by the calendar, not by the month.
+ */
+const ISSUES_PER_YEAR: Record<string, number> = {
+	weekly: 52,
+	fortnightly: 26,
+	monthly: 12,
+	'bi-monthly': 6,
+	quarterly: 4,
+	'semi-annual': 2,
+	annual: 1,
+}
+
+/** What the read-only Expected Issues box shows for the chosen frequency. */
+const expectedIssuesFor = (frequency: string): number | null =>
+	ISSUES_PER_YEAR[frequency] ?? null
+
 interface FormData {
 	catalogue_record_id: string
 	supplier_id: string
-	subscription_number: string
 	subscription_type: string
 	frequency: string
 	fiscal_year: string
+	/**
+	 * The volume this subscription starts at, as the librarian writes it — "12"
+	 * and "Vol 12" both mean something to the person reading the shelf, so the
+	 * column is text and neither is corrected.
+	 */
+	start_volume: string
 	start_date: string
 	end_date: string
 	subscription_cost: string
-	expected_issues: string
-	access_url: string
 	is_gratis: boolean
 }
 
 const defaultForm: FormData = {
 	catalogue_record_id: '',
 	supplier_id: '',
-	subscription_number: '',
 	subscription_type: 'print',
 	frequency: 'monthly',
 	fiscal_year: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`,
+	start_volume: '',
 	start_date: '',
 	end_date: '',
 	subscription_cost: '',
-	expected_issues: '',
-	access_url: '',
 	is_gratis: false,
 }
 
@@ -104,11 +129,18 @@ export default function PeriodicalSubscriptionsPage() {
 	// The periodical titles a subscription can point at. Loaded when the form is
 	// first opened rather than with the page, because the list is only ever
 	// needed inside the sheet.
+	//
+	// `with_copies` is what keeps this list honest. Without it the form offered
+	// every periodical row anybody had ever typed, including titles with nothing
+	// on the shelf — the register could not show those, because the register
+	// lists copies, so the two screens disagreed about what the library holds.
+	// It also brings the supplier along, entered once on the title and read from
+	// there by every screen that needs it.
 	const loadTitles = useCallback(async () => {
 		if (!isReady || titlesLoaded || titlesLoading) return
 		try {
 			setTitlesLoading(true)
-			const res = await fetch(appendToUrl('/api/lib/catalogue?resource_format=periodical'))
+			const res = await fetch(appendToUrl('/api/lib/catalogue?resource_format=periodical&with_copies=true'))
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
 			setTitles(Array.isArray(data) ? data : [])
@@ -156,6 +188,11 @@ export default function PeriodicalSubscriptionsPage() {
 			description: [
 				t.issn ? `ISSN: ${t.issn}` : null,
 				t.publisher_name || null,
+				// Shown in the list too, so the librarian sees which vendor they are
+				// about to inherit before choosing rather than after
+				(t as { supplier_name?: string | null }).supplier_name
+					? `Supplier: ${(t as { supplier_name?: string | null }).supplier_name}`
+					: null,
 				t.call_number ? `Call no: ${t.call_number}` : null,
 			].filter(Boolean).join(' · ') || undefined,
 		}))
@@ -166,6 +203,24 @@ export default function PeriodicalSubscriptionsPage() {
 			opts.unshift({ value: current.id, label: current.title, description: current.issn ? `ISSN: ${current.issn}` : undefined })
 		}
 		return opts
+	}, [titles, editingItem])
+
+	/**
+	 * The supplier behind a periodical title, as the catalogue holds it.
+	 *
+	 * Entered once when the title was accessioned and read from there ever
+	 * afterwards — a subscription never asks for it again. When a subscription
+	 * being edited points at a title this list does not carry, its own stored
+	 * supplier stands in, so opening an old record never blanks what it had.
+	 */
+	const supplierOfTitle = useCallback((catalogueRecordId: string) => {
+		const title = titles.find(t => t.id === catalogueRecordId) as
+			(LibCatalogueRecord & { supplier_id?: string | null; supplier_name?: string | null }) | undefined
+		if (title?.supplier_id) return { id: title.supplier_id, name: title.supplier_name ?? null }
+		if (editingItem?.catalogue_record_id === catalogueRecordId && editingItem.supplier_id) {
+			return { id: editingItem.supplier_id, name: editingItem.supplier?.supplier_name ?? null }
+		}
+		return null
 	}, [titles, editingItem])
 
 	const effectivePerPage = itemsPerPage > filtered.length ? filtered.length : itemsPerPage
@@ -201,10 +256,12 @@ export default function PeriodicalSubscriptionsPage() {
 				institution_id: instId ?? '',
 				currency_code: 'INR',
 				subscription_cost: form.subscription_cost ? Number(form.subscription_cost) : undefined,
-				expected_issues: form.expected_issues ? Number(form.expected_issues) : undefined,
+				// Worked out from the frequency, never typed — so it is sent from the
+				// same place the form showed it and the two cannot disagree.
+				expected_issues: expectedIssuesFor(form.frequency) ?? undefined,
+				start_volume: form.start_volume.trim() || undefined,
 				start_date: form.start_date || undefined,
 				end_date: form.end_date || undefined,
-				access_url: form.access_url || undefined,
 				// An empty string is not a UUID — send nothing so the column stays null.
 				supplier_id: form.supplier_id || undefined,
 			}
@@ -224,7 +281,22 @@ export default function PeriodicalSubscriptionsPage() {
 				toast({ title: '✅ Subscription updated', className: 'bg-green-50 border-green-200 text-green-800' })
 			} else {
 				setSubscriptions(prev => [saved, ...prev])
-				toast({ title: '✅ Subscription created', className: 'bg-green-50 border-green-200 text-green-800' })
+				// The year's issues are laid out with the subscription, so the
+				// librarian is told they are there rather than finding an empty
+				// register and wondering. A warning means they were not.
+				toast(saved.issues_warning
+					? {
+						title: '⚠️ Subscription created, but its issues were not laid out',
+						description: saved.issues_warning,
+						className: 'bg-amber-50 border-amber-200 text-amber-900',
+					}
+					: {
+						title: '✅ Subscription created',
+						description: saved.expected_issues_created
+							? `${saved.expected_issues_created} issues are now waiting, marked expected. Mark each one received as it arrives.`
+							: undefined,
+						className: 'bg-green-50 border-green-200 text-green-800',
+					})
 			}
 			setSheetOpen(false)
 			resetForm()
@@ -241,15 +313,13 @@ export default function PeriodicalSubscriptionsPage() {
 		setForm({
 			catalogue_record_id: s.catalogue_record_id,
 			supplier_id: s.supplier_id ?? '',
-			subscription_number: s.subscription_number ?? '',
 			subscription_type: s.subscription_type ?? 'print',
 			frequency: s.frequency ?? 'monthly',
 			fiscal_year: s.fiscal_year,
+			start_volume: s.start_volume ?? '',
 			start_date: s.start_date?.split('T')[0] ?? '',
 			end_date: s.end_date?.split('T')[0] ?? '',
 			subscription_cost: s.subscription_cost?.toString() ?? '',
-			expected_issues: s.expected_issues?.toString() ?? '',
-			access_url: s.access_url ?? '',
 			is_gratis: s.is_gratis,
 		})
 		setSheetOpen(true)
@@ -558,7 +628,14 @@ export default function PeriodicalSubscriptionsPage() {
 								<Label className="text-sm font-semibold">Periodical Title <span className="text-red-500">*</span></Label>
 								<SearchableSelect
 									value={form.catalogue_record_id}
-									onValueChange={v => setForm(f => ({ ...f, catalogue_record_id: v }))}
+									// Choosing the title settles the supplier: it was entered
+									// once on the title in the catalogue, and this reads it from
+									// there rather than asking for it a second time.
+									onValueChange={v => setForm(f => ({
+										...f,
+										catalogue_record_id: v,
+										supplier_id: supplierOfTitle(v)?.id ?? '',
+									}))}
 									options={titleOptions}
 									loading={titlesLoading}
 									loadingText="Loading titles..."
@@ -569,10 +646,30 @@ export default function PeriodicalSubscriptionsPage() {
 								/>
 								{errors.catalogue_record_id && <p className="text-xs text-red-500">{errors.catalogue_record_id}</p>}
 							</div>
+							<div className="space-y-2">
+								<Label className="text-sm font-semibold">Supplier</Label>
+								{/* Not asked for here. The vendor was entered once against the title
+								    in the catalogue, and this reads it from there — one entry, and
+								    every screen showing the same name. */}
+								<div className="flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 text-sm text-muted-foreground">
+									{supplierOfTitle(form.catalogue_record_id)?.name
+										?? (form.catalogue_record_id ? 'No supplier recorded on this title' : 'Choose the periodical above')}
+								</div>
+								<p className="text-xs text-muted-foreground">
+									Taken from the catalogue. Change it on the title, under Knowledge Registry.
+								</p>
+							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Subscription Number</Label>
-									<Input value={form.subscription_number} onChange={e => setForm(f => ({ ...f, subscription_number: e.target.value }))} placeholder="SUB-2025-001" />
+									<Label className="text-sm font-semibold">Volume</Label>
+									{/* Written as the librarian reads it off the issue. "12" and
+									    "Vol 12" both say the same thing to the person standing at
+									    the shelf, so the column is text and neither is corrected. */}
+									<Input
+										value={form.start_volume}
+										onChange={e => setForm(f => ({ ...f, start_volume: e.target.value }))}
+										placeholder="e.g. 12 or Vol 12"
+									/>
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Fiscal Year <span className="text-red-500">*</span></Label>
@@ -629,12 +726,22 @@ export default function PeriodicalSubscriptionsPage() {
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Expected Issues</Label>
-									<Input type="number" min="1" value={form.expected_issues} onChange={e => setForm(f => ({ ...f, expected_issues: e.target.value }))} placeholder="12" />
+									{/* Worked out from the frequency rather than typed. A monthly
+									    journal keyed in as 10 reads later as two issues never
+									    delivered, and the chase goes out to a supplier who sent
+									    everything they owed — so the arithmetic is not asked for. */}
+									<Input
+										type="number"
+										value={expectedIssuesFor(form.frequency) ?? ''}
+										readOnly
+										tabIndex={-1}
+										className="bg-muted/40 text-muted-foreground cursor-not-allowed"
+									/>
+									<p className="text-xs text-muted-foreground">
+										Set by the frequency above — {form.frequency} means{' '}
+										{expectedIssuesFor(form.frequency) ?? '—'} issues a year.
+									</p>
 								</div>
-							</div>
-							<div className="space-y-2">
-								<Label className="text-sm font-semibold">Access URL</Label>
-								<Input type="url" value={form.access_url} onChange={e => setForm(f => ({ ...f, access_url: e.target.value }))} placeholder="https://..." />
 							</div>
 							<div className="flex items-center gap-3">
 								<Switch

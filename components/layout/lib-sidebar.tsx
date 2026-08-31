@@ -84,6 +84,7 @@ export const navGroups: NavGroup[] = [
 		label: 'Knowledge Registry',
 		items: [
 			{ title: 'Catalogue', url: '/registry', icon: BookOpen },
+			{ title: 'Department Libraries', url: '/departments', icon: Building2 },
 			{ title: 'Members', url: '/members', icon: Users },
 		],
 	},
