@@ -211,32 +211,44 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Failed to update item status — transaction rolled back' }, { status: 500 })
 		}
 
-		// 8. Fulfil any pending hold for this member+catalogue combination
-		await supabase
-			.from('lib_resource_holds')
-			.update({
-				hold_status: 'fulfilled',
-				checked_out_at: new Date().toISOString(),
-				updated_at: new Date().toISOString(),
-			})
-			.eq('member_id', borrower.id)
-			.eq('item_id', item_id)
-			.eq('hold_status', 'available')
+		// 8. Close off the hold this book answers, and write the log line.
+		//
+		// Both only happen once the loan is safely recorded, and neither is
+		// waiting on the other — so they go together rather than one after the
+		// next. That is one less round trip with the borrower still at the
+		// counter, and a round trip here costs about 65ms whatever it carries.
+		//
+		// Both are still awaited. Letting them run unattended would be faster
+		// again, but on a serverless host the function can be frozen the moment
+		// the reply is sent, and a hold left sitting as 'available' after the
+		// book has walked out is worse than 65ms.
+		await Promise.all([
+			supabase
+				.from('lib_resource_holds')
+				.update({
+					hold_status: 'fulfilled',
+					checked_out_at: new Date().toISOString(),
+					updated_at: new Date().toISOString(),
+				})
+				.eq('member_id', borrower.id)
+				.eq('item_id', item_id)
+				.eq('hold_status', 'available'),
 
-		await logActivity(request, {
-			action: 'create',
-			resource_type: 'loan',
-			resource_id: '/circulation',
-			institution_id,
-			new_values: transaction,
-			metadata: {
-				member_id: borrower.id,
-				member_number: borrower.member_number,
-				item_id,
-				due_date: dueDateStr,
-				loan_period_days: loanPeriodDays,
-			},
-		})
+			logActivity(request, {
+				action: 'create',
+				resource_type: 'loan',
+				resource_id: '/circulation',
+				institution_id,
+				new_values: transaction,
+				metadata: {
+					member_id: borrower.id,
+					member_number: borrower.member_number,
+					item_id,
+					due_date: dueDateStr,
+					loan_period_days: loanPeriodDays,
+				},
+			}),
+		])
 
 		return NextResponse.json(
 			{

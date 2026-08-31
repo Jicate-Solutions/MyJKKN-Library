@@ -17,7 +17,83 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { istToday, istTimeNow } from '@/lib/library/ist-clock'
-import { personByCardNumber, myjkknConfigured } from '@/lib/library/myjkkn-directory'
+import { personByCardNumber, myjkknConfigured, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
+
+/** What one scan came to, or why it could not be recorded. */
+type ScanOutcome =
+	| { direction: 'in' | 'out'; visitId: string | null; entryTime: string | null }
+	| { error: string; status: number }
+
+interface ScanInput {
+	institutionId: string
+	person: DirectoryPerson
+	visitDate: string
+	now: string
+	visitPurpose: string | null
+}
+
+/** The gate columns arrive with the 2026-08-22 database update. */
+const NEEDS_DB_UPDATE =
+	'This library\'s database has not been updated for the new member system yet — please run the pending database update'
+
+/**
+ * One scan, one round trip.
+ *
+ * `lib_gate_scan` decides entry or exit and writes it in a single statement.
+ * Every round trip to the database costs about 75ms of network whatever it
+ * asks, so doing this as two dependent queries spent half the student's wait
+ * on the second question travelling.
+ *
+ * Returns null when the function is not installed — a library that has not run
+ * the 2026-08-27 update falls back to the two queries below and behaves
+ * exactly as it did before.
+ */
+async function scanInOneTrip(
+	supabase: ReturnType<typeof getSupabaseServer>,
+	{ institutionId, person, visitDate, now, visitPurpose }: ScanInput
+): Promise<ScanOutcome | null> {
+	const { data, error } = await supabase.rpc('lib_gate_scan', {
+		p_institution_id: institutionId,
+		p_myjkkn_id: person.myjkkn_id,
+		p_person_kind: person.person_kind,
+		p_member_number: person.member_number,
+		p_display_name: person.display_name,
+		p_member_category: person.member_category,
+		p_visit_date: visitDate,
+		p_now: now,
+		p_visit_purpose: visitPurpose,
+	})
+
+	// Anything at all wrong with the fast path hands the scan to the two queries
+	// below rather than failing. PGRST202 is simply a database without the
+	// function, which is the normal state until the update is run; anything else
+	// is worth shouting about in the log, but not worth stopping a queue at the
+	// door for. One function call is one statement, so a failed call wrote
+	// nothing and the fallback cannot double-record the visit.
+	if (error) {
+		if (error.code !== 'PGRST202' && error.code !== '42883') {
+			console.error('[gate] lib_gate_scan failed, falling back to two queries:', error)
+		}
+		return null
+	}
+
+	const row = (Array.isArray(data) ? data[0] : data) as {
+		out_direction?: 'in' | 'out'
+		out_visit_id?: string
+		out_entry_time?: string
+	} | undefined
+
+	if (!row?.out_direction) {
+		console.error('[gate] lib_gate_scan returned nothing for', person.member_number)
+		return null
+	}
+
+	return {
+		direction: row.out_direction,
+		visitId: row.out_visit_id ?? null,
+		entryTime: row.out_entry_time ?? null,
+	}
+}
 
 export async function POST(request: Request) {
 	try {
@@ -56,82 +132,20 @@ export async function POST(request: Request) {
 		const visitDate = istToday()
 		const now = istTimeNow()
 
-		// Still inside from an earlier scan today?
-		const { data: openVisits } = await supabase
-			.from('lib_member_visits')
-			.select('id, entry_time')
-			.eq('institution_id', institutionId)
-			.eq('myjkkn_id', person.myjkkn_id)
-			.eq('visit_date', visitDate)
-			.not('entry_time', 'is', null)
-			.is('exit_time', null)
-			.order('created_at', { ascending: false })
-			.limit(1)
-
-		const openVisit = openVisits?.[0]
-		let direction: 'in' | 'out' = 'in'
-		let visitId: string | null = null
-		let entryTime: string | null = null
-
-		if (openVisit) {
-			// `.is('exit_time', null)` in the update as well: if a second scan of
-			// the same card lands at the same moment, only one of them writes an
-			// exit and the other is told to try again rather than overwriting it.
-			const { data: closed, error: closeError } = await supabase
-				.from('lib_member_visits')
-				.update({ exit_time: now })
-				.eq('id', openVisit.id)
-				.is('exit_time', null)
-				.select('id, entry_time, exit_time')
-
-			if (closeError) {
-				console.error('Error recording exit:', closeError)
-				return NextResponse.json({ error: 'Could not record the exit' }, { status: 500 })
-			}
-
-			if (closed && closed.length > 0) {
-				direction = 'out'
-				visitId = closed[0].id
-				entryTime = closed[0].entry_time
-			}
-			// Nothing updated means the visit was closed a moment ago by another
-			// scan — fall through and treat this one as a fresh entry.
+		const input: ScanInput = {
+			institutionId,
+			person,
+			visitDate,
+			now,
+			visitPurpose: body.visit_purpose ?? null,
 		}
 
-		if (direction === 'in') {
-			const { data: opened, error: openError } = await supabase
-				.from('lib_member_visits')
-				.insert({
-					institution_id: institutionId,
-					// No borrower row: nobody becomes a borrower by walking in.
-					member_id: null,
-					myjkkn_id: person.myjkkn_id,
-					person_kind: person.person_kind,
-					member_number: person.member_number,
-					display_name: person.display_name,
-					member_category: person.member_category,
-					visit_date: visitDate,
-					entry_time: now,
-					visit_purpose: body.visit_purpose ?? null,
-				})
-				.select('id, entry_time')
-				.single()
-
-			if (openError || !opened) {
-				console.error('Error recording entry:', openError)
-				// The gate columns arrive with the 2026-08-22 database update
-				if (openError?.code === '42703') {
-					return NextResponse.json(
-						{ error: 'This library\'s database has not been updated for the new member system yet — please run the pending database update' },
-						{ status: 400 }
-					)
-				}
-				return NextResponse.json({ error: 'Could not record the entry' }, { status: 500 })
-			}
-
-			visitId = opened.id
-			entryTime = opened.entry_time
+		const recorded = (await scanInOneTrip(supabase, input)) ?? (await scanInTwoTrips(supabase, input))
+		if ('error' in recorded) {
+			return NextResponse.json({ error: recorded.error }, { status: recorded.status })
 		}
+
+		const { direction, visitId, entryTime } = recorded
 
 		return NextResponse.json({
 			direction,
@@ -156,4 +170,88 @@ export async function POST(request: Request) {
 		console.error('Unexpected error at the gate:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 	}
+}
+
+/**
+ * The same scan as two separate queries, for a database without the function.
+ *
+ * Left exactly as it was written, down to the race it guards against, so a
+ * library that has not run the update sees no change in behaviour at all.
+ */
+async function scanInTwoTrips(
+	supabase: ReturnType<typeof getSupabaseServer>,
+	{ institutionId, person, visitDate, now, visitPurpose }: ScanInput
+): Promise<ScanOutcome> {
+	// Still inside from an earlier scan today?
+	const { data: openVisits } = await supabase
+		.from('lib_member_visits')
+		.select('id, entry_time')
+		.eq('institution_id', institutionId)
+		.eq('myjkkn_id', person.myjkkn_id)
+		.eq('visit_date', visitDate)
+		.not('entry_time', 'is', null)
+		.is('exit_time', null)
+		.order('created_at', { ascending: false })
+		.limit(1)
+
+	const openVisit = openVisits?.[0]
+	let direction: 'in' | 'out' = 'in'
+	let visitId: string | null = null
+	let entryTime: string | null = null
+
+	if (openVisit) {
+		// `.is('exit_time', null)` in the update as well: if a second scan of
+		// the same card lands at the same moment, only one of them writes an
+		// exit and the other is told to try again rather than overwriting it.
+		const { data: closed, error: closeError } = await supabase
+			.from('lib_member_visits')
+			.update({ exit_time: now })
+			.eq('id', openVisit.id)
+			.is('exit_time', null)
+			.select('id, entry_time, exit_time')
+
+		if (closeError) {
+			console.error('Error recording exit:', closeError)
+			return { error: 'Could not record the exit', status: 500 }
+		}
+
+		if (closed && closed.length > 0) {
+			direction = 'out'
+			visitId = closed[0].id
+			entryTime = closed[0].entry_time
+		}
+		// Nothing updated means the visit was closed a moment ago by another
+		// scan — fall through and treat this one as a fresh entry.
+	}
+
+	if (direction === 'in') {
+		const { data: opened, error: openError } = await supabase
+			.from('lib_member_visits')
+			.insert({
+				institution_id: institutionId,
+				// No borrower row: nobody becomes a borrower by walking in.
+				member_id: null,
+				myjkkn_id: person.myjkkn_id,
+				person_kind: person.person_kind,
+				member_number: person.member_number,
+				display_name: person.display_name,
+				member_category: person.member_category,
+				visit_date: visitDate,
+				entry_time: now,
+				visit_purpose: visitPurpose,
+			})
+			.select('id, entry_time')
+			.single()
+
+		if (openError || !opened) {
+			console.error('Error recording entry:', openError)
+			if (openError?.code === '42703') return { error: NEEDS_DB_UPDATE, status: 400 }
+			return { error: 'Could not record the entry', status: 500 }
+		}
+
+		visitId = opened.id
+		entryTime = opened.entry_time
+	}
+
+	return { direction, visitId, entryTime }
 }

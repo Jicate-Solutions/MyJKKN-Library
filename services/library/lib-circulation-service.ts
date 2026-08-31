@@ -45,6 +45,23 @@ export async function renewItem(payload: LibRenewPayload): Promise<LibCirculatio
 	return res.json()
 }
 
+/**
+ * The overdue list.
+ *
+ * Unlike its neighbours, this route does not reply with a bare array — it sends
+ * `{ data, total, as_of }`, because the page also wants to know the date the
+ * days were counted from. Handing that object straight back was the bug: the
+ * Overdue page stored it as its list of transactions, and the first
+ * `transactions.filter(...)` threw, which took the whole application down to
+ * Next.js's "This page couldn't load".
+ *
+ * It looked intermittent for the worst possible reason — it failed only when
+ * the request SUCCEEDED. A failed request was caught by the page and rendered
+ * as an empty list, which looks perfectly healthy.
+ *
+ * So the envelope is unwrapped here, and an unexpected shape becomes an empty
+ * list rather than something a page will later try to call `.filter` on.
+ */
 export async function fetchOverdue(institutionId: string): Promise<LibCirculationTransaction[]> {
 	const params = new URLSearchParams()
 	params.set('institution_id', institutionId)
@@ -54,7 +71,10 @@ export async function fetchOverdue(institutionId: string): Promise<LibCirculatio
 		const err = await res.json().catch(() => ({}))
 		throw new Error(err.error || 'Failed to fetch overdue items')
 	}
-	return res.json()
+
+	const body = await res.json()
+	if (Array.isArray(body)) return body
+	return Array.isArray(body?.data) ? body.data : []
 }
 
 export async function fetchHolds(institutionId: string): Promise<LibHold[]> {
