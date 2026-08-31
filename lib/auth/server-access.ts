@@ -13,6 +13,14 @@
  * named — decide everything: whether the library opens at all, and which
  * college they see. Nothing is assigned in this module.
  *
+ * Not everyone in MyJKKN has a staff record. Senior people — a director, a
+ * joint managing director — exist only as MyJKKN USERS, with a `profiles` row
+ * carrying `role: 'super_admin'` and no staff record at all. They used to be
+ * refused outright and had to be let in by hand through the grant list. Their
+ * profile is now read (see `supabase-auth-server.ts`) and, where it names a
+ * role that spans every college, it is enough on its own. A staff record still
+ * wins wherever one exists.
+ *
  * Only four MyJKKN roles open this application: super_admin, library_admin,
  * librarian and assistant_librarian. A person may hold several at once and only
  * one of them needs to be a library role; where more than one matches, the
@@ -378,12 +386,37 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 			myjkknRoles: identity.roleKeys,
 		}
 
-	// No staff row, but the token already names Super Admin (or Library Admin).
-	// They span every college, so the missing staff record costs them nothing
-	// — Super Admin has full access from the MyJKKN role alone.
+	// No staff row, but MyJKKN still knows them: their `profiles` row, or the
+	// token itself, names Super Admin (or Library Admin). Those two span every
+	// college, so the missing staff record costs them nothing.
+	//
+	// This is the only path the profile can open, deliberately. Somebody WITH a
+	// staff record is judged by that record exactly as before — which matters,
+	// because the two sources disagree: one live super admin is `is_active` on
+	// their staff record and `is_active = false` in profiles, and reading the
+	// profile over the top of a good staff record would lock them out of a
+	// system they use today.
 	if (!real.ok && real.reason === 'not_staff') {
-		const fromToken = await callerFromTokenRoles(identity, identity.roleKeys)
-		if (fromToken) real = fromToken
+		const profile = identity.profile
+
+		// Switched off in MyJKKN — 830 profiles are inactive and 109 have login
+		// disabled, so this is a live setting, not a theoretical one. Refused as
+		// `inactive` rather than `not_staff`, because that is what it is, and
+		// because a grant must never talk its way past it.
+		if (profile && (!profile.isActive || profile.loginDisabled)) {
+			real = {
+				ok: false,
+				reason: 'inactive',
+				error: 'Your MyJKKN account is not active',
+				status: 403,
+				email: identity.email,
+				fullName: identity.fullName,
+				myjkknRoles: identity.roleKeys,
+			}
+		} else {
+			const fromToken = await callerFromTokenRoles(identity, identity.roleKeys)
+			if (fromToken) real = fromToken
+		}
 	}
 
 	// Turned away by MyJKKN, but named in the grant list.

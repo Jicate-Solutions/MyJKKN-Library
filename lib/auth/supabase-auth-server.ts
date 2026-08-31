@@ -47,6 +47,22 @@ export async function getAuthRouteClient(): Promise<SupabaseClient> {
 	})
 }
 
+/**
+ * The auth project's service key.
+ *
+ * Server-only — deliberately not `NEXT_PUBLIC_`, so it never reaches a browser.
+ * It exists because `profiles` is behind RLS: with the anon key, or with the
+ * signed-in person's own token, the table answers with nothing at all (0 rows
+ * of 7,605 when asked anonymously). That is why somebody whose only record in
+ * MyJKKN is a `profiles` row — no staff record — could not be identified, and
+ * had to be let in by hand through the grant list.
+ *
+ * Without this key everything still works exactly as it did: the read falls
+ * back to the caller's own token, and a deployment that has not been given the
+ * key is no worse off than before.
+ */
+const AUTH_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY1 ?? ''
+
 /** One read-only client, made once — it carries no session, so it is shareable. */
 let verifier: SupabaseClient | null = null
 
@@ -63,6 +79,20 @@ function getVerifier(): SupabaseClient | null {
 		})
 	}
 	return verifier
+}
+
+/** The same, for reading `profiles` past RLS. Null when no service key is set. */
+let profileReader: SupabaseClient | null = null
+
+function getProfileReader(): SupabaseClient | null {
+	if (!supabaseAuthConfigured() || !AUTH_SERVICE_ROLE_KEY) return null
+
+	if (!profileReader) {
+		profileReader = createClient(SUPABASE_AUTH_URL, AUTH_SERVICE_ROLE_KEY, {
+			auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+		})
+	}
+	return profileReader
 }
 
 /** Who the auth project says this token belongs to. */
@@ -82,6 +112,14 @@ export interface AuthIdentity {
 	 * (`authenticated`) is never treated as a MyJKKN role.
 	 */
 	roleKeys: string[]
+	/**
+	 * What MyJKKN's own `profiles` row says, or null when there is none.
+	 *
+	 * Kept separate from `roleKeys` because it answers a second question:
+	 * whether the account is switched on at all. Somebody who is `super_admin`
+	 * in profiles but `is_active = false` must not be let in on that role.
+	 */
+	profile: AuthProfile | null
 }
 
 /** The name as the identity provider spells it, in whichever field it used. */
@@ -143,44 +181,72 @@ function roleKeysFromAuthUser(user: User): string[] {
 }
 
 /**
- * The MyJKKN `profiles` row this token is allowed to read on the auth project.
+ * The MyJKKN `profiles` row behind a signed-in account.
  *
- * `profiles` is where MyJKKN keeps what somebody is: `role`, and the
- * `is_super_admin` flag generated from it. It is deliberately NOT the library's
- * own `users` table, which is not consulted anywhere any more.
+ * `profiles` is where MyJKKN keeps what somebody is: `role`, the
+ * `is_super_admin` flag, whether the account is live, and their name. It is
+ * deliberately NOT the library's own `users` table, which is not consulted
+ * anywhere any more.
  *
- * Read by `id` rather than by email, because `profiles.id` IS the Supabase auth
- * user id — an exact primary-key hit, and the shape RLS is normally written
- * for (`auth.uid() = id`), where a search by email is usually refused outright.
- * Email is tried only if that misses, for a project whose ids are kept apart.
+ * The role values there are already the keys this project uses — the live table
+ * holds `super_admin`, `library_admin`, `librarian` and `assistant_librarian`
+ * spelled exactly so. "Super Administrator" is only the title shown on screen,
+ * so nothing is translated here.
+ *
+ * Read with the service key where one is configured, because RLS otherwise
+ * hides the row even from its own owner. Where it is not, the caller's token is
+ * used exactly as before — that path finds nothing on this project, but a
+ * deployment without the key is no worse off than it was.
+ *
+ * Read by `id` first: `profiles.id` IS the Supabase auth user id (verified on
+ * the live project), so it is an exact primary-key hit. Email is tried only if
+ * that misses, for a project whose ids are kept apart.
  *
  * A missing table or an RLS miss is not an error — the staff API still answers.
  * Warned once so a project that is auth-only does not fill the log.
  */
 let warnedMissingProfiles = false
 
-interface ProfileRoleRow {
-	role?: unknown
-	is_super_admin?: boolean
+/** What the profile says about somebody, as this project needs it. */
+export interface AuthProfile {
+	fullName: string | null
+	roleKeys: string[]
+	/** MyJKKN's own switch. 830 of the live profiles are off. */
+	isActive: boolean
+	/** A separate switch again, set on 109 of them. Either one closes the door. */
+	loginDisabled: boolean
 }
 
-async function roleKeysFromAuthDatabase(
+interface ProfileRow {
+	full_name?: unknown
+	role?: unknown
+	is_super_admin?: boolean
+	is_active?: boolean
+	is_login_disabled?: boolean
+}
+
+const PROFILE_COLUMNS = 'full_name, role, is_super_admin, is_active, is_login_disabled'
+
+async function profileFromAuthDatabase(
 	token: string,
 	authUserId: string,
 	email: string
-): Promise<string[]> {
-	if (!supabaseAuthConfigured()) return []
+): Promise<AuthProfile | null> {
+	if (!supabaseAuthConfigured()) return null
 
 	try {
-		const client = createClient(SUPABASE_AUTH_URL, SUPABASE_AUTH_ANON_KEY, {
-			global: { headers: { Authorization: `Bearer ${token}` } },
-			auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-		})
+		// The service client carries no session, so one is made and shared. The
+		// token client cannot be: it is bound to one person's request.
+		const client = getProfileReader()
+			?? createClient(SUPABASE_AUTH_URL, SUPABASE_AUTH_ANON_KEY, {
+				global: { headers: { Authorization: `Bearer ${token}` } },
+				auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+			})
 
 		const readProfile = (column: 'id' | 'email', value: string) =>
 			client
 				.from('profiles')
-				.select('role, is_super_admin')
+				.select(PROFILE_COLUMNS)
 				.eq(column, value)
 				.limit(1)
 				.maybeSingle()
@@ -193,33 +259,43 @@ async function roleKeysFromAuthDatabase(
 					warnedMissingProfiles = true
 					console.warn('[auth] No profiles table on the auth project — roles come from metadata and MyJKKN staff')
 				}
-				return []
+				return null
 			}
-			return []
+			return null
 		}
 
-		// `profiles.id` is normally the auth user id; fall back to the address
-		// only when it is not, rather than silently reporting no roles at all.
 		if (!data && email) {
 			const byEmail = await readProfile('email', email.toLowerCase())
-			if (byEmail.error) return []
+			if (byEmail.error) return null
 			data = byEmail.data
 		}
 
-		if (!data) return []
+		if (!data) return null
 
-		const row = data as ProfileRoleRow
+		const row = data as ProfileRow
 		const keys: string[] = []
 		const role = normaliseRoleKey(row.role)
 		if (role && !NOT_A_MYJKKN_ROLE.has(role)) keys.push(role)
 		// The flag is generated from `role = 'super_admin'`, so the two normally
 		// agree — read anyway, so the flag alone is enough for full access.
 		if (row.is_super_admin === true) keys.push('super_admin')
-		return keys
+
+		const name = (row.full_name ?? '').toString().replace(/\s+/g, ' ').trim()
+
+		return {
+			fullName: name.length > 0 ? name : null,
+			roleKeys: keys,
+			// Absent means present-and-fine: a column this project has not been
+			// given must never be read as "switched off".
+			isActive: row.is_active !== false,
+			loginDisabled: row.is_login_disabled === true,
+		}
 	} catch {
-		return []
+		return null
 	}
 }
+
+/** A single reusable client is not kept here on purpose — see the note above. */
 
 /**
  * Checks one access token against the auth project.
@@ -241,20 +317,23 @@ export async function verifyAccessToken(token: string): Promise<AuthIdentity | n
 
 		const metadata = data.user.user_metadata as Record<string, unknown> | undefined
 		const fromUser = roleKeysFromAuthUser(data.user)
-		const alreadyHasLibraryRole = fromUser.includes('super_admin')
-			|| fromUser.includes('library_admin')
-			|| fromUser.includes('librarian')
-			|| fromUser.includes('assistant_librarian')
-		const fromTable = alreadyHasLibraryRole
-			? []
-			: await roleKeysFromAuthDatabase(token, data.user.id, data.user.email)
+
+		// Always read, rather than only when the token named no role. The row
+		// carries the active flags as well as the role, and skipping it for
+		// somebody whose metadata happens to say `super_admin` would skip the one
+		// thing that can say they have since been switched off. It is a
+		// primary-key hit, and `identifyCaller` holds the whole answer for a
+		// minute, so it costs one small read per person per minute.
+		const profile = await profileFromAuthDatabase(token, data.user.id, data.user.email)
 
 		return {
 			authUserId: data.user.id,
 			email: data.user.email,
-			fullName: nameFromMetadata(metadata),
+			// MyJKKN's own spelling of the name wins over Google's.
+			fullName: profile?.fullName ?? nameFromMetadata(metadata),
 			avatarUrl: (metadata?.avatar_url ?? metadata?.picture ?? null) as string | null,
-			roleKeys: [...new Set([...fromUser, ...fromTable])],
+			roleKeys: [...new Set([...fromUser, ...(profile?.roleKeys ?? [])])],
+			profile,
 		}
 	} catch (error) {
 		console.error('[auth] Token check failed:', error)
