@@ -42,8 +42,12 @@ interface StaffUser {
 	last_login: string | null
 	assigned_roles: string[]
 	effective_role: string
-	/** 'grant' means a temporary grant in the environment, not a MyJKKN role. */
-	access_source?: 'myjkkn' | 'grant'
+	/**
+	 * 'grant' means a temporary grant in the environment, not a MyJKKN role.
+	 * 'profile' is a MyJKKN role held on their MyJKKN user rather than on a
+	 * staff record — how somebody outside the staff directory signs in.
+	 */
+	access_source?: 'myjkkn' | 'profile' | 'grant'
 	/** The last day that grant works, 'YYYY-MM-DD'. */
 	grant_expires_on?: string | null
 }
@@ -299,6 +303,18 @@ export default function StaffAccessPage() {
 													    who holds one, and the change is made there. */}
 													<TableCell>
 														<div className="flex flex-wrap gap-1">
+															{u.access_source === 'profile' && (
+																// Their role is on their MyJKKN user, not on a staff
+																// record. Said plainly, because it is the answer to
+																// "who is this and why are they on this list" — and
+																// because it is why they cannot be viewed as.
+																<Badge
+																	variant="outline"
+																	className="text-[10px] font-normal text-muted-foreground"
+																>
+																	No staff record
+																</Badge>
+															)}
 															{u.grant_expires_on && (
 																// Temporary access from the environment, not a MyJKKN
 																// role. Named plainly: a grant nobody can see is a
@@ -312,7 +328,8 @@ export default function StaffAccessPage() {
 																</Badge>
 															)}
 															{(u.assigned_roles ?? []).length === 0 ? (
-																!u.grant_expires_on && <span className="text-xs text-muted-foreground">—</span>
+																!u.grant_expires_on && u.access_source !== 'profile' &&
+																	<span className="text-xs text-muted-foreground">—</span>
 															) : (
 																u.assigned_roles.map(r => (
 																	<Badge
@@ -328,9 +345,12 @@ export default function StaffAccessPage() {
 													</TableCell>
 													{callerRole === 'super_admin' && (
 														<TableCell>
-															{/* Viewing as somebody works off their MyJKKN staff
-															    record, which a granted person does not have */}
-															{u.access_source === 'grant' ? (
+															{/* Viewing as somebody works off a MyJKKN staff record
+															    carrying a library role. Neither a granted person nor
+															    somebody whose role is only on their MyJKKN user has
+															    one, so the button is not offered rather than offered
+															    and refused. */}
+															{u.access_source === 'grant' || u.access_source === 'profile' ? (
 																<span className="text-xs text-muted-foreground">—</span>
 															) : u.is_active ? (
 																<Button

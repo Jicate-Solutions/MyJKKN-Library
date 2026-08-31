@@ -20,7 +20,7 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js'
 import { SUPABASE_AUTH_URL, SUPABASE_AUTH_ANON_KEY, supabaseAuthConfigured } from './supabase-auth'
-import { normaliseRoleKey } from './library-roles'
+import { normaliseRoleKey, LIBRARY_ROLES } from './library-roles'
 
 /**
  * A client bound to this request's cookies, able to write the session back.
@@ -292,6 +292,81 @@ async function profileFromAuthDatabase(
 		}
 	} catch {
 		return null
+	}
+}
+
+/** One MyJKKN account as `profiles` holds it, for listing rather than for login. */
+export interface ProfileAccount {
+	/** `profiles.id`, which is the Supabase auth user id. */
+	authUserId: string
+	email: string
+	fullName: string | null
+	roleKeys: string[]
+	isActive: boolean
+	loginDisabled: boolean
+}
+
+/** `role` is one of ours, or the super-admin flag is set. */
+const LIBRARY_ROLE_FILTER = `role.in.(${LIBRARY_ROLES.join(',')}),is_super_admin.is.true`
+
+/**
+ * Everybody in MyJKKN holding a library role, read from `profiles`.
+ *
+ * For the Staff Access screen, which until now could only see the MyJKKN staff
+ * directory — and so could not see the people who are not in it. Somebody whose
+ * only record in MyJKKN is a `profiles` row signs in on that row, so leaving
+ * them off the one screen that answers "who can open the library" made it quietly
+ * wrong about exactly the people most likely to be Super Admin.
+ *
+ * Needs the service key, because RLS hides the table otherwise. Without it this
+ * returns nothing and the screen shows what it always did.
+ *
+ * Only ~21 rows of 7,605 match, so this is one small read, not a table scan.
+ */
+export async function libraryRoleProfiles(): Promise<ProfileAccount[]> {
+	const client = getProfileReader()
+	if (!client) return []
+
+	try {
+		const { data, error } = await client
+			.from('profiles')
+			.select(`id, email, ${PROFILE_COLUMNS}`)
+			.or(LIBRARY_ROLE_FILTER)
+			.limit(500)
+
+		if (error || !data) {
+			if (error) console.warn('[auth] Could not list library roles from profiles:', error.message)
+			return []
+		}
+
+		const people: ProfileAccount[] = []
+
+		for (const entry of data as (ProfileRow & { id?: unknown; email?: unknown })[]) {
+			const authUserId = (entry.id ?? '').toString().trim()
+			const email = (entry.email ?? '').toString().trim().toLowerCase()
+			if (!authUserId || !email) continue
+
+			const keys = new Set<string>()
+			const role = normaliseRoleKey(entry.role)
+			if (role && !NOT_A_MYJKKN_ROLE.has(role)) keys.add(role)
+			if (entry.is_super_admin === true) keys.add('super_admin')
+			if (keys.size === 0) continue
+
+			const name = (entry.full_name ?? '').toString().replace(/\s+/g, ' ').trim()
+
+			people.push({
+				authUserId,
+				email,
+				fullName: name.length > 0 ? name : null,
+				roleKeys: [...keys],
+				isActive: entry.is_active !== false,
+				loginDisabled: entry.is_login_disabled === true,
+			})
+		}
+
+		return people
+	} catch {
+		return []
 	}
 }
 
