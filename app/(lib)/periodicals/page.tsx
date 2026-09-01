@@ -33,7 +33,42 @@ const STATUS_COLORS: Record<LibSubscriptionStatus, string> = {
 }
 
 const STATUSES: LibSubscriptionStatus[] = ['active', 'expired', 'cancelled', 'gratis', 'suspended']
-const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'bi-monthly', 'quarterly', 'semi-annual', 'annual'] as const
+/**
+ * How often an issue arrives, in the exact words the database stores.
+ *
+ * The column carries a CHECK constraint naming its values, so what the form
+ * sends has to be one of them. It was not: the form offered "semi-annual" and
+ * "bi-monthly", the database knows those two as `half_yearly` and `bimonthly`,
+ * and every subscription on either was refused outright — the page could only
+ * say "Failed to create subscription", which named neither the field nor the
+ * reason. The stored word is the key; the word the librarian reads is the
+ * label beside it.
+ */
+const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'bimonthly', 'quarterly', 'half_yearly', 'annual'] as const
+
+/**
+ * The same words, as a librarian says them.
+ *
+ * Daily and irregular are named here but not offered above: the database
+ * accepts both and an older subscription may hold one, so the list has to be
+ * able to print it — but neither has a fixed number of issues in a year, and
+ * Expected Issues is worked out from this choice.
+ */
+const FREQUENCY_LABELS: Record<string, string> = {
+	daily: 'Daily',
+	weekly: 'Weekly',
+	fortnightly: 'Fortnightly',
+	monthly: 'Monthly',
+	bimonthly: 'Bi-monthly',
+	quarterly: 'Quarterly',
+	half_yearly: 'Semi-annual',
+	annual: 'Annual',
+	irregular: 'Irregular',
+}
+
+/** Falls back to the stored word, so an unknown value is shown rather than hidden. */
+const frequencyLabel = (frequency: string | null | undefined): string =>
+	frequency ? (FREQUENCY_LABELS[frequency] ?? frequency) : '—'
 
 /**
  * How many issues a year's subscription brings, by how often it arrives.
@@ -49,9 +84,9 @@ const ISSUES_PER_YEAR: Record<string, number> = {
 	weekly: 52,
 	fortnightly: 26,
 	monthly: 12,
-	'bi-monthly': 6,
+	bimonthly: 6,
 	quarterly: 4,
-	'semi-annual': 2,
+	half_yearly: 2,
 	annual: 1,
 }
 
@@ -522,7 +557,7 @@ export default function PeriodicalSubscriptionsPage() {
 													</Link>
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground">{s.supplier?.supplier_name ?? '—'}</TableCell>
-												<TableCell className="text-sm capitalize">{s.frequency ?? '—'}</TableCell>
+												<TableCell className="text-sm">{frequencyLabel(s.frequency)}</TableCell>
 												<TableCell className="text-sm">{s.fiscal_year}</TableCell>
 												<TableCell>
 													<span className="text-emerald-600 font-medium">{s.received_issues}</span>
@@ -615,7 +650,7 @@ export default function PeriodicalSubscriptionsPage() {
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
 										<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[s.subscription_status]}`}>{s.subscription_status}</Badge>
-										<span className="text-xs text-muted-foreground capitalize">{s.frequency ?? '—'}</span>
+										<span className="text-xs text-muted-foreground">{frequencyLabel(s.frequency)}</span>
 									</div>
 									<p className="text-xs text-muted-foreground">
 										Issues: <span className="text-emerald-600 font-medium">{s.received_issues}</span>/{s.expected_issues ?? '?'}
@@ -746,7 +781,7 @@ export default function PeriodicalSubscriptionsPage() {
 									<Select value={form.frequency} onValueChange={v => setForm(f => ({ ...f, frequency: v }))}>
 										<SelectTrigger className={errors.frequency ? 'border-red-500' : ''}><SelectValue /></SelectTrigger>
 										<SelectContent>
-											{FREQUENCIES.map(freq => <SelectItem key={freq} value={freq} className="capitalize">{freq}</SelectItem>)}
+											{FREQUENCIES.map(freq => <SelectItem key={freq} value={freq}>{frequencyLabel(freq)}</SelectItem>)}
 										</SelectContent>
 									</Select>
 									{errors.frequency && <p className="text-xs text-red-500">{errors.frequency}</p>}
@@ -808,7 +843,7 @@ export default function PeriodicalSubscriptionsPage() {
 									{errors.expected_issues
 										? <p className="text-xs text-red-500">{errors.expected_issues}</p>
 										: <p className="text-xs text-muted-foreground">
-											Set by the frequency above — {form.frequency} means{' '}
+											Set by the frequency above — {frequencyLabel(form.frequency).toLowerCase()} means{' '}
 											{expectedIssuesFor(form.frequency) ?? '—'} issues a year.
 										</p>}
 								</div>
