@@ -272,6 +272,19 @@ export function usesPageCount(bookType: string): boolean {
 }
 
 /**
+ * Call Number and Classification Number — where a book sits on the shelf.
+ *
+ * A magazine or journal is not shelved by a class mark at all: the current
+ * issues stand in the reading room by title and the bound volumes stand by
+ * year, so neither number is asked for and neither is stored. A blank class
+ * mark saved against a journal would read later as a book somebody forgot to
+ * classify, which is worse than nothing.
+ */
+export function usesShelfMarks(bookType: string): boolean {
+	return !isPeriodicalType(bookType)
+}
+
+/**
  * Magazines and journals never circulate — so Reference Only is not a choice.
  *
  * Every college said the same thing: the reading room keeps the current issues
@@ -488,6 +501,53 @@ export function templateColumnsForBookType(bookType: string): TemplateColumn[] {
 	return templateColumnsFor('books').map(column =>
 		column.key === 'isbn' ? { ...column, required: isbnRequiredFor(bookType) } : column
 	)
+}
+
+/**
+ * The five columns the Add Title form does not ask a magazine or journal for.
+ *
+ * The sheet has to ask exactly what the form asks, or the two routes into the
+ * register disagree — and a column the form settles for itself is worse than
+ * merely redundant on a sheet, because whatever the librarian writes in it has
+ * to be thrown away:
+ *
+ *   * Accession Number — allotted from this college's JM series, never typed.
+ *     Nobody writes JM47 on the cover of an issue.
+ *   * Total Pages — a title that will hold a hundred issues of different
+ *     lengths has no single page count.
+ *   * Call Number / Classification Number — current issues stand in the reading
+ *     room by title and bound volumes by year; neither is shelved by a class mark.
+ *   * Reference Only — magazines and journals never circulate, so it is not a
+ *     choice on the form and must not become one on the sheet.
+ *
+ * Only the upload sheet is cut this way. Bulk edit still carries the full set,
+ * because editing an existing row is a different job from creating one.
+ */
+const PERIODICAL_UPLOAD_SKIP_KEYS: string[] = [
+	'accession_number',
+	'pages',
+	'call_number',
+	'classification_number',
+	'reference_only',
+]
+
+/** The columns of a blank upload sheet — what the librarian is asked to fill. */
+export function uploadColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
+	const columns = templateColumnsFor(kind)
+	if (kind === 'books') return columns
+	return columns.filter(column => !PERIODICAL_UPLOAD_SKIP_KEYS.includes(column.key))
+}
+
+/**
+ * The rules one uploaded row is judged by, chosen from what the row says it is.
+ *
+ * A magazine typed into the Books sheet is still a magazine: it is not asked
+ * for an accession number, a page count or a class mark, whichever sheet it
+ * arrived on.
+ */
+export function uploadColumnsForBookType(bookType: string): TemplateColumn[] {
+	if (isPeriodicalType(bookType)) return uploadColumnsFor('periodicals')
+	return templateColumnsForBookType(bookType)
 }
 
 /** The filled example row for each sheet, so the shape is seen and not guessed. */

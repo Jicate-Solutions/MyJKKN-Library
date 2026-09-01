@@ -7,6 +7,13 @@
  * The template is built from TEMPLATE_COLUMNS — the list the form and the
  * server both validate against — so a sheet that came out of this button can
  * never carry a column the server does not know.
+ *
+ * Cut per sheet by `uploadColumnsFor`, so each one asks exactly what the Add
+ * Title form asks for that material and nothing more. A magazine sheet
+ * therefore has no Accession Number, Total Pages, Call Number, Classification
+ * Number or Reference Only column: the form does not ask a magazine for any of
+ * them, and a column whose answer is thrown away is a column that should not
+ * have been printed.
  */
 
 import { useRef, useState } from 'react'
@@ -19,7 +26,7 @@ import { useToast } from '@/hooks/common/use-toast'
 import { FileSpreadsheet, Download, Upload, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
-	templateColumnsFor,
+	uploadColumnsFor,
 	templateExampleFor,
 	departmentsFor,
 	templateColumnFor,
@@ -37,7 +44,7 @@ const SHEET_KINDS: CatalogueSheetKind[] = ['books', 'periodicals']
 const ALL_COLUMNS: TemplateColumn[] = (() => {
 	const byKey = new Map<string, TemplateColumn>()
 	for (const kind of SHEET_KINDS) {
-		for (const column of templateColumnsFor(kind)) {
+		for (const column of uploadColumnsFor(kind)) {
 			if (!byKey.has(column.key)) byKey.set(column.key, column)
 		}
 	}
@@ -99,7 +106,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 	const [result, setResult] = useState<UploadResult | null>(null)
 
 	const downloadTemplate = (kind: CatalogueSheetKind) => {
-		const columns = templateColumnsFor(kind)
+		const columns = uploadColumnsFor(kind)
 		const example = templateExampleFor(kind)
 		const isBooks = kind === 'books'
 		const label = CATALOGUE_SHEET_LABELS[kind]
@@ -182,7 +189,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 			// it is missing an ISSN column, nor a magazine sheet an ISBN one.
 			const shortfalls = SHEET_KINDS.map(kind => ({
 				kind,
-				missing: templateColumnsFor(kind)
+				missing: uploadColumnsFor(kind)
 					.filter(c => c.required && !keyByIndex.includes(c.key))
 					.map(c => c.header),
 			}))

@@ -35,7 +35,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, usesShelfMarks, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -296,6 +296,7 @@ export default function RegistryPage() {
 			const {
 				accession_number, accession_date, book_type_other,
 				author, book_type, department, book_location, supplier_name,
+				call_number, classification_number,
 				...bibliographic
 			} = form
 
@@ -321,6 +322,11 @@ export default function RegistryPage() {
 				is_reference_only: isReferenceOnlyForced(book_type) || form.is_reference_only,
 				edition: bookOnly ? (form.edition || undefined) : undefined,
 				price: bookOnly && form.price ? Number(form.price) : undefined,
+				// Where a book sits on the shelf. A magazine or journal is not
+				// shelved by a class mark, so neither number is sent — nothing is
+				// stored for them, rather than an empty string that would read
+				// later as a book somebody forgot to classify.
+				...(usesShelfMarks(book_type) ? { call_number, classification_number } : {}),
 				subtitle: form.subtitle || undefined,
 				currency_code: 'INR',
 				// The register speaks in book types; the rest of the system reads

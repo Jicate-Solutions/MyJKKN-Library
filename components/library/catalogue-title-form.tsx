@@ -28,6 +28,7 @@ import {
 	departmentRequiredFor,
 	usesTypedAccessionNumber,
 	usesPageCount,
+	usesShelfMarks,
 	isReferenceOnlyForced,
 	isPeriodicalType,
 	PERIODICAL_ACCESSION_PREFIX,
@@ -101,6 +102,8 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	/** A book's number is written inside it; a magazine's is allotted. */
 	const typedAccession = usesTypedAccessionNumber(form.book_type)
 	const showPages = usesPageCount(form.book_type)
+	/** Call Number and Classification Number — a shelved book's, not a periodical's. */
+	const showShelfMarks = usesShelfMarks(form.book_type)
 	const lendingFixed = isReferenceOnlyForced(form.book_type)
 
 	/**
@@ -179,25 +182,13 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 				<Section title="The Book in Hand" hint="Saving records this book as copy 1. Further copies are added from the title's own page.">
 					{/* Nobody writes an accession number on the cover of a magazine, so
 					    asking for one would only get an invented number typed in. The
-					    register allots the next in this college's own JM series
-					    instead, and says so rather than leaving a gap the librarian
-					    has to wonder about. */}
+					    register allots the next in this college's own JM series on saving,
+					    so the field is not shown at all rather than shown as something the
+					    librarian can neither fill in nor change — the book type's own hint
+					    above already says the number is coming. */}
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						{typedAccession
-							? field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })
-							: (
-								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Accession Number</Label>
-									<div className="flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-										{PERIODICAL_ACCESSION_PREFIX}… given on saving
-									</div>
-									<p className="text-xs text-muted-foreground">
-										Magazines and journals are numbered {PERIODICAL_ACCESSION_PREFIX}1,{' '}
-										{PERIODICAL_ACCESSION_PREFIX}2… in their own series, so your book
-										register keeps running unbroken.
-									</p>
-								</div>
-							)}
+						{typedAccession &&
+							field('accession_number', 'Accession Number', true, { placeholder: 'The number written in this book', mono: true })}
 						{field('accession_date', 'Date of Adding', true, { type: 'date' })}
 					</div>
 				</Section>
@@ -380,10 +371,16 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 					{errors.department && <p className="text-xs text-red-500">{errors.department}</p>}
 				</div>
 				{field('book_location', 'Book Location', false, { placeholder: 'e.g. Beero 2 / Rack 3' })}
-				<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					{field('call_number', 'Call Number', false, { placeholder: '615.321 KOK', mono: true })}
-					{field('classification_number', 'Classification Number', false, { placeholder: '615.321', mono: true })}
-				</div>
+				{/* Where a book sits on the shelf. A magazine or journal is not shelved
+				    by a class mark — the current issues stand in the reading room by
+				    title and the bound volumes by year — so neither number is asked for
+				    here, and nothing is stored for them either. */}
+				{showShelfMarks && (
+					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+						{field('call_number', 'Call Number', false, { placeholder: '615.321 KOK', mono: true })}
+						{field('classification_number', 'Classification Number', false, { placeholder: '615.321', mono: true })}
+					</div>
+				)}
 			</Section>
 		</>
 	)

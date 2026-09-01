@@ -15,14 +15,19 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import {
-	templateColumnsForBookType,
+	uploadColumnsForBookType,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
 	departmentRequiredFor,
 	usesBookOnlyFields,
+	usesTypedAccessionNumber,
+	usesPageCount,
+	usesShelfMarks,
+	isReferenceOnlyForced,
 } from '@/lib/library/catalogue-options'
+import { nextPeriodicalAccession } from '@/lib/library/periodical-accession'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { toSheetDate } from '@/lib/library/sheet-date'
 import { supplierLookupFor } from '@/lib/library/supplier-by-name'
@@ -30,6 +35,17 @@ import { logActivity } from '@/lib/library/activity-log'
 
 /** How many books are in flight at once. Enough to be quick, few enough to be kind to the connection pool. */
 const CONCURRENCY = 8
+
+/**
+ * Tries at allotting a magazine's JM number before the row is given up on.
+ *
+ * Eight magazine rows can be written at the same moment, and each works out its
+ * next number from what is on the shelf — so several can land on JM12 and all
+ * but one will be refused by the unique constraint. The answer to that is JM13,
+ * so the row asks again rather than failing. A handful of attempts covers the
+ * eight in flight several times over.
+ */
+const ALLOT_ATTEMPTS = 25
 
 interface IncomingRow {
 	[key: string]: string | number | null | undefined
@@ -72,7 +88,7 @@ function validateRow(
 	// Judged by what the row says it is, not by which sheet it arrived on. A
 	// magazine typed into the Books sheet is still a magazine, and is not asked
 	// for an ISBN or a department it does not have.
-	for (const column of templateColumnsForBookType(bookType)) {
+	for (const column of uploadColumnsForBookType(bookType)) {
 		if (column.required && !text(row[column.key])) {
 			return `${column.header} is empty`
 		}
@@ -88,8 +104,13 @@ function validateRow(
 		if (isNaN(Number(price)) || Number(price) < 0) return 'Price must be a number'
 	}
 
-	const pages = text(row.pages)
-	if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
+	// A magazine or journal has no page count as a title — a hundred issues of
+	// different lengths do not share one — so the column is not on its sheet and
+	// is not demanded of a magazine row that arrived on the Books sheet either.
+	if (usesPageCount(bookType)) {
+		const pages = text(row.pages)
+		if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
+	}
 
 	// Any way a date is ordinarily written is read; only something that is not
 	// a date at all is refused
@@ -108,9 +129,13 @@ function validateRow(
 	// this college is added to it rather than refused, exactly as the Add Title
 	// form now does.
 
-	const lendable = text(row.reference_only).toLowerCase()
-	if (lendable !== 'lendable' && lendable !== 'non-lendable') {
-		return 'Reference Only must be Lendable or Non-lendable'
+	// Magazines and journals never circulate, so this is settled by the material
+	// rather than asked for. Only a book is made to say which it is.
+	if (!isReferenceOnlyForced(bookType)) {
+		const lendable = text(row.reference_only).toLowerCase()
+		if (lendable !== 'lendable' && lendable !== 'non-lendable') {
+			return 'Reference Only must be Lendable or Non-lendable'
+		}
 	}
 
 	// Each college has its own department list; one that has not given us a list
@@ -125,10 +150,17 @@ function validateRow(
 	// Two rows of the same sheet claiming one number — caught here rather than
 	// letting the first win silently and the second fail with a confusing
 	// "already used by another copy" pointing at a book from the same upload.
-	const accession = text(row.accession_number).toLowerCase()
-	const earlier = seen.get(accession)
-	if (earlier) return `Accession number repeats row ${earlier} of this sheet`
-	seen.set(accession, rowNumber)
+	//
+	// Only for numbers the librarian typed. A magazine's is allotted from the JM
+	// series when the row is written, so two magazine rows have nothing to clash
+	// over — and reading them all as the same empty string would have every
+	// magazine after the first refused as a repeat of the one before it.
+	if (usesTypedAccessionNumber(bookType)) {
+		const accession = text(row.accession_number).toLowerCase()
+		const earlier = seen.get(accession)
+		if (earlier) return `Accession number repeats row ${earlier} of this sheet`
+		seen.set(accession, rowNumber)
+	}
 
 	return null
 }
@@ -195,8 +227,13 @@ export async function POST(request: Request) {
 		// Numbers already on the shelf, checked in one query rather than one per
 		// row. Scoped to this institution: another college's Accession 101 is a
 		// different book and must not block this one.
-		if (valid.length > 0) {
-			const numbers = valid.map(v => text(v.data.accession_number))
+		//
+		// Typed numbers only. An allotted JM number is worked out from what is
+		// already on the shelf at the moment it is written, so there is nothing
+		// to check it against beforehand.
+		const typedRows = valid.filter(v => usesTypedAccessionNumber(text(v.data.book_type)))
+		if (typedRows.length > 0) {
+			const numbers = typedRows.map(v => text(v.data.accession_number))
 			const { data: existing } = await supabase
 				.from('lib_items')
 				.select('accession_number')
@@ -206,6 +243,7 @@ export async function POST(request: Request) {
 			const taken = new Set((existing || []).map(e => e.accession_number.toLowerCase()))
 			if (taken.size > 0) {
 				for (let i = valid.length - 1; i >= 0; i--) {
+					if (!usesTypedAccessionNumber(text(valid[i].data.book_type))) continue
 					const accession = text(valid[i].data.accession_number)
 					if (taken.has(accession.toLowerCase())) {
 						failures.push({
@@ -244,9 +282,27 @@ export async function POST(request: Request) {
 				const outcomes: Array<RowFailure | 'new-title' | 'copy'> = []
 
 				for (const { row, data } of chain) {
-					const accession = text(data.accession_number)
 					const bookType = text(data.book_type)
-					const referenceOnly = isReferenceOnlyFromLabel(text(data.reference_only))
+
+					// A book carries its number written inside it; a magazine does
+					// not, so the register allots the next one in this college's JM
+					// series. Decided from the material, exactly as the Add Title
+					// form decides it — a magazine typed into the Books sheet with a
+					// number in that column still gets a JM one, because the book
+					// register must stay unbroken.
+					const typedAccession = usesTypedAccessionNumber(bookType)
+					const accession = typedAccession ? text(data.accession_number) : ''
+
+					// Never circulates, so it is not read from the sheet: the column
+					// is not on the magazine template at all.
+					const referenceOnly = isReferenceOnlyForced(bookType)
+						|| isReferenceOnlyFromLabel(text(data.reference_only))
+
+					// One page count against a title that will hold a hundred issues
+					// of different lengths says nothing, so it is not kept. Same for
+					// the class marks: a magazine is shelved by title, not by number.
+					const pageCount = usesPageCount(bookType) ? Number(text(data.pages)) : null
+					const shelfMarks = usesShelfMarks(bookType)
 
 					// Author, issue number and price are a book's. A magazine or
 					// journal sheet does not carry them, and a blank left as 0 or ''
@@ -286,11 +342,11 @@ export async function POST(request: Request) {
 								edition: identity.edition || null,
 								publication_year: identity.publication_year,
 								language: text(data.language) || 'English',
-								classification_number: text(data.classification_number) || null,
-								call_number: text(data.call_number) || null,
+								classification_number: shelfMarks ? (text(data.classification_number) || null) : null,
+								call_number: shelfMarks ? (text(data.call_number) || null) : null,
 								publisher_name: identity.publisher_name || null,
 								publisher_place: identity.publisher_place || null,
-								pages: Number(text(data.pages)),
+								pages: pageCount,
 								price,
 								currency_code: 'INR',
 								department: text(data.department) || null,
@@ -328,23 +384,46 @@ export async function POST(request: Request) {
 					// first time it appears. Blank on a book, which carries none here.
 					const supplierId = await suppliers.resolve(data.supplier)
 
-					const { error: itemError } = await supabase
-						.from('lib_items')
-						.insert({
-							institution_id: institutionId,
-							catalogue_record_id: recordId,
-							accession_number: accession,
-							copy_number: copyNumber,
-							condition: 'new',
-							price,
-							currency_code: 'INR',
-							status: 'available',
-							is_lendable: !referenceOnly,
-							is_active: true,
-							supplier_id: supplierId,
-							// Whatever form it was written in, stored the one way
-							accession_date: toSheetDate(data.accession_date),
-						})
+					// A typed number is written once — if it clashes, the row is
+					// reported. An allotted one is worked out again: the clash means
+					// the row before it in this same sheet took JM12, and the answer
+					// to that is JM13, not a failed row.
+					let itemError: { code?: string; message?: string } | null = null
+					let written = accession
+
+					for (let attempt = 0; attempt < (typedAccession ? 1 : ALLOT_ATTEMPTS); attempt++) {
+						if (!typedAccession) {
+							const allotted = await nextPeriodicalAccession(supabase, institutionId)
+							if (!allotted) {
+								itemError = { message: 'Could not work out the next magazine number' }
+								break
+							}
+							written = allotted
+						}
+
+						const { error } = await supabase
+							.from('lib_items')
+							.insert({
+								institution_id: institutionId,
+								catalogue_record_id: recordId,
+								accession_number: written,
+								copy_number: copyNumber,
+								condition: 'new',
+								price,
+								currency_code: 'INR',
+								status: 'available',
+								is_lendable: !referenceOnly,
+								is_active: true,
+								supplier_id: supplierId,
+								// Whatever form it was written in, stored the one way
+								accession_date: toSheetDate(data.accession_date),
+							})
+
+						itemError = error
+						// 23505 on an allotted number is somebody else's JM12, so try
+						// again for the next one. Any other error is the row's own.
+						if (!error || typedAccession || error.code !== '23505') break
+					}
 
 					if (itemError) {
 						// Only undo a title this row just made. One that already held
@@ -354,10 +433,12 @@ export async function POST(request: Request) {
 						}
 						outcomes.push({
 							row,
-							accession_number: accession,
+							// What the librarian can look for: the number they typed,
+							// or the one the register tried to allot.
+							accession_number: typedAccession ? accession : written,
 							error: itemError.code === '23505'
 								? 'Accession number already used by a book in this library'
-								: itemError.message,
+								: (itemError.message ?? 'Could not save the copy'),
 						})
 						continue
 					}

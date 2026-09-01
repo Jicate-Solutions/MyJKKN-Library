@@ -20,6 +20,7 @@ import {
 	usesBookOnlyFields,
 	usesTypedAccessionNumber,
 	usesPageCount,
+	usesShelfMarks,
 	isReferenceOnlyForced,
 } from '@/lib/library/catalogue-options'
 import { istToday } from '@/lib/library/ist-clock'
@@ -109,6 +110,13 @@ export async function POST(request: Request) {
 		// will go on to hold a hundred of them.
 		const bookOnly = usesBookOnlyFields(bookType)
 
+		// Call Number and Classification Number go the same way. A magazine or
+		// journal is not shelved by a class mark, the form does not ask for
+		// one, and a hand-made request does not get to write one either — so
+		// the column is empty because it does not apply, not because somebody
+		// left it blank.
+		const shelfMarks = usesShelfMarks(bookType)
+
 		const identity = {
 			title,
 			author: bookOnly ? text(body.author) : '',
@@ -139,8 +147,8 @@ export async function POST(request: Request) {
 					edition: identity.edition || null,
 					publication_year: body.publication_year ?? null,
 					language: text(body.language) || 'English',
-					classification_number: text(body.classification_number) || null,
-					call_number: text(body.call_number) || null,
+					classification_number: shelfMarks ? (text(body.classification_number) || null) : null,
+					call_number: shelfMarks ? (text(body.call_number) || null) : null,
 					publisher_name: identity.publisher_name || null,
 					publisher_place: identity.publisher_place || null,
 					// One page count against a title that will hold a hundred issues

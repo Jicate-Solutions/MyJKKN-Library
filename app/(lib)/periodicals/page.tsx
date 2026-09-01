@@ -238,10 +238,39 @@ export default function PeriodicalSubscriptionsPage() {
 		setEditingItem(null)
 	}
 
+	/**
+	 * Every field on the form is required except the Gratis switch.
+	 *
+	 * Two of them are not typed — Supplier comes off the chosen title and
+	 * Expected Issues off the chosen frequency — but they are checked all the
+	 * same, because "filled in automatically" and "filled in" are not the same
+	 * thing. A title with no supplier recorded against it leaves that box empty,
+	 * and a subscription saved that way is one nobody can chase an issue for.
+	 * The message points at where the missing thing actually lives.
+	 *
+	 * A switch is never empty: it is on or it is off, and off is an answer. So
+	 * Gratis is the one field with nothing to check.
+	 */
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
 		if (!form.catalogue_record_id) e.catalogue_record_id = 'Periodical title is required'
+		if (!form.supplier_id) {
+			e.supplier_id = form.catalogue_record_id
+				? 'This title has no supplier — add one on the title under Knowledge Registry'
+				: 'Choose the periodical above to bring in its supplier'
+		}
+		if (!form.start_volume.trim()) e.start_volume = 'Volume is required'
 		if (!form.fiscal_year.trim()) e.fiscal_year = 'Fiscal year is required'
+		if (!form.subscription_type) e.subscription_type = 'Type is required'
+		if (!form.frequency) e.frequency = 'Frequency is required'
+		if (!form.start_date) e.start_date = 'Start date is required'
+		if (!form.end_date) e.end_date = 'End date is required'
+		// A gratis subscription still has a cost, and it is 0. Written rather than
+		// assumed, so the year's spend adds up from what was entered.
+		if (!form.subscription_cost.trim()) e.subscription_cost = 'Subscription cost is required — enter 0 if there is no charge'
+		if (expectedIssuesFor(form.frequency) === null) {
+			e.expected_issues = 'Expected issues is required — choose a frequency it can be worked out from'
+		}
 		setErrors(e)
 		return Object.keys(e).length === 0
 	}
@@ -481,9 +510,16 @@ export default function PeriodicalSubscriptionsPage() {
 													{(currentPage - 1) * effectivePerPage + index + 1}
 												</TableCell>
 												<TableCell className="max-w-[200px]">
-													<div className="truncate text-sm font-medium">
+													{/* The title is the obvious thing to click, so it opens the
+													    same page the Detail button does. A real link, not a row
+													    click handler: it can be opened in a new tab, and the
+													    browser shows where it goes before it is clicked. */}
+													<Link
+														href={`/periodicals/${s.id}`}
+														className="block truncate text-sm font-medium hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
+													>
 														{s.catalogue_record?.title ?? s.catalogue_record_id}
-													</div>
+													</Link>
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground">{s.supplier?.supplier_name ?? '—'}</TableCell>
 												<TableCell className="text-sm capitalize">{s.frequency ?? '—'}</TableCell>
@@ -548,7 +584,13 @@ export default function PeriodicalSubscriptionsPage() {
 								<div key={s.id} className="rounded-lg border p-4 space-y-2">
 									<div className="flex items-start justify-between">
 										<div className="flex-1 min-w-0">
-											<p className="font-medium text-sm truncate">{s.catalogue_record?.title ?? s.catalogue_record_id}</p>
+											{/* Clickable here too, so the phone behaves like the table */}
+											<Link
+												href={`/periodicals/${s.id}`}
+												className="block font-medium text-sm truncate hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
+											>
+												{s.catalogue_record?.title ?? s.catalogue_record_id}
+											</Link>
 											<p className="text-xs text-muted-foreground">{s.supplier?.supplier_name ?? '—'} · {s.fiscal_year}</p>
 										</div>
 										<DropdownMenu>
@@ -647,29 +689,33 @@ export default function PeriodicalSubscriptionsPage() {
 								{errors.catalogue_record_id && <p className="text-xs text-red-500">{errors.catalogue_record_id}</p>}
 							</div>
 							<div className="space-y-2">
-								<Label className="text-sm font-semibold">Supplier</Label>
-								{/* Not asked for here. The vendor was entered once against the title
-								    in the catalogue, and this reads it from there — one entry, and
-								    every screen showing the same name. */}
-								<div className="flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 text-sm text-muted-foreground">
+								<Label className="text-sm font-semibold">Supplier <span className="text-red-500">*</span></Label>
+								{/* Required, but not asked for here. The vendor was entered once
+								    against the title in the catalogue, and this reads it from
+								    there — one entry, and every screen showing the same name. */}
+								<div className={`flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 text-sm text-muted-foreground ${errors.supplier_id ? 'border-red-500' : ''}`}>
 									{supplierOfTitle(form.catalogue_record_id)?.name
 										?? (form.catalogue_record_id ? 'No supplier recorded on this title' : 'Choose the periodical above')}
 								</div>
-								<p className="text-xs text-muted-foreground">
-									Taken from the catalogue. Change it on the title, under Knowledge Registry.
-								</p>
+								{errors.supplier_id
+									? <p className="text-xs text-red-500">{errors.supplier_id}</p>
+									: <p className="text-xs text-muted-foreground">
+										Taken from the catalogue. Change it on the title, under Knowledge Registry.
+									</p>}
 							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Volume</Label>
+									<Label className="text-sm font-semibold">Volume <span className="text-red-500">*</span></Label>
 									{/* Written as the librarian reads it off the issue. "12" and
 									    "Vol 12" both say the same thing to the person standing at
 									    the shelf, so the column is text and neither is corrected. */}
 									<Input
 										value={form.start_volume}
 										onChange={e => setForm(f => ({ ...f, start_volume: e.target.value }))}
+										className={errors.start_volume ? 'border-red-500' : ''}
 										placeholder="e.g. 12 or Vol 12"
 									/>
+									{errors.start_volume && <p className="text-xs text-red-500">{errors.start_volume}</p>}
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Fiscal Year <span className="text-red-500">*</span></Label>
@@ -684,34 +730,48 @@ export default function PeriodicalSubscriptionsPage() {
 							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Type</Label>
+									<Label className="text-sm font-semibold">Type <span className="text-red-500">*</span></Label>
 									<Select value={form.subscription_type} onValueChange={v => setForm(f => ({ ...f, subscription_type: v }))}>
-										<SelectTrigger><SelectValue /></SelectTrigger>
+										<SelectTrigger className={errors.subscription_type ? 'border-red-500' : ''}><SelectValue /></SelectTrigger>
 										<SelectContent>
 											<SelectItem value="print">Print</SelectItem>
 											<SelectItem value="online">Online</SelectItem>
 											<SelectItem value="both">Both</SelectItem>
 										</SelectContent>
 									</Select>
+									{errors.subscription_type && <p className="text-xs text-red-500">{errors.subscription_type}</p>}
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Frequency</Label>
+									<Label className="text-sm font-semibold">Frequency <span className="text-red-500">*</span></Label>
 									<Select value={form.frequency} onValueChange={v => setForm(f => ({ ...f, frequency: v }))}>
-										<SelectTrigger><SelectValue /></SelectTrigger>
+										<SelectTrigger className={errors.frequency ? 'border-red-500' : ''}><SelectValue /></SelectTrigger>
 										<SelectContent>
 											{FREQUENCIES.map(freq => <SelectItem key={freq} value={freq} className="capitalize">{freq}</SelectItem>)}
 										</SelectContent>
 									</Select>
+									{errors.frequency && <p className="text-xs text-red-500">{errors.frequency}</p>}
 								</div>
 							</div>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Start Date</Label>
-									<Input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
+									<Label className="text-sm font-semibold">Start Date <span className="text-red-500">*</span></Label>
+									<Input
+										type="date"
+										value={form.start_date}
+										onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))}
+										className={errors.start_date ? 'border-red-500' : ''}
+									/>
+									{errors.start_date && <p className="text-xs text-red-500">{errors.start_date}</p>}
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">End Date</Label>
-									<Input type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
+									<Label className="text-sm font-semibold">End Date <span className="text-red-500">*</span></Label>
+									<Input
+										type="date"
+										value={form.end_date}
+										onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
+										className={errors.end_date ? 'border-red-500' : ''}
+									/>
+									{errors.end_date && <p className="text-xs text-red-500">{errors.end_date}</p>}
 								</div>
 							</div>
 						</div>
@@ -721,11 +781,19 @@ export default function PeriodicalSubscriptionsPage() {
 							<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cost and Issues</h3>
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Subscription Cost (₹)</Label>
-									<Input type="number" min="0" value={form.subscription_cost} onChange={e => setForm(f => ({ ...f, subscription_cost: e.target.value }))} placeholder="0.00" />
+									<Label className="text-sm font-semibold">Subscription Cost (₹) <span className="text-red-500">*</span></Label>
+									<Input
+										type="number"
+										min="0"
+										value={form.subscription_cost}
+										onChange={e => setForm(f => ({ ...f, subscription_cost: e.target.value }))}
+										className={errors.subscription_cost ? 'border-red-500' : ''}
+										placeholder="0.00"
+									/>
+									{errors.subscription_cost && <p className="text-xs text-red-500">{errors.subscription_cost}</p>}
 								</div>
 								<div className="space-y-2">
-									<Label className="text-sm font-semibold">Expected Issues</Label>
+									<Label className="text-sm font-semibold">Expected Issues <span className="text-red-500">*</span></Label>
 									{/* Worked out from the frequency rather than typed. A monthly
 									    journal keyed in as 10 reads later as two issues never
 									    delivered, and the chase goes out to a supplier who sent
@@ -735,12 +803,14 @@ export default function PeriodicalSubscriptionsPage() {
 										value={expectedIssuesFor(form.frequency) ?? ''}
 										readOnly
 										tabIndex={-1}
-										className="bg-muted/40 text-muted-foreground cursor-not-allowed"
+										className={`bg-muted/40 text-muted-foreground cursor-not-allowed ${errors.expected_issues ? 'border-red-500' : ''}`}
 									/>
-									<p className="text-xs text-muted-foreground">
-										Set by the frequency above — {form.frequency} means{' '}
-										{expectedIssuesFor(form.frequency) ?? '—'} issues a year.
-									</p>
+									{errors.expected_issues
+										? <p className="text-xs text-red-500">{errors.expected_issues}</p>
+										: <p className="text-xs text-muted-foreground">
+											Set by the frequency above — {form.frequency} means{' '}
+											{expectedIssuesFor(form.frequency) ?? '—'} issues a year.
+										</p>}
 								</div>
 							</div>
 							<div className="flex items-center gap-3">

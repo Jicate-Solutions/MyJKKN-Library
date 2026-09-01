@@ -17,7 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import {
-	ArrowLeft, PlusCircle, RefreshCw, BookMarked, CheckCircle, Inbox, ChevronLeft, ChevronRight,
+	ArrowLeft, RefreshCw, BookMarked, CheckCircle, Inbox, ChevronLeft, ChevronRight,
 	MoreHorizontal, Eye, Edit, Trash2,
 } from 'lucide-react'
 import Link from 'next/link'
@@ -125,7 +125,9 @@ export default function SubscriptionDetailPage() {
 	const [deleteTarget, setDeleteTarget] = useState<LibPeriodicalIssue | null>(null)
 	const [deleting, setDeleting] = useState(false)
 	const [currentPage, setCurrentPage] = useState(1)
-	const [itemsPerPage, setItemsPerPage] = useState(10)
+	// A monthly subscription lays out twelve issues, and the librarian wants to
+	// see the year at once — at ten a page, December and November sat on page two.
+	const [itemsPerPage, setItemsPerPage] = useState(25)
 
 	const loadData = useCallback(async () => {
 		try {
@@ -212,6 +214,11 @@ export default function SubscriptionDetailPage() {
 	}
 
 	const handleSave = async () => {
+		// Editing only. The button that opened a blank sheet is gone, and this
+		// makes that the rule rather than merely the appearance: with the issues
+		// laid out from the subscription's own frequency, a new one written here
+		// would be a thirteenth issue of a twelve-issue year.
+		if (!editingIssue) return
 		if (!validate()) return
 		try {
 			setSaving(true)
@@ -227,27 +234,24 @@ export default function SubscriptionDetailPage() {
 				cover_date: form.cover_date || undefined,
 				remarks: form.remarks.trim() || undefined,
 			}
-			const base = `/api/lib/periodicals/subscriptions/${subscriptionId}/issues`
-			const res = await fetch(editingIssue ? `${base}/${editingIssue.id}` : base, {
-				method: editingIssue ? 'PUT' : 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload),
-			})
+			const res = await fetch(
+				`/api/lib/periodicals/subscriptions/${subscriptionId}/issues/${editingIssue.id}`,
+				{
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload),
+				}
+			)
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}))
 				throw new Error(err.error || 'Save failed')
 			}
 			const saved = await res.json()
-			if (editingIssue) {
-				setIssues(prev => prev.map(i => i.id === saved.id ? saved : i))
-				// The Received count moves with the status, so the scorecards above
-				// are read again rather than guessed at here.
-				if (editingIssue.receipt_status !== saved.receipt_status) loadData()
-				toast({ title: '✅ Issue updated', className: 'bg-green-50 border-green-200 text-green-800' })
-			} else {
-				setIssues(prev => [saved, ...prev])
-				toast({ title: '✅ Issue recorded', className: 'bg-green-50 border-green-200 text-green-800' })
-			}
+			setIssues(prev => prev.map(i => i.id === saved.id ? saved : i))
+			// The Received count moves with the status, so the scorecards above
+			// are read again rather than guessed at here.
+			if (editingIssue.receipt_status !== saved.receipt_status) loadData()
+			toast({ title: '✅ Issue updated', className: 'bg-green-50 border-green-200 text-green-800' })
 			setSheetOpen(false)
 			resetForm()
 		} catch (err) {
@@ -317,9 +321,11 @@ export default function SubscriptionDetailPage() {
 					<h1 className="text-lg font-semibold leading-tight truncate">
 						{subscription.catalogue_record?.title ?? 'Subscription Detail'}
 					</h1>
-					<p className="text-sm text-muted-foreground">
-						Sub #{subscription.subscription_number ?? subscription.id.slice(0, 8)}
-					</p>
+					{/* No "Sub #…" line. It showed the first eight characters of the
+					    row's database id whenever no subscription number had been
+					    given — which was always — and a fragment of an id is not a
+					    reference a librarian can use for anything. The title above
+					    is what identifies this subscription on screen. */}
 					<div className="flex flex-wrap gap-1.5 mt-1.5">
 						<Badge variant="outline" className={`text-xs ${subscriptionStatusColors[subscription.subscription_status] ?? ''}`}>
 							{subscription.subscription_status}
@@ -450,6 +456,13 @@ export default function SubscriptionDetailPage() {
 								<h2 className="text-base font-semibold">Issues Received</h2>
 								<p className="text-xs text-muted-foreground">{issues.length} issue{issues.length !== 1 ? 's' : ''} on record</p>
 							</div>
+							{/* No "Record Issue" button, on purpose.
+							    The year's issues are laid out when the subscription is
+							    registered — twelve rows for a monthly journal — and each is
+							    edited to 'received' on the day it arrives. Adding one here
+							    would make a thirteenth issue of a twelve-issue subscription,
+							    which is not something a monthly journal can bring. So an
+							    issue is corrected from its own row, never created. */}
 							<div className="flex items-center gap-1.5 shrink-0">
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -459,11 +472,6 @@ export default function SubscriptionDetailPage() {
 									</TooltipTrigger>
 									<TooltipContent>Refresh</TooltipContent>
 								</Tooltip>
-								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
-									<PlusCircle className="h-4 w-4 mr-1.5" />
-									<span className="hidden sm:inline">Record Issue</span>
-									<span className="sm:hidden">Add</span>
-								</Button>
 							</div>
 						</div>
 					</CardHeader>
@@ -474,8 +482,11 @@ export default function SubscriptionDetailPage() {
 								<Table>
 									<TableHeader className="sticky top-0 z-10 bg-muted/50">
 										<TableRow>
-											<TableHead className="text-xs font-semibold w-14">S.No</TableHead>
-											<TableHead className="text-xs font-semibold">Volume</TableHead>
+											{/* The volume is the subscription's, shown once above, and
+											    the same on every row — so it is not repeated here.
+											    Issue # already numbers the rows in the order they
+											    arrive, which is what a running count was standing in
+											    for. */}
 											<TableHead className="text-xs font-semibold">Issue #</TableHead>
 											<TableHead className="text-xs font-semibold">Cover Date</TableHead>
 											<TableHead className="text-xs font-semibold">Issue Date</TableHead>
@@ -487,21 +498,16 @@ export default function SubscriptionDetailPage() {
 									<TableBody>
 										{paginated.length === 0 ? (
 											<TableRow>
-												<TableCell colSpan={8} className="h-32 text-center">
+												<TableCell colSpan={6} className="h-32 text-center">
 													<div className="flex flex-col items-center gap-1 text-muted-foreground">
 														<BookMarked className="h-8 w-8 opacity-20" />
 														<span className="text-sm">No issues recorded yet</span>
-														<span className="text-xs">Click Record Issue to log a received issue</span>
+														<span className="text-xs">Issues are laid out when the subscription is registered</span>
 													</div>
 												</TableCell>
 											</TableRow>
-										) : paginated.map((issue, index) => (
+										) : paginated.map(issue => (
 											<TableRow key={issue.id} className="hover:bg-muted/50">
-												{/* Counted across pages, so page 2 starts at 11 and not at 1 */}
-												<TableCell className="text-sm text-muted-foreground tabular-nums">
-													{(currentPage - 1) * effectivePerPage + index + 1}
-												</TableCell>
-												<TableCell className="text-sm">{issue.volume_number || '—'}</TableCell>
 												<TableCell className="text-sm">{issue.issue_number || '—'}</TableCell>
 												<TableCell className="text-sm">{coverDateLabel(issue.cover_date)}</TableCell>
 												<TableCell className="text-sm">{dateLabel(issue.issue_date)}</TableCell>
@@ -546,18 +552,16 @@ export default function SubscriptionDetailPage() {
 									<BookMarked className="h-8 w-8 opacity-20" />
 									<span className="text-sm">No issues recorded yet</span>
 								</div>
-							) : paginated.map((issue, index) => (
+							) : paginated.map(issue => (
 								<div key={issue.id} className="rounded-lg border p-4 space-y-2">
 									<div className="flex items-start justify-between gap-2">
 										<div className="min-w-0">
+											{/* The same columns as the table above, on a narrow screen —
+											    so the running count and the volume are gone from here
+											    too, rather than the phone showing a column the desktop
+											    does not. */}
 											<p className="font-medium text-sm">
-												<span className="text-muted-foreground tabular-nums mr-1.5">
-													{(currentPage - 1) * effectivePerPage + index + 1}.
-												</span>
-												{issue.volume_number ? `Vol. ${issue.volume_number}` : ''}
-												{issue.volume_number && issue.issue_number ? ' / ' : ''}
-												{issue.issue_number ? `No. ${issue.issue_number}` : ''}
-												{!issue.volume_number && !issue.issue_number ? 'Issue' : ''}
+												{issue.issue_number ? `No. ${issue.issue_number}` : 'Issue'}
 											</p>
 											<p className="text-xs text-muted-foreground">
 												{coverDateLabel(issue.cover_date)} · received {dateLabel(issue.received_date)}
@@ -622,15 +626,13 @@ export default function SubscriptionDetailPage() {
 				</Card>
 			</TooltipProvider>
 
-			{/* Record Issue Sheet */}
+			{/* Edit Issue Sheet — opened only from a row's Edit, never blank */}
 			<Sheet open={sheetOpen} onOpenChange={o => { if (!o) resetForm(); setSheetOpen(o) }}>
 				<SheetContent className="sm:max-w-[720px] overflow-y-auto">
 					<SheetHeader className="pb-4 border-b">
-						<SheetTitle className="text-lg font-semibold">{editingIssue ? 'Edit Issue' : 'Record Issue'}</SheetTitle>
+						<SheetTitle className="text-lg font-semibold">Edit Issue</SheetTitle>
 						<p className="text-sm text-muted-foreground">
-							{editingIssue
-								? 'Correct this issue — including its status, once a missing issue turns up'
-								: 'Log a received issue for this periodical subscription'}
+							Correct this issue — including its status, once a missing issue turns up
 						</p>
 					</SheetHeader>
 					<div className="mt-6 space-y-8">
