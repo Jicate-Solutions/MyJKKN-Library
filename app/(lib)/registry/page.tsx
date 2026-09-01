@@ -35,7 +35,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, usesShelfMarks, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, usesShelfMarks, usesPeriodicalScope, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -77,6 +77,8 @@ interface FormData {
 	book_type: string
 	/** What was typed after choosing "Others"; folded into book_type on save */
 	book_type_other: string
+	/** National or International. Magazines and journals only. */
+	periodical_scope: string
 	department: string
 	book_location: string
 	/** Copy-level, and asked for on magazines and journals only. Typed by hand:
@@ -108,6 +110,7 @@ const defaultForm: FormData = {
 	author: '',
 	book_type: '',
 	book_type_other: '',
+	periodical_scope: '',
 	department: '',
 	book_location: '',
 	supplier_name: '',
@@ -253,6 +256,11 @@ export default function RegistryPage() {
 			if (form.book_type === OTHER_BOOK_TYPE && !form.book_type_other.trim()) {
 				e.book_type_other = 'Say what kind of material this is'
 			}
+			// Asked of magazines and journals alone — a book is not national or
+			// international, and the column stays empty for it.
+			if (usesPeriodicalScope(form.book_type) && !form.periodical_scope.trim()) {
+				e.periodical_scope = 'Say whether this is National or International'
+			}
 			if (!form.language.trim()) e.language = 'Language is required'
 			// A magazine title holds a hundred issues of different lengths, so one
 			// page count against it says nothing and the form does not ask for it.
@@ -296,7 +304,7 @@ export default function RegistryPage() {
 			const {
 				accession_number, accession_date, book_type_other,
 				author, book_type, department, book_location, supplier_name,
-				call_number, classification_number,
+				call_number, classification_number, periodical_scope,
 				...bibliographic
 			} = form
 
@@ -327,6 +335,11 @@ export default function RegistryPage() {
 				// stored for them, rather than an empty string that would read
 				// later as a book somebody forgot to classify.
 				...(usesShelfMarks(book_type) ? { call_number, classification_number } : {}),
+				// National or International. Sent only where it applies, so a book
+				// carries nothing and a magazine carries what was chosen — a value
+				// left over from a type the librarian changed their mind about does
+				// not follow the title into the register.
+				periodical_scope: usesPeriodicalScope(book_type) ? (periodical_scope || undefined) : undefined,
 				subtitle: form.subtitle || undefined,
 				currency_code: 'INR',
 				// The register speaks in book types; the rest of the system reads
@@ -426,6 +439,7 @@ export default function RegistryPage() {
 			// reset to the first dropdown value
 			book_type: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? (r.book_type ?? '') : (r.book_type ? OTHER_BOOK_TYPE : ''),
 			book_type_other: BOOK_TYPE_LABELS.includes(r.book_type ?? '') ? '' : (r.book_type ?? ''),
+			periodical_scope: r.periodical_scope ?? '',
 			department: r.department ?? '',
 			book_location: r.book_location ?? '',
 			// The supplier lives on the copy rather than the title, so it is read

@@ -25,9 +25,13 @@ import {
 	usesTypedAccessionNumber,
 	usesPageCount,
 	usesShelfMarks,
+	usesPeriodicalScope,
+	periodicalScopeFromLabel,
+	PERIODICAL_SCOPES,
 	isReferenceOnlyForced,
 } from '@/lib/library/catalogue-options'
 import { nextPeriodicalAccession } from '@/lib/library/periodical-accession'
+import { insertCatalogueRecord } from '@/lib/library/catalogue-record-insert'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { toSheetDate } from '@/lib/library/sheet-date'
 import { supplierLookupFor } from '@/lib/library/supplier-by-name'
@@ -136,6 +140,12 @@ function validateRow(
 		if (lendable !== 'lendable' && lendable !== 'non-lendable') {
 			return 'Reference Only must be Lendable or Non-lendable'
 		}
+	}
+
+	// National or International, and only those two — a sheet saying "Natl" would
+	// go into the column the yearly count is taken from and quietly miss it.
+	if (usesPeriodicalScope(bookType) && !periodicalScopeFromLabel(row.periodical_scope)) {
+		return `Journal/Magazine Type must be ${PERIODICAL_SCOPES.join(' or ')}`
 	}
 
 	// Each college has its own department list; one that has not given us a list
@@ -304,6 +314,12 @@ export async function POST(request: Request) {
 					const pageCount = usesPageCount(bookType) ? Number(text(data.pages)) : null
 					const shelfMarks = usesShelfMarks(bookType)
 
+					// National or International. Nothing is stored for a book, where
+					// the question does not apply.
+					const periodicalScope = usesPeriodicalScope(bookType)
+						? periodicalScopeFromLabel(data.periodical_scope)
+						: null
+
 					// Author, issue number and price are a book's. A magazine or
 					// journal sheet does not carry them, and a blank left as 0 or ''
 					// would read later as "somebody skipped it" rather than "this
@@ -328,41 +344,38 @@ export async function POST(request: Request) {
 					let createdTitle = false
 
 					if (!recordId) {
-						const { data: record, error: recordError } = await supabase
-							.from('lib_catalogue_records')
-							.insert({
-								institution_id: institutionId,
-								title: identity.title,
-								subtitle: text(data.subtitle) || null,
-								resource_format: formatForBookType(bookType),
-								book_type: bookType,
-								author: identity.author || null,
-								isbn: identity.isbn || null,
-								issn: identity.issn || null,
-								edition: identity.edition || null,
-								publication_year: identity.publication_year,
-								language: text(data.language) || 'English',
-								classification_number: shelfMarks ? (text(data.classification_number) || null) : null,
-								call_number: shelfMarks ? (text(data.call_number) || null) : null,
-								publisher_name: identity.publisher_name || null,
-								publisher_place: identity.publisher_place || null,
-								pages: pageCount,
-								price,
-								currency_code: 'INR',
-								department: text(data.department) || null,
-								book_location: text(data.book_location) || null,
-								is_reference_only: referenceOnly,
-								is_active: true,
-							})
-							.select('id')
-							.single()
+						const { id: newRecordId, error: recordError } = await insertCatalogueRecord(supabase, {
+							institution_id: institutionId,
+							title: identity.title,
+							subtitle: text(data.subtitle) || null,
+							resource_format: formatForBookType(bookType),
+							book_type: bookType,
+							author: identity.author || null,
+							isbn: identity.isbn || null,
+							issn: identity.issn || null,
+							edition: identity.edition || null,
+							publication_year: identity.publication_year,
+							language: text(data.language) || 'English',
+							classification_number: shelfMarks ? (text(data.classification_number) || null) : null,
+							call_number: shelfMarks ? (text(data.call_number) || null) : null,
+							periodical_scope: periodicalScope,
+							publisher_name: identity.publisher_name || null,
+							publisher_place: identity.publisher_place || null,
+							pages: pageCount,
+							price,
+							currency_code: 'INR',
+							department: text(data.department) || null,
+							book_location: text(data.book_location) || null,
+							is_reference_only: referenceOnly,
+							is_active: true,
+						})
 
-						if (recordError || !record) {
+						if (recordError || !newRecordId) {
 							outcomes.push({ row, accession_number: accession, error: recordError?.message ?? 'Could not save the title' })
 							continue
 						}
 
-						recordId = record.id
+						recordId = newRecordId
 						createdTitle = true
 
 						// The registry list and author search read the joined table, so

@@ -29,6 +29,8 @@ import {
 	usesTypedAccessionNumber,
 	usesPageCount,
 	usesShelfMarks,
+	usesPeriodicalScope,
+	PERIODICAL_SCOPES,
 	isReferenceOnlyForced,
 	isPeriodicalType,
 	PERIODICAL_ACCESSION_PREFIX,
@@ -49,6 +51,8 @@ export interface TitleFormFields {
 	issn: string
 	book_type: string
 	book_type_other: string
+	/** National or International. Magazines and journals only — see the field. */
+	periodical_scope: string
 	language: string
 	pages: string
 	call_number: string
@@ -104,6 +108,8 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	const showPages = usesPageCount(form.book_type)
 	/** Call Number and Classification Number — a shelved book's, not a periodical's. */
 	const showShelfMarks = usesShelfMarks(form.book_type)
+	/** National or International — asked of a magazine or journal, never of a book. */
+	const showPeriodicalScope = usesPeriodicalScope(form.book_type)
 	const lendingFixed = isReferenceOnlyForced(form.book_type)
 
 	/**
@@ -162,6 +168,30 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 								: 'This decides what the rest of the form asks for.'}
 						</p>}
 				</div>
+
+				{/* Straight after Book Type, because it is the same question asked one
+				    level down — and a librarian who has just chosen Journals is
+				    already looking here. Not shown for a book: nobody classes a
+				    textbook as national or international. */}
+				{showPeriodicalScope && (
+					<div className="space-y-2">
+						<Label className="text-sm font-semibold">Journal/Magazine Type <Required /></Label>
+						<Select value={form.periodical_scope} onValueChange={v => set({ periodical_scope: v })}>
+							<SelectTrigger className={errors.periodical_scope ? 'border-red-500' : ''}>
+								<SelectValue placeholder="Choose" />
+							</SelectTrigger>
+							<SelectContent>
+								{PERIODICAL_SCOPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+							</SelectContent>
+						</Select>
+						{errors.periodical_scope
+							? <p className="text-xs text-red-500">{errors.periodical_scope}</p>
+							: <p className="text-xs text-muted-foreground">
+								Whether this is a national or an international title — the split the
+								library is asked for in its yearly returns.
+							</p>}
+					</div>
+				)}
 
 				{/* Only asked once Others is chosen, so the common case stays two clicks */}
 				{form.book_type === OTHER_BOOK_TYPE && (

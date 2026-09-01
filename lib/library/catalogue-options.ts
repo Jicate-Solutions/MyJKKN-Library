@@ -203,6 +203,32 @@ export function isPeriodicalType(bookType: string): boolean {
 }
 
 /**
+ * National or International — which a magazine or journal is.
+ *
+ * Asked of periodicals alone. A library reports its journal holdings split this
+ * way (NAAC and the AISHE return both ask for it), and the split is a property
+ * of the title, not of any one issue — so it is recorded once here rather than
+ * counted by hand off a shelf every time somebody asks.
+ *
+ * A book has no equivalent: nobody classes a textbook as national or
+ * international, so the field is not shown and nothing is stored for it.
+ */
+export const PERIODICAL_SCOPES = ['National', 'International'] as const
+
+export type PeriodicalScope = (typeof PERIODICAL_SCOPES)[number]
+
+/** Does this material get asked whether it is National or International? */
+export function usesPeriodicalScope(bookType: string): boolean {
+	return isPeriodicalType(bookType)
+}
+
+/** What was typed, if it is one of the two. Anything else is not stored. */
+export function periodicalScopeFromLabel(value: unknown): PeriodicalScope | null {
+	const wanted = (value ?? '').toString().trim().toLowerCase()
+	return PERIODICAL_SCOPES.find(scope => scope.toLowerCase() === wanted) ?? null
+}
+
+/**
  * A magazine or journal comes from a vendor, issue after issue, and the library
  * needs to know which one — it is the same vendor the subscription is paid to.
  * A book is bought once and its supplier belongs to the purchase order, not to
@@ -531,11 +557,30 @@ const PERIODICAL_UPLOAD_SKIP_KEYS: string[] = [
 	'reference_only',
 ]
 
+/**
+ * National or International, on the sheet as on the form.
+ *
+ * Added to the upload sheet only. Bulk edit keeps the column set it had — see
+ * the note above.
+ */
+export const PERIODICAL_SCOPE_COLUMN: TemplateColumn = {
+	key: 'periodical_scope',
+	header: 'Journal/Magazine Type',
+	required: true,
+	note: PERIODICAL_SCOPES.join(' / '),
+	altHeaders: ['Journal Type', 'Magazine Type', 'National/International'],
+}
+
 /** The columns of a blank upload sheet — what the librarian is asked to fill. */
 export function uploadColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
 	const columns = templateColumnsFor(kind)
 	if (kind === 'books') return columns
-	return columns.filter(column => !PERIODICAL_UPLOAD_SKIP_KEYS.includes(column.key))
+
+	const kept = columns.filter(column => !PERIODICAL_UPLOAD_SKIP_KEYS.includes(column.key))
+	// Beside Book Type, which is the question it follows from
+	const at = kept.findIndex(column => column.key === 'book_type')
+	if (at === -1) return [...kept, PERIODICAL_SCOPE_COLUMN]
+	return [...kept.slice(0, at + 1), PERIODICAL_SCOPE_COLUMN, ...kept.slice(at + 1)]
 }
 
 /**
@@ -574,6 +619,7 @@ export function templateExampleFor(kind: CatalogueSheetKind): Record<string, str
 		department: '',
 		supplier: 'Universal Book Agency',
 		book_location: 'Reading Room / Rack 1',
+		periodical_scope: 'International',
 	}
 }
 

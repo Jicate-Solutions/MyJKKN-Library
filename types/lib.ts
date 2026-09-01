@@ -171,6 +171,13 @@ export interface LibCatalogueRecord {
 	department?: string
 	/** Books / Magazine / Journals / Projects, or free text when Others is chosen. */
 	book_type?: string
+	/**
+	 * 'National' or 'International', for magazines and journals only.
+	 *
+	 * Null on a book, where it does not apply — the yearly returns ask a library
+	 * to split its journals this way, and nobody classes a textbook so.
+	 */
+	periodical_scope?: string
 	/** Where the copy sits: beero, rack, shelf. Free text. */
 	book_location?: string
 	is_reference_only: boolean

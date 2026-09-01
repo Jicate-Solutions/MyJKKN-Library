@@ -21,11 +21,14 @@ import {
 	usesTypedAccessionNumber,
 	usesPageCount,
 	usesShelfMarks,
+	usesPeriodicalScope,
+	periodicalScopeFromLabel,
 	isReferenceOnlyForced,
 } from '@/lib/library/catalogue-options'
 import { istToday } from '@/lib/library/ist-clock'
 import { supplierLookupFor } from '@/lib/library/supplier-by-name'
 import { nextPeriodicalAccession } from '@/lib/library/periodical-accession'
+import { insertCatalogueRecord } from '@/lib/library/catalogue-record-insert'
 
 const text = (value: unknown): string => (value ?? '').toString().trim()
 
@@ -117,6 +120,13 @@ export async function POST(request: Request) {
 		// left it blank.
 		const shelfMarks = usesShelfMarks(bookType)
 
+		// National or International. Read only where it applies and only when it
+		// is one of the two, so a hand-made request cannot write "Natl" into the
+		// column the yearly count is taken from.
+		const periodicalScope = usesPeriodicalScope(bookType)
+			? periodicalScopeFromLabel(body.periodical_scope)
+			: null
+
 		const identity = {
 			title,
 			author: bookOnly ? text(body.author) : '',
@@ -133,43 +143,40 @@ export async function POST(request: Request) {
 		let createdTitle = false
 
 		if (!recordId) {
-			const { data: record, error: recordError } = await supabase
-				.from('lib_catalogue_records')
-				.insert({
-					institution_id: institutionId,
-					title,
-					subtitle: text(body.subtitle) || null,
-					resource_format: formatForBookType(bookType),
-					book_type: bookType || null,
-					author: identity.author || null,
-					isbn: identity.isbn || null,
-					issn: identity.issn || null,
-					edition: identity.edition || null,
-					publication_year: body.publication_year ?? null,
-					language: text(body.language) || 'English',
-					classification_number: shelfMarks ? (text(body.classification_number) || null) : null,
-					call_number: shelfMarks ? (text(body.call_number) || null) : null,
-					publisher_name: identity.publisher_name || null,
-					publisher_place: identity.publisher_place || null,
-					// One page count against a title that will hold a hundred issues
-					// of different lengths says nothing, so it is not kept.
-					pages: usesPageCount(bookType) ? (body.pages ?? null) : null,
-					price: bookOnly ? (body.price ?? null) : null,
-					currency_code: 'INR',
-					department: text(body.department) || null,
-					book_location: text(body.book_location) || null,
-					is_reference_only: referenceOnly,
-					is_active: true,
-				})
-				.select('id')
-				.single()
+			const { id: newRecordId, error: recordError } = await insertCatalogueRecord(supabase, {
+				institution_id: institutionId,
+				title,
+				subtitle: text(body.subtitle) || null,
+				resource_format: formatForBookType(bookType),
+				book_type: bookType || null,
+				author: identity.author || null,
+				isbn: identity.isbn || null,
+				issn: identity.issn || null,
+				edition: identity.edition || null,
+				publication_year: body.publication_year ?? null,
+				language: text(body.language) || 'English',
+				classification_number: shelfMarks ? (text(body.classification_number) || null) : null,
+				call_number: shelfMarks ? (text(body.call_number) || null) : null,
+				periodical_scope: periodicalScope,
+				publisher_name: identity.publisher_name || null,
+				publisher_place: identity.publisher_place || null,
+				// One page count against a title that will hold a hundred issues
+				// of different lengths says nothing, so it is not kept.
+				pages: usesPageCount(bookType) ? (body.pages ?? null) : null,
+				price: bookOnly ? (body.price ?? null) : null,
+				currency_code: 'INR',
+				department: text(body.department) || null,
+				book_location: text(body.book_location) || null,
+				is_reference_only: referenceOnly,
+				is_active: true,
+			})
 
-			if (recordError || !record) {
+			if (recordError || !newRecordId) {
 				console.error('Error creating catalogue record:', recordError)
 				return NextResponse.json({ error: 'Could not save the book' }, { status: 500 })
 			}
 
-			recordId = record.id
+			recordId = newRecordId
 			createdTitle = true
 
 			// The registry list and the author search read the joined table
