@@ -24,6 +24,8 @@ import {
 import Link from 'next/link'
 import type { LibCatalogueRecord, LibResourceFormat } from '@/types/lib'
 import { AccessionRegisterTable, type RegisterRow } from '@/components/library/accession-register-table'
+import { registerRowsFrom, isRegisterPayload } from '@/lib/library/register-rows'
+import { readRegisterCache, writeRegisterCache, clearRegisterCache } from '@/lib/library/register-cache'
 import {
 	fetchCatalogueRecords,
 	fetchCatalogueById,
@@ -132,6 +134,8 @@ export default function RegistryPage() {
 	/** The one physical book waiting on a delete confirmation. */
 	const [deleteCopy, setDeleteCopy] = useState<RegisterRow | null>(null)
 	const [loading, setLoading] = useState(true)
+	/** Rows are on screen and a fresh read is coming in behind them. */
+	const [refreshing, setRefreshing] = useState(false)
 	const [search, setSearch] = useState('')
 	const [formatFilter, setFormatFilter] = useState<string>('all')
 	const [sheetOpen, setSheetOpen] = useState(false)
@@ -143,24 +147,53 @@ export default function RegistryPage() {
 	const [currentPage, setCurrentPage] = useState(1)
 	const [itemsPerPage, setItemsPerPage] = useState(10)
 
+	/** The register request for this college — and the key its remembered copy is kept under. */
+	const registerUrl = useMemo(() => appendToUrl('/api/lib/catalogue/register'), [appendToUrl])
+
+	/**
+	 * This screen changed the register, so the copy it remembers is no longer
+	 * the register. Forgotten rather than patched: the next visit reads afresh.
+	 */
+	const forgetRegister = useCallback(() => clearRegisterCache(registerUrl), [registerUrl])
+
 	const fetchData = useCallback(async () => {
 		if (!isReady) return
-		try {
+
+		// The last register this browser saw is put on screen at once, and the
+		// fresh one is read behind it. The page is readable immediately and
+		// correct a moment later; only the refresh icon says anything is moving.
+		const remembered = requiresAccession ? readRegisterCache(registerUrl) : null
+		if (remembered) {
+			setRegisterRows(registerRowsFrom(remembered))
+			setLoading(false)
+			setRefreshing(true)
+		} else {
 			setLoading(true)
+		}
+
+		try {
 			// The register is one row per physical book. The plain catalogue list
 			// is kept behind the same flag for the fallback path below.
-			const url = appendToUrl(requiresAccession ? '/api/lib/catalogue/register' : '/api/lib/catalogue')
+			const url = requiresAccession ? registerUrl : appendToUrl('/api/lib/catalogue')
 			const res = await fetch(url)
 			if (!res.ok) throw new Error('Failed to fetch')
 			const data = await res.json()
-			if (requiresAccession) setRegisterRows(data)
-			else setRecords(data)
+			if (requiresAccession) {
+				// Titles once and copies as small rows — laid out flat here, and
+				// remembered in that compact form for the next visit.
+				if (!isRegisterPayload(data)) throw new Error('The register came back in an unexpected shape')
+				setRegisterRows(registerRowsFrom(data))
+				writeRegisterCache(registerUrl, data)
+			} else {
+				setRecords(data)
+			}
 		} catch {
 			toast({ title: 'Failed to load catalogue', variant: 'destructive' })
 		} finally {
 			setLoading(false)
+			setRefreshing(false)
 		}
-	}, [isReady, appendToUrl, toast, requiresAccession])
+	}, [isReady, appendToUrl, toast, requiresAccession, registerUrl])
 
 	useEffect(() => { fetchData() }, [fetchData])
 	useEffect(() => { setCurrentPage(1) }, [shouldFilter])
@@ -181,6 +214,14 @@ export default function RegistryPage() {
 			),
 			row,
 		])
+	}, [])
+
+	/** A blank Add Title form. The button and the N key both come here. */
+	const openNewTitle = useCallback(() => {
+		setForm(defaultForm)
+		setErrors({})
+		setEditingItem(null)
+		setSheetOpen(true)
 	}, [])
 
 	const scorecardData = useMemo(() => ({
@@ -357,6 +398,8 @@ export default function RegistryPage() {
 			if (editingItem) {
 				const updated = await updateCatalogueRecord(editingItem.id, payload)
 				setRecords(prev => prev.map(r => r.id === updated.id ? updated : r))
+				// The title's details are on every one of its lines in the register
+				forgetRegister()
 				toast({ title: '✅ Record updated', className: 'bg-green-50 border-green-200 text-green-800' })
 			} else if (requiresAccession) {
 				// One entry is one physical book. The server decides whether it is a
@@ -386,6 +429,7 @@ export default function RegistryPage() {
 				// The new line is put in place rather than the whole register
 				// being read again — that read is 27,996 copies and 4,007 titles
 				// on the largest college, for one book being entered.
+				forgetRegister()
 				if (result.register_row) addRegisterRow(result.register_row as RegisterRow)
 				else await fetchData()
 
@@ -482,8 +526,13 @@ export default function RegistryPage() {
 			// One accession number, not the title. The other copies of the same
 			// book are separate rows and are left where they are.
 			const res = await fetch(`/api/lib/items/${deleteCopy.item_id}/remove`, { method: 'DELETE' })
-			const result = await res.json()
-			if (!res.ok) throw new Error(result.error || 'Delete failed')
+			// The route says why it refused — out with a member, an unpaid charge —
+			// and that reason is read even when the answer is not JSON at all: a
+			// gateway timeout answers in HTML, and "Unexpected token <" tells a
+			// librarian nothing.
+			const result = await res.json().catch(() => ({}))
+			if (!res.ok) throw new Error(result.error || `Could not remove this book (${res.status})`)
+			forgetRegister()
 
 			// Just the fact and the number. The counts on screen are corrected
 			// below, without being announced.
@@ -522,6 +571,8 @@ export default function RegistryPage() {
 					onRefresh={fetchData}
 					onEdit={editTitleById}
 					onDelete={row => setDeleteCopy(row)}
+					refreshing={refreshing}
+					onNewTitle={openNewTitle}
 					headerActions={
 						<>
 							<CatalogueBulkUpload
@@ -536,7 +587,7 @@ export default function RegistryPage() {
 								onSaved={fetchData}
 								disabled={mustSelectInstitution}
 							/>
-							<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
+							<Button className="h-8 text-sm px-4" onClick={openNewTitle}>
 								<PlusCircle className="h-4 w-4 mr-1.5" />
 								<span className="hidden sm:inline">Add Title</span>
 								<span className="sm:hidden">Add</span>

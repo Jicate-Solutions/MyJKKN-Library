@@ -7,12 +7,19 @@
  *
  * The catalogue list route stays as it is, one row per title, for the campuses
  * that read it that way.
+ *
+ * Answered as two lists — the titles once, the copies as small rows pointing
+ * at a title by id — rather than one flat row per copy. Flat, every copy
+ * carried its title's fifteen fields again, so Engineering's 4,007 titles
+ * crossed the wire 27,996 times. The browser pairs them up with
+ * `registerRowsFrom`, which is also where the shape is described.
  */
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { fetchAllRows } from '@/lib/library/fetch-all'
+import type { RegisterPayload, RegisterTitle, RegisterCopy } from '@/lib/library/register-rows'
 
 export async function GET(request: Request) {
 	try {
@@ -81,78 +88,16 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Failed to load the register' }, { status: 500 })
 		}
 
-		const data = items.data
-
-		interface CatalogueRow {
-			id: string
-			title: string
-			subtitle: string | null
-			author: string | null
-			edition: string | null
-			isbn: string | null
-			issn: string | null
-			resource_format: string
-			book_type: string | null
-			department: string | null
-			book_location: string | null
-			publisher_name: string | null
-			publication_year: number | null
-			is_reference_only: boolean
+		// Sent as they were read. The pairing of copy to title, the copy counts
+		// and the supplier names all happen in the browser, once, from these
+		// three lists — see registerRowsFrom.
+		const payload: RegisterPayload = {
+			titles: (records.data || []) as RegisterTitle[],
+			copies: (items.data || []) as RegisterCopy[],
+			suppliers: (suppliers.data || []) as Array<{ id: string; supplier_name: string }>,
 		}
 
-		const titlesById = new Map<string, CatalogueRow>()
-		for (const record of (records.data || []) as CatalogueRow[]) {
-			titlesById.set(record.id, record)
-		}
-
-		const supplierNames = new Map<string, string>()
-		for (const supplier of (suppliers.data || []) as Array<{ id: string; supplier_name: string }>) {
-			supplierNames.set(supplier.id, supplier.supplier_name)
-		}
-
-		// How many copies each title holds, worked out from the rows already in
-		// hand rather than asked of the database again.
-		const copiesByTitle = new Map<string, number>()
-		for (const row of data || []) {
-			const id = row.catalogue_record_id
-			if (id) copiesByTitle.set(id, (copiesByTitle.get(id) ?? 0) + 1)
-		}
-
-		const rows = (data || []).map(row => {
-			const catalogue = row.catalogue_record_id
-				? titlesById.get(row.catalogue_record_id) ?? null
-				: null
-
-			return {
-				item_id: row.id,
-				accession_number: row.accession_number,
-				copy_number: row.copy_number,
-				status: row.status,
-				is_lendable: row.is_lendable,
-				accession_date: row.accession_date,
-				catalogue_record_id: catalogue?.id ?? null,
-				title: catalogue?.title ?? 'Unknown title',
-				subtitle: catalogue?.subtitle ?? null,
-				author: catalogue?.author ?? null,
-				edition: catalogue?.edition ?? null,
-				isbn: catalogue?.isbn ?? null,
-				issn: catalogue?.issn ?? null,
-				resource_format: catalogue?.resource_format ?? 'other',
-				book_type: catalogue?.book_type ?? null,
-				department: catalogue?.department ?? null,
-				book_location: catalogue?.book_location ?? null,
-				publisher_name: catalogue?.publisher_name ?? null,
-				publication_year: catalogue?.publication_year ?? null,
-				is_reference_only: catalogue?.is_reference_only ?? false,
-				total_copies: catalogue?.id ? copiesByTitle.get(catalogue.id) ?? 1 : 1,
-				// Belongs to this copy, not to the title: two copies of a journal
-				// can come from two vendors, and the register is a list of copies.
-				supplier_id: row.supplier_id ?? null,
-				supplier_name: row.supplier_id ? supplierNames.get(row.supplier_id) ?? null : null,
-			}
-		})
-
-		return NextResponse.json(rows)
+		return NextResponse.json(payload)
 	} catch (error) {
 		console.error('Unexpected error loading the register:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

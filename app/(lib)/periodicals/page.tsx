@@ -94,6 +94,26 @@ const ISSUES_PER_YEAR: Record<string, number> = {
 const expectedIssuesFor = (frequency: string): number | null =>
 	ISSUES_PER_YEAR[frequency] ?? null
 
+/**
+ * The years a subscription can be filed under — one plain year, chosen, never typed.
+ *
+ * Fiscal Year used to be a text box, and it was filled three ways for the same
+ * year: "2026", "2026-2027", "2026-27". Harmless to read, but the rule that
+ * greys out a periodical already subscribed this year compares this value, and
+ * "2026" is not "2026-2027" — so the second subscription for the same journal
+ * went through, which is exactly what the rule exists to stop. A list of single
+ * years means there is only one way to say a year.
+ *
+ * Newest first, one year ahead (a subscription is often placed before the year
+ * it covers), back to 2020 — older than any subscription this system holds.
+ */
+const FIRST_FISCAL_YEAR = 2020
+const CURRENT_YEAR = new Date().getFullYear()
+const FISCAL_YEARS: string[] = Array.from(
+	{ length: CURRENT_YEAR + 1 - FIRST_FISCAL_YEAR + 1 },
+	(_, i) => String(CURRENT_YEAR + 1 - i)
+)
+
 interface FormData {
 	catalogue_record_id: string
 	supplier_id: string
@@ -117,7 +137,7 @@ const defaultForm: FormData = {
 	supplier_id: '',
 	subscription_type: 'print',
 	frequency: 'monthly',
-	fiscal_year: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`,
+	fiscal_year: String(CURRENT_YEAR),
 	start_volume: '',
 	start_date: '',
 	end_date: '',
@@ -216,11 +236,40 @@ export default function PeriodicalSubscriptionsPage() {
 		return opts
 	}, [filtered.length])
 
+	/**
+	 * A periodical is subscribed once a year, so the second attempt is a mistake.
+	 *
+	 * With forty journals to register the librarian cannot be asked to remember
+	 * which ones are already done — so the ones already taken for the year on the
+	 * form are greyed out in the list, and say why. It is the fiscal year that
+	 * decides, not the title alone: next year's subscription for the same journal
+	 * is a new subscription, and must stay possible.
+	 *
+	 * The subscription being edited never counts against itself.
+	 *
+	 * Colleges cannot collide here even when every institution is shown at once:
+	 * a catalogue record belongs to one college, so an id taken from another
+	 * college's subscription can never match a title in this college's list.
+	 */
+	const takenTitleIds = useMemo(() => {
+		const year = form.fiscal_year.trim().toLowerCase()
+		const taken = new Set<string>()
+		if (!year) return taken
+		for (const s of subscriptions) {
+			if (editingItem && s.id === editingItem.id) continue
+			if ((s.fiscal_year ?? '').trim().toLowerCase() !== year) continue
+			taken.add(s.catalogue_record_id)
+		}
+		return taken
+	}, [subscriptions, editingItem, form.fiscal_year])
+
 	const titleOptions = useMemo<SearchableSelectOption[]>(() => {
 		const opts = titles.map(t => ({
 			value: t.id,
 			label: t.title,
+			disabled: takenTitleIds.has(t.id),
 			description: [
+				takenTitleIds.has(t.id) ? `Already subscribed for ${form.fiscal_year.trim()}` : null,
 				t.issn ? `ISSN: ${t.issn}` : null,
 				t.publisher_name || null,
 				// Shown in the list too, so the librarian sees which vendor they are
@@ -235,10 +284,10 @@ export default function PeriodicalSubscriptionsPage() {
 		// does not return; keep it selectable so editing never silently drops it.
 		const current = editingItem?.catalogue_record
 		if (current && !opts.some(o => o.value === current.id)) {
-			opts.unshift({ value: current.id, label: current.title, description: current.issn ? `ISSN: ${current.issn}` : undefined })
+			opts.unshift({ value: current.id, label: current.title, disabled: false, description: current.issn ? `ISSN: ${current.issn}` : undefined })
 		}
 		return opts
-	}, [titles, editingItem])
+	}, [titles, editingItem, takenTitleIds, form.fiscal_year])
 
 	/**
 	 * The supplier behind a periodical title, as the catalogue holds it.
@@ -289,6 +338,11 @@ export default function PeriodicalSubscriptionsPage() {
 	const validate = (): boolean => {
 		const e: Record<string, string> = {}
 		if (!form.catalogue_record_id) e.catalogue_record_id = 'Periodical title is required'
+		// The list greys these out, but the year can be changed after a title was
+		// chosen — and then a title that was free is not free any more.
+		else if (takenTitleIds.has(form.catalogue_record_id)) {
+			e.catalogue_record_id = `This periodical already has a subscription for ${form.fiscal_year.trim()}`
+		}
 		if (!form.supplier_id) {
 			e.supplier_id = form.catalogue_record_id
 				? 'This title has no supplier — add one on the title under Knowledge Registry'
@@ -310,10 +364,54 @@ export default function PeriodicalSubscriptionsPage() {
 		return Object.keys(e).length === 0
 	}
 
+	/**
+	 * Asked again at the moment of saving: is this title still free this year?
+	 *
+	 * The greyed-out list was read when the sheet was opened. If someone at
+	 * another desk subscribed the same journal in between, this screen would
+	 * still be offering it — so the rows are read once more before the save goes
+	 * through, and it is those rows that decide. When a clash turns up, the list
+	 * behind the sheet is refreshed with what came back, so the librarian can see
+	 * the subscription that beat them to it.
+	 *
+	 * If the check itself cannot be made — the network, a slow moment — the save
+	 * is allowed to continue. It refuses duplicates; it does not refuse work.
+	 */
+	const stillFreeThisYear = async (): Promise<boolean> => {
+		try {
+			const res = await fetch(appendToUrl('/api/lib/periodicals/subscriptions'))
+			if (!res.ok) return true
+			const rows = await res.json()
+			if (!Array.isArray(rows)) return true
+			const year = form.fiscal_year.trim().toLowerCase()
+			const clash = (rows as LibPeriodicalSubscription[]).some(s =>
+				s.catalogue_record_id === form.catalogue_record_id &&
+				(s.fiscal_year ?? '').trim().toLowerCase() === year &&
+				s.id !== editingItem?.id
+			)
+			if (clash) setSubscriptions(rows)
+			return !clash
+		} catch {
+			return true
+		}
+	}
+
 	const handleSave = async () => {
 		if (!validate()) return
 		try {
 			setSaving(true)
+			if (!(await stillFreeThisYear())) {
+				setErrors(prev => ({
+					...prev,
+					catalogue_record_id: `This periodical was subscribed for ${form.fiscal_year.trim()} while this form was open`,
+				}))
+				toast({
+					title: '❌ Already subscribed',
+					description: 'Someone registered this periodical for the same year just now — nothing was saved.',
+					variant: 'destructive',
+				})
+				return
+			}
 			const instId = getInstitutionIdForCreate() ?? institutionId
 			const payload = {
 				...form,
@@ -393,7 +491,9 @@ export default function PeriodicalSubscriptionsPage() {
 		if (!deleteTarget) return
 		try {
 			const res = await fetch(`/api/lib/periodicals/subscriptions/${deleteTarget.id}`, { method: 'DELETE' })
-			if (!res.ok) throw new Error('Delete failed')
+			// The route says why it refused — issues are recorded against it, say —
+			// and that reason is what the librarian needs, not "Delete failed".
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Delete failed')
 			setSubscriptions(prev => prev.filter(x => x.id !== deleteTarget.id))
 			toast({ title: '✅ Subscription deleted', className: 'bg-green-50 border-green-200 text-green-800' })
 		} catch (err) {
@@ -754,12 +854,13 @@ export default function PeriodicalSubscriptionsPage() {
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Fiscal Year <span className="text-red-500">*</span></Label>
-									<Input
-										value={form.fiscal_year}
-										onChange={e => setForm(f => ({ ...f, fiscal_year: e.target.value }))}
-										className={errors.fiscal_year ? 'border-red-500' : ''}
-										placeholder="2025-26"
-									/>
+									{/* Chosen from a list of single years, never typed — see FISCAL_YEARS. */}
+									<Select value={form.fiscal_year} onValueChange={v => setForm(f => ({ ...f, fiscal_year: v }))}>
+										<SelectTrigger className={errors.fiscal_year ? 'border-red-500' : ''}><SelectValue placeholder="Select the year" /></SelectTrigger>
+										<SelectContent>
+											{FISCAL_YEARS.map(year => <SelectItem key={year} value={year}>{year}</SelectItem>)}
+										</SelectContent>
+									</Select>
 									{errors.fiscal_year && <p className="text-xs text-red-500">{errors.fiscal_year}</p>}
 								</div>
 							</div>
