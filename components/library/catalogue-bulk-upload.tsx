@@ -30,7 +30,7 @@ import {
 	templateExampleFor,
 	departmentsFor,
 	templateColumnFor,
-	BOOK_TYPE_LABELS,
+	bookTypesForSheet,
 	CATALOGUE_SHEET_LABELS,
 	LANGUAGES,
 	type CatalogueSheetKind,
@@ -138,7 +138,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 			],
 			['Languages', '', LANGUAGES.join(', ')],
 			[],
-			[`This is the ${label} sheet. Every book type is listed here: ${BOOK_TYPE_LABELS.join(', ')}.`],
+			[`This is the ${label} sheet. It takes only these Book Types: ${bookTypesForSheet(kind).join(', ')}. A row saying anything else is skipped and reported.`],
 			['Row 2 is a filled example — delete it before uploading, or leave it and it will be saved.'],
 			['As many rows as you like in one file — a long sheet simply takes longer.'],
 			['Do not rename or reorder the columns.'],
@@ -238,7 +238,15 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 				const res = await fetch('/api/lib/catalogue/bulk', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ institution_id: institutionId, rows: batch, row_offset: start }),
+					body: JSON.stringify({
+						institution_id: institutionId,
+						rows: batch,
+						row_offset: start,
+						// Which template this file is, worked out from its own headers above.
+						// The server refuses a row that belongs on the other sheet, and it
+						// cannot tell from a bare list of rows which sheet they came from.
+						sheet_kind: closest.kind,
+					}),
 				})
 				const data = await res.json()
 

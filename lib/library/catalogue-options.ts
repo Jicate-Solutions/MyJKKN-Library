@@ -480,15 +480,62 @@ export const CATALOGUE_SHEET_LABELS: Record<CatalogueSheetKind, string> = {
 	periodicals: 'Magazine & Journals',
 }
 
+/**
+ * The Book Types each upload sheet takes.
+ *
+ * The two sheets are not two ways of writing the same thing: one asks for
+ * an ISBN, a page count and a department, the other for an ISSN, a supplier
+ * and whether the journal is National or International. A magazine entered
+ * on the Books sheet is therefore recorded without the two things every
+ * report of periodicals is counted by — so it is refused rather than
+ * quietly accepted, and the librarian is told which sheet it belongs on.
+ *
+ * A type the librarian typed themselves — anything that is not one of the
+ * five — counts as book-side material, exactly as it does everywhere else
+ * in the register.
+ */
+export function bookTypesForSheet(kind: CatalogueSheetKind): string[] {
+	return BOOK_TYPE_LABELS.filter(label => isPeriodicalType(label) === (kind === 'periodicals'))
+}
+
+/** Whether a row belongs on the sheet it arrived on. */
+export function sheetTakesBookType(kind: CatalogueSheetKind, bookType: string): boolean {
+	return isPeriodicalType(bookType) === (kind === 'periodicals')
+}
+
+/** Why the row was refused, naming the sheet it should have been on. */
+export function wrongSheetMessage(kind: CatalogueSheetKind): string {
+	return kind === 'periodicals'
+		? 'Book Type must be Magazine or Journals on this sheet — a book goes on the Books sheet'
+		: 'Magazines and journals go on the Magazine & Journals sheet, not this one'
+}
+
+/** What the Book Type column tells the librarian, on each sheet. */
+export function bookTypeNoteFor(kind: CatalogueSheetKind): string {
+	return kind === 'periodicals'
+		? bookTypesForSheet(kind).join(' / ') + ' — nothing else. A book goes on the Books sheet.'
+		: bookTypesForSheet(kind).join(' / ') + ' — or type your own when it is none of these. Magazines and journals go on the Magazine & Journals sheet.'
+}
+
 export function templateColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
 	if (kind === 'books') {
 		// No ISSN: a book was never issued one, and an empty column invites a
 		// number copied from somewhere else.
 		return TEMPLATE_COLUMNS
 			.filter(column => column.key !== 'issn')
-			.map(column => column.key === 'isbn'
-				? { ...column, required: true, note: 'Every book has one. It is what groups copies of the same book together.' }
-				: column)
+			.map(column => {
+				if (column.key === 'isbn') {
+					return { ...column, required: true, note: 'Every book has one. It is what groups copies of the same book together.' }
+				}
+				// Only the types this sheet takes. Printing all five invited the
+				// one thing the sheet cannot do: a magazine typed onto it, which
+				// then never gets asked for its supplier or its National /
+				// International type because this sheet has no such column.
+				if (column.key === 'book_type') {
+					return { ...column, note: bookTypeNoteFor('books') }
+				}
+				return column
+			})
 	}
 
 	const columns: TemplateColumn[] = []
@@ -501,6 +548,10 @@ export function templateColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
 		if (BOOK_ONLY_KEYS.includes(column.key)) continue
 		if (column.key === 'issn') {
 			columns.push({ ...column, note: 'The ISSN printed on the issue. Leave blank if it does not print one.' })
+			continue
+		}
+		if (column.key === 'book_type') {
+			columns.push({ ...column, note: bookTypeNoteFor('periodicals') })
 			continue
 		}
 		if (column.key === 'department') {

@@ -29,6 +29,9 @@ import {
 	periodicalScopeFromLabel,
 	PERIODICAL_SCOPES,
 	isReferenceOnlyForced,
+	sheetTakesBookType,
+	wrongSheetMessage,
+	type CatalogueSheetKind,
 } from '@/lib/library/catalogue-options'
 import { nextPeriodicalAccession } from '@/lib/library/periodical-accession'
 import { insertCatalogueRecord } from '@/lib/library/catalogue-record-insert'
@@ -85,9 +88,20 @@ function validateRow(
 	row: IncomingRow,
 	seen: Map<string, number>,
 	rowNumber: number,
-	institutionCode: string | null
+	institutionCode: string | null,
+	sheetKind: CatalogueSheetKind | null
 ): string | null {
 	const bookType = text(row.book_type)
+
+	// Each sheet takes one kind of material and refuses the other. A magazine
+	// on the Books sheet used to be accepted and quietly recorded without a
+	// supplier or a National/International type, because that sheet has no
+	// column for either — the two things every count of periodicals is taken
+	// from. An empty Book Type is left to the column check below, which names
+	// the column rather than the sheet.
+	if (sheetKind && bookType && !sheetTakesBookType(sheetKind, bookType)) {
+		return wrongSheetMessage(sheetKind)
+	}
 
 	// Judged by what the row says it is, not by which sheet it arrived on. A
 	// magazine typed into the Books sheet is still a magazine, and is not asked
@@ -223,10 +237,17 @@ export async function POST(request: Request) {
 		// still reported by the row number the librarian sees in Excel.
 		const rowOffset = Number(body.row_offset) > 0 ? Number(body.row_offset) : 0
 
+		// Which template the file came from, so a row can be refused for being on
+		// the wrong one. Only the two known sheets count: anything else, and an
+		// older screen that sends nothing at all, leaves the rows judged by what
+		// each one says it is — the behaviour before this check existed.
+		const sheetKind: CatalogueSheetKind | null =
+			body.sheet_kind === 'books' || body.sheet_kind === 'periodicals' ? body.sheet_kind : null
+
 		rows.forEach((row, index) => {
 			// +2: the header is row 1, so the first data row is row 2 in Excel
 			const rowNumber = index + 2 + rowOffset
-			const problem = validateRow(row, seen, rowNumber, institutionCode)
+			const problem = validateRow(row, seen, rowNumber, institutionCode, sheetKind)
 			if (problem) {
 				failures.push({ row: rowNumber, accession_number: text(row.accession_number), error: problem })
 			} else {
