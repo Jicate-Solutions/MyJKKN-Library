@@ -22,6 +22,7 @@
  */
 
 import { BugReporterProvider } from '@boobalan_jkkn/bug-reporter-sdk'
+import { BugButtonDrag } from '@/components/bug-reporter/bug-button-drag'
 import { useAuth } from '@/lib/auth/auth-context'
 
 /**
@@ -58,6 +59,9 @@ export function BugReporterWrapper({ children }: { children: React.ReactNode }) 
 			}
 		>
 			{children}
+			{/* The button the SDK draws can be dragged out of the way — see the
+			    component for why it is done from outside the SDK. */}
+			<BugButtonDrag />
 		</BugReporterProvider>
 	)
 }
