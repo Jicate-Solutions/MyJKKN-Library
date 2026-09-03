@@ -33,6 +33,9 @@ const STATUS_COLORS: Record<LibSubscriptionStatus, string> = {
 }
 
 const STATUSES: LibSubscriptionStatus[] = ['active', 'expired', 'cancelled', 'gratis', 'suspended']
+
+/** The tag on a subscription that costs nothing — shown wherever the subscription is. */
+const GRATIS_BADGE = 'text-blue-700 border-blue-300 dark:text-blue-300 dark:border-blue-700'
 /**
  * How often an issue arrives, in the exact words the database stores.
  *
@@ -44,7 +47,11 @@ const STATUSES: LibSubscriptionStatus[] = ['active', 'expired', 'cancelled', 'gr
  * reason. The stored word is the key; the word the librarian reads is the
  * label beside it.
  */
-const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'bimonthly', 'quarterly', 'half_yearly', 'annual'] as const
+// Most issues a year first. eight_yearly and three_yearly were added on
+// 2 Sep 2026 (migration 20260902) for journals that come eight times a
+// year, or every four months — both real on the shelf, and neither had a
+// frequency to say so.
+const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'eight_yearly', 'bimonthly', 'quarterly', 'three_yearly', 'half_yearly', 'annual'] as const
 
 /**
  * The same words, as a librarian says them.
@@ -59,8 +66,10 @@ const FREQUENCY_LABELS: Record<string, string> = {
 	weekly: 'Weekly',
 	fortnightly: 'Fortnightly',
 	monthly: 'Monthly',
+	eight_yearly: 'Eight a year',
 	bimonthly: 'Bi-monthly',
 	quarterly: 'Quarterly',
+	three_yearly: 'Three a year (every 4 months)',
 	half_yearly: 'Semi-annual',
 	annual: 'Annual',
 	irregular: 'Irregular',
@@ -84,8 +93,10 @@ const ISSUES_PER_YEAR: Record<string, number> = {
 	weekly: 52,
 	fortnightly: 26,
 	monthly: 12,
+	eight_yearly: 8,
 	bimonthly: 6,
 	quarterly: 4,
+	three_yearly: 3,
 	half_yearly: 2,
 	annual: 1,
 }
@@ -417,7 +428,8 @@ export default function PeriodicalSubscriptionsPage() {
 				...form,
 				institution_id: instId ?? '',
 				currency_code: 'INR',
-				subscription_cost: form.subscription_cost ? Number(form.subscription_cost) : undefined,
+				// Gratis is 0 whatever the box holds — the switch is the decision.
+				subscription_cost: form.is_gratis ? 0 : (form.subscription_cost ? Number(form.subscription_cost) : undefined),
 				// Worked out from the frequency, never typed — so it is sent from the
 				// same place the form showed it and the two cannot disagree.
 				expected_issues: expectedIssuesFor(form.frequency) ?? undefined,
@@ -664,9 +676,12 @@ export default function PeriodicalSubscriptionsPage() {
 													<span className="text-muted-foreground">/{s.expected_issues ?? '?'}</span>
 												</TableCell>
 												<TableCell>
-													<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[s.subscription_status]}`}>
-														{s.subscription_status}
-													</Badge>
+													<div className="flex items-center gap-1.5 flex-wrap">
+														<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[s.subscription_status]}`}>
+															{s.subscription_status}
+														</Badge>
+														{s.is_gratis && <Badge variant="outline" className={`text-xs ${GRATIS_BADGE}`}>Free / Complimentary</Badge>}
+													</div>
 												</TableCell>
 												{mustSelectInstitution && (
 													<TableCell className="text-xs text-muted-foreground">{s.institution_id?.slice(0, 8) ?? '—'}</TableCell>
@@ -750,6 +765,7 @@ export default function PeriodicalSubscriptionsPage() {
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
 										<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[s.subscription_status]}`}>{s.subscription_status}</Badge>
+										{s.is_gratis && <Badge variant="outline" className={`text-xs ${GRATIS_BADGE}`}>Free / Complimentary</Badge>}
 										<span className="text-xs text-muted-foreground">{frequencyLabel(s.frequency)}</span>
 									</div>
 									<p className="text-xs text-muted-foreground">
@@ -918,15 +934,22 @@ export default function PeriodicalSubscriptionsPage() {
 							<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Subscription Cost (₹) <span className="text-red-500">*</span></Label>
+									{/* Locked at 0 while Gratis is on: a complimentary copy has no
+									    price, and a figure left in the box would be counted into the
+									    year's spend as if it had been paid. */}
 									<Input
 										type="number"
 										min="0"
 										value={form.subscription_cost}
 										onChange={e => setForm(f => ({ ...f, subscription_cost: e.target.value }))}
-										className={errors.subscription_cost ? 'border-red-500' : ''}
+										readOnly={form.is_gratis}
+										tabIndex={form.is_gratis ? -1 : undefined}
+										className={`${form.is_gratis ? 'bg-muted/40 text-muted-foreground cursor-not-allowed' : ''} ${errors.subscription_cost ? 'border-red-500' : ''}`}
 										placeholder="0.00"
 									/>
-									{errors.subscription_cost && <p className="text-xs text-red-500">{errors.subscription_cost}</p>}
+									{errors.subscription_cost
+										? <p className="text-xs text-red-500">{errors.subscription_cost}</p>
+										: form.is_gratis && <p className="text-xs text-muted-foreground">Gratis — no charge, so the cost is 0.</p>}
 								</div>
 								<div className="space-y-2">
 									<Label className="text-sm font-semibold">Expected Issues <span className="text-red-500">*</span></Label>
@@ -950,10 +973,13 @@ export default function PeriodicalSubscriptionsPage() {
 								</div>
 							</div>
 							<div className="flex items-center gap-3">
+								{/* Switching on writes 0 over whatever was typed; switching off
+								    clears it, so a real price has to be entered rather than a 0
+								    left behind by the switch. */}
 								<Switch
 									id="is_gratis"
 									checked={form.is_gratis}
-									onCheckedChange={v => setForm(f => ({ ...f, is_gratis: v }))}
+									onCheckedChange={v => setForm(f => ({ ...f, is_gratis: v, subscription_cost: v ? '0' : '' }))}
 								/>
 								<Label htmlFor="is_gratis" className="text-sm">Gratis (complimentary / no charge)</Label>
 							</div>

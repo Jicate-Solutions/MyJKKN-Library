@@ -136,6 +136,17 @@ export async function POST(request: Request) {
 			if (error.code === '23503') {
 				return NextResponse.json({ error: 'Invalid reference — check catalogue_record_id or supplier_id' }, { status: 400 })
 			}
+			// The frequency column keeps a fixed list of words. A word the form
+			// offers but this database has not been told about yet — the two
+			// added on 2 Sep 2026 — is refused with a check violation, and the
+			// librarian should be told which update is waiting rather than
+			// "failed", which sends them looking at the form.
+			if (error.code === '23514') {
+				return NextResponse.json(
+					{ error: `The database does not allow the frequency "${body.frequency}" yet — run the pending database update (20260902_lib_subscription_frequency_three_eight) and try again` },
+					{ status: 400 }
+				)
+			}
 			return NextResponse.json({ error: 'Failed to create subscription' }, { status: 500 })
 		}
 

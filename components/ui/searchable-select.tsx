@@ -21,6 +21,15 @@ export interface SearchableSelectOption {
 	value: string
 	label: string
 	description?: string
+	/**
+	 * Listed, but greyed out and not choosable.
+	 *
+	 * For the case where an option is worth showing precisely because it cannot
+	 * be picked — a periodical already subscribed for this year, say. Hiding it
+	 * would leave the librarian hunting for a title that has simply gone; greying
+	 * it out answers the question. Left undefined, an option behaves as before.
+	 */
+	disabled?: boolean
 }
 
 interface SearchableSelectProps {
@@ -205,8 +214,14 @@ export function SearchableSelect({
 									<CommandItem
 										key={option.value}
 										value={option.value}
-										onSelect={() => handleSelect(option.value)}
-										className="cursor-pointer"
+										disabled={option.disabled}
+										// cmdk already refuses a disabled item; this refuses it
+										// again, so a keyboard Enter cannot slip past either.
+										onSelect={() => {
+											if (option.disabled) return
+											handleSelect(option.value)
+										}}
+										className={option.disabled ? "cursor-not-allowed" : "cursor-pointer"}
 									>
 										<Check
 											className={cn(

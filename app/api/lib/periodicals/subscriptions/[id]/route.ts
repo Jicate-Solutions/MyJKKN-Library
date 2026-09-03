@@ -63,6 +63,14 @@ export async function PUT(
 			if (error.code === 'PGRST116') {
 				return NextResponse.json({ error: 'Subscription not found' }, { status: 404 })
 			}
+			// A frequency word this database has not been told about yet — see the
+			// create route for the same case.
+			if (error.code === '23514') {
+				return NextResponse.json(
+					{ error: 'The database does not allow that frequency yet — run the pending database update (20260902_lib_subscription_frequency_three_eight) and try again' },
+					{ status: 400 }
+				)
+			}
 			return NextResponse.json({ error: 'Failed to update subscription' }, { status: 500 })
 		}
 

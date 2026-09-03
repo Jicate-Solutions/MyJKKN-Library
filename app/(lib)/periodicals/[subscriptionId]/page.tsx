@@ -334,7 +334,7 @@ export default function SubscriptionDetailPage() {
 							<Badge variant="secondary" className="text-xs capitalize">{subscription.subscription_type}</Badge>
 						)}
 						{subscription.is_gratis && (
-							<Badge variant="outline" className="text-xs text-blue-700 border-blue-300">Gratis</Badge>
+							<Badge variant="outline" className="text-xs text-blue-700 border-blue-300 dark:text-blue-300 dark:border-blue-700">Free / Complimentary</Badge>
 						)}
 					</div>
 				</div>
