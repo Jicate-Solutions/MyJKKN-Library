@@ -33,7 +33,14 @@ const MAX_PAGES = 40
 export interface MyjkknStaff {
 	/** MyJKKN's staff UUID. The identity used everywhere in this project. */
 	id: string
+	/** The institution email where there is one, otherwise the personal one. */
 	email: string
+	/**
+	 * The institution address alone, or null where MyJKKN has not given one.
+	 * This is the only address a sign-in is matched against — see
+	 * `requestByEmail`. Never shown, never used as an identity.
+	 */
+	institutionEmail?: string | null
 	fullName: string | null
 	/** The employee code, e.g. AHS137. Display only — often missing. */
 	staffCode: string | null
@@ -132,6 +139,7 @@ function toStaff(row: MyJKKNRow, email: string): MyjkknStaff | null {
 	return {
 		id,
 		email: text(row.institution_email) || text(row.email) || email,
+		institutionEmail: text(row.institution_email) || null,
 		fullName: name || null,
 		staffCode: text(row.staff_id) || null,
 		roleKeys: roleKeysOf(row),
@@ -190,15 +198,28 @@ export function invalidateStaff(key?: string | null): void {
  * MyJKKN's search is a contains-match, so the answer is only accepted when an
  * email on the record matches whole — a search for `a@jkkn.ac.in` must never
  * sign somebody in as `deepa@jkkn.ac.in`.
+ *
+ * Only the institution address counts. The personal `email` MyJKKN also keeps
+ * is whatever the person wrote on a form once; the institution address is the
+ * one JKKN issued them, and the one they sign in to Google with. So a record is
+ * matched on `institution_email` alone, and a record with none cannot be
+ * signed in to at all — decided 2026-09-03.
+ *
+ * MyJKKN's search, though, looks only at that personal column, never at
+ * `institution_email`. A librarian was therefore refused as "no staff record"
+ * while the Staff Access screen, which reads the whole roster, listed her
+ * plainly. So when the search finds nothing, the same roster is consulted —
+ * already walked for that screen and held for a minute. A genuine stranger
+ * still costs one walk at most a minute, and is refused exactly as before.
  */
 async function requestByEmail(email: string): Promise<MyjkknStaff | null> {
 	const rows = await myjkknGet(`/api-management/staff?search=${encodeURIComponent(email)}&limit=50`)
 
-	const match = rows.find(row =>
-		sameEmail(row.institution_email, email) || sameEmail(row.email, email)
-	)
+	const match = rows.find(row => sameEmail(row.institution_email, email))
+	if (match) return toStaff(match, email)
 
-	return match ? toStaff(match, email) : null
+	const roster = await allStaff()
+	return roster.find(person => sameEmail(person.institutionEmail, email)) ?? null
 }
 
 export async function staffByEmail(email: string): Promise<MyjkknStaff | null> {
