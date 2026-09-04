@@ -9,6 +9,10 @@
  * with the library's closing time rather than the moment the button was
  * pressed, because closing time is the honest answer to "when did they leave?"
  * when nobody actually knows.
+ *
+ * With `before_date` it closes every row still open on any day before that
+ * one — the days nobody pressed the button. The gate offers this the morning
+ * after, so "inside now" starts each day meaning what it says.
  */
 
 import { NextResponse } from 'next/server'
@@ -57,6 +61,29 @@ export async function POST(request: Request) {
 		const closingTime = /^\d{2}:\d{2}(:\d{2})?$/.test(settings.closing_time)
 			? (settings.closing_time.length === 5 ? `${settings.closing_time}:00` : settings.closing_time)
 			: istTimeNow()
+
+		// Earlier days left open — never today's, which is still being written
+		const beforeDate = (body.before_date ?? '').toString().trim()
+		if (beforeDate) {
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(beforeDate) || beforeDate > istToday()) {
+				return NextResponse.json({ error: 'before_date must be a date no later than today' }, { status: 400 })
+			}
+			const { data, error } = await supabase
+				.from('lib_member_visits')
+				.update({ exit_time: closingTime })
+				.eq('institution_id', institutionId)
+				.lt('visit_date', beforeDate)
+				.not('entry_time', 'is', null)
+				.is('exit_time', null)
+				.select('id')
+
+			if (error) {
+				console.error('Error closing earlier days:', error)
+				return NextResponse.json({ error: 'Could not close the earlier days' }, { status: 500 })
+			}
+
+			return NextResponse.json({ closed: data?.length ?? 0, exit_time: closingTime })
+		}
 
 		const { data, error } = await supabase
 			.from('lib_member_visits')

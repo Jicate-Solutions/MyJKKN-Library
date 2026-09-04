@@ -12,13 +12,6 @@
  * being blocked or offered another college's departments.
  */
 
-/** Pharmacy, which also runs its own gate-entry screen. */
-export const PHARMACY_CODE = 'COP'
-
-export function usesPharmacyRegister(institutionCode: string | null | undefined): boolean {
-	return institutionCode === PHARMACY_CODE
-}
-
 /** Every campus enters books through the accession register. */
 export function usesAccessionRegister(): boolean {
 	return true

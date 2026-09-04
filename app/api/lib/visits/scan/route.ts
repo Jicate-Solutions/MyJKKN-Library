@@ -16,8 +16,33 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
-import { istToday, istTimeNow } from '@/lib/library/ist-clock'
+import { istToday, istTimeNow, formatClockTime } from '@/lib/library/ist-clock'
+import { getInstitutionSettings } from '@/lib/library/institution-settings'
 import { personByCardNumber, myjkknConfigured, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
+
+/** Said once per server, not once per scan. */
+let warnedNoFunction = false
+
+/**
+ * Seconds from one wall-clock time to another on the same day.
+ *
+ * Times are stored as the library's own HH:MM:SS. A value carrying a 'T' is an
+ * older row stamped as a full timestamp, and is compared as one.
+ */
+function secondsBetween(earlier: string, later: string): number | null {
+	if (earlier.includes('T') || later.includes('T')) {
+		const a = new Date(earlier).getTime()
+		const b = new Date(later).getTime()
+		return Number.isNaN(a) || Number.isNaN(b) ? null : Math.round((b - a) / 1000)
+	}
+	const toSeconds = (value: string) => {
+		const [h, m, s] = value.split(':').map(Number)
+		return [h, m].some(Number.isNaN) ? null : h * 3600 + m * 60 + (Number.isNaN(s) ? 0 : s)
+	}
+	const a = toSeconds(earlier)
+	const b = toSeconds(later)
+	return a === null || b === null ? null : b - a
+}
 
 /** What one scan came to, or why it could not be recorded. */
 type ScanOutcome =
@@ -73,6 +98,9 @@ async function scanInOneTrip(
 	if (error) {
 		if (error.code !== 'PGRST202' && error.code !== '42883') {
 			console.error('[gate] lib_gate_scan failed, falling back to two queries:', error)
+		} else if (!warnedNoFunction) {
+			warnedNoFunction = true
+			console.warn('[gate] lib_gate_scan is not installed on this database — run the 2026-08-27 update (supabase/migrations/20260827_*.sql). Until then every scan costs two round trips instead of one.')
 		}
 		return null
 	}
@@ -131,6 +159,39 @@ export async function POST(request: Request) {
 		const supabase = getSupabaseServer()
 		const visitDate = istToday()
 		const now = istTimeNow()
+
+		// The same card again, seconds later, is the same entry — a student
+		// unsure the first scan took, not one leaving. Read as an exit it made a
+		// one-minute visit and counted them twice in the footfall. The window is
+		// this college's own setting; 0 turns the check off and costs nothing.
+		const settings = await getInstitutionSettings(institutionId)
+		const rescanWindow = Number(settings.gate_rescan_seconds ?? 0)
+		if (rescanWindow > 0) {
+			const { data: open } = await supabase
+				.from('lib_member_visits')
+				.select('id, entry_time')
+				.eq('institution_id', institutionId)
+				.eq('myjkkn_id', person.myjkkn_id)
+				.eq('visit_date', visitDate)
+				.not('entry_time', 'is', null)
+				.is('exit_time', null)
+				.order('created_at', { ascending: false })
+				.limit(1)
+
+			const since = open?.[0]?.entry_time as string | undefined
+			const ago = since ? secondsBetween(since, now) : null
+			if (since && ago !== null && ago >= 0 && ago < rescanWindow) {
+				return NextResponse.json(
+					{
+						error: `${person.display_name} is already in since ${formatClockTime(since)} — to mark them out, scan again after ${rescanWindow - ago}s`,
+						repeat: true,
+						since,
+						member: { display_name: person.display_name, member_number: person.member_number, photo_url: person.photo_url },
+					},
+					{ status: 409 }
+				)
+			}
+		}
 
 		const input: ScanInput = {
 			institutionId,

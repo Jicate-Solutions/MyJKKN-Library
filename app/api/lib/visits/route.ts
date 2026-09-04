@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { fetchAllRows } from '@/lib/library/fetch-all'
+import { collegeDirectoryInHand, warmCollegeDirectory } from '@/lib/library/myjkkn-directory'
 
 /** What the register shows, per visit. */
 const VISIT_COLUMNS = `
@@ -65,6 +66,14 @@ export async function GET(request: Request) {
 		const memberId = searchParams.get('member_id')
 		const fromDate = searchParams.get('from_date')
 		const toDate = searchParams.get('to_date')
+		// Only rows still open — the gate asks this to find people left "inside"
+		// on earlier days, so it is a handful of rows, never the whole register
+		const openOnly = searchParams.get('open_only') === 'true'
+
+		// The gate page opening is the moment to start this college's roll, so
+		// the first card scanned is not the one that waits for MyJKKN. Started,
+		// not awaited.
+		if (institutionId) warmCollegeDirectory(institutionId)
 
 		// A big college can see more than a thousand people through the door in
 		// one day, and a footfall figure that silently stopped at a thousand is
@@ -79,6 +88,7 @@ export async function GET(request: Request) {
 			if (memberId) query = query.eq('member_id', memberId)
 			if (fromDate) query = query.gte('visit_date', fromDate)
 			if (toDate) query = query.lte('visit_date', toDate)
+			if (openOnly) query = query.not('entry_time', 'is', null).is('exit_time', null)
 
 			return query.order('created_at', { ascending: false }).range(range.from, range.to)
 		})
@@ -88,7 +98,21 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Failed to fetch visits' }, { status: 500 })
 		}
 
-		return NextResponse.json((data || []).map(withMember))
+		// The programme or designation under each name, from the roll where it is
+		// already in hand. Never built for this: two learners with the same name
+		// are told apart when the roll is there, and the register still reads
+		// when it is not.
+		const roles = new Map<string, string>()
+		for (const college of new Set((data || []).map(row => row.institution_id as string))) {
+			const people = collegeDirectoryInHand(college)
+			if (!people) continue
+			for (const person of people) roles.set(`${college}:${person.myjkkn_id}`, person.role_label)
+		}
+
+		return NextResponse.json((data || []).map(row => ({
+			...withMember(row),
+			role_label: roles.get(`${row.institution_id}:${row.myjkkn_id}`) ?? null,
+		})))
 	} catch (error) {
 		console.error('Unexpected error fetching visits:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

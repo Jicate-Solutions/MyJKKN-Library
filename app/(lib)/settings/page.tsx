@@ -44,6 +44,8 @@ interface Policy {
 	opening_time: string
 	closing_time: string
 	requires_no_dues: boolean
+	/** Seconds within which a repeat scan at the gate is ignored. Optional until the 2026-09-04 update is run. */
+	gate_rescan_seconds?: number
 }
 
 /**
@@ -380,6 +382,20 @@ export default function LibrarySettingsPage() {
 								onChange={e => setPolicyField('closing_time', e.target.value)}
 								className="h-8 text-sm"
 							/>
+						</div>
+
+						<div className="space-y-1.5">
+							<Label className="text-xs">Gate: a repeat scan within (seconds)</Label>
+							<Input
+								type="number"
+								min={0}
+								value={policy.gate_rescan_seconds ?? 60}
+								onChange={e => setPolicyField('gate_rescan_seconds', Math.max(0, Number(e.target.value) || 0))}
+								className="h-8 text-sm"
+							/>
+							<p className="text-[11px] text-muted-foreground">
+								A card scanned twice at the door within this time is one entry, not an entry and an exit. 0 turns it off.
+							</p>
 						</div>
 
 					</CardContent>

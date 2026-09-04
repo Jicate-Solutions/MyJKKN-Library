@@ -26,7 +26,17 @@ const EDITABLE = [
 	'opening_time',
 	'closing_time',
 	'requires_no_dues',
+	'gate_rescan_seconds',
 ] as const
+
+/**
+ * Columns added by a migration that may not have been run yet.
+ *
+ * Postgres refuses the whole upsert when one is named, which would stop a
+ * librarian saving a fine rule because of a gate setting they never touched.
+ * So on "no such column" the save is tried once more without it.
+ */
+const PENDING_COLUMNS = ['gate_rescan_seconds']
 
 export async function GET(request: Request) {
 	try {
@@ -75,11 +85,22 @@ export async function PUT(request: Request) {
 			? await fetchOldValues('lib_institution_settings', guard.institutionId, 'institution_id')
 			: null
 
-		const { data, error } = await supabase
+		const save = (values: Record<string, unknown>) => supabase
 			.from('lib_institution_settings')
-			.upsert({ ...update, updated_at: new Date().toISOString() }, { onConflict: 'institution_id' })
+			.upsert({ ...values, updated_at: new Date().toISOString() }, { onConflict: 'institution_id' })
 			.select()
 			.single()
+
+		let { data, error } = await save(update)
+
+		if (error?.code === '42703') {
+			const missing = PENDING_COLUMNS.find(column => (error?.message ?? '').includes(column))
+			if (missing && update[missing] !== undefined) {
+				console.warn(`[settings] This library's database has no ${missing} column yet — run the pending database update. Saved without it.`)
+				const { [missing]: _dropped, ...rest } = update
+				;({ data, error } = await save(rest))
+			}
+		}
 
 		if (error) {
 			console.error('Error saving library settings:', error)

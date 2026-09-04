@@ -3,20 +3,14 @@
 /**
  * Gate Entry.
  *
- * Pharmacy runs its gate differently — server-stamped IST times, a past-day
- * register, manual exits, an export — so it gets its own screen. Every other
- * campus keeps the screen it already had, unchanged, in StandardGateEntry.
+ * One screen for every campus. Pharmacy had the fuller one first — a past-day
+ * register, a date range, manual exits, an export, server-stamped IST times —
+ * and on 3 Sep 2026 the other six were given the same, so a gate report can be
+ * pulled for any college over any day or run of days.
  */
 
-import { useInstitution } from '@/context/institution-context'
-import { usesPharmacyRegister } from '@/lib/library/catalogue-options'
-import { PharmacyGateEntry } from '@/components/library/pharmacy-gate-entry'
-import { StandardGateEntry } from '@/components/library/standard-gate-entry'
+import { GateEntry } from '@/components/library/gate-entry'
 
 export default function GateEntryPage() {
-	const { currentInstitutionCode } = useInstitution()
-
-	return usesPharmacyRegister(currentInstitutionCode)
-		? <PharmacyGateEntry />
-		: <StandardGateEntry />
+	return <GateEntry />
 }

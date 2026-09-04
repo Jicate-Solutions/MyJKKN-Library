@@ -37,6 +37,13 @@ export interface InstitutionSettings {
 	opening_time: string
 	closing_time: string
 	requires_no_dues: boolean
+	/**
+	 * Seconds within which a second scan of the same card at the gate is the
+	 * same entry, not an exit. A card swiped twice in the queue used to become
+	 * a one-minute "visit" and count twice in the footfall. 0 turns it off.
+	 * Column added 2026-09-04; a database without it gets the default.
+	 */
+	gate_rescan_seconds: number
 }
 
 export const DEFAULT_SETTINGS: InstitutionSettings = {
@@ -55,6 +62,7 @@ export const DEFAULT_SETTINGS: InstitutionSettings = {
 	opening_time: '09:00',
 	closing_time: '16:30',
 	requires_no_dues: false,
+	gate_rescan_seconds: 60,
 }
 
 /**
