@@ -54,7 +54,7 @@ import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import {
 	Users, GraduationCap, Briefcase, AlertTriangle,
 	Search, RefreshCw, ChevronLeft, ChevronRight, Info,
-	Copy, Download, BookOpen, RotateCcw, IndianRupee, DoorOpen, Clock, CreditCard, X,
+	Copy, Check, Download, BookOpen, RotateCcw, IndianRupee, DoorOpen, Clock, CreditCard, X,
 } from 'lucide-react'
 import type { LibDirectoryMember, LibMemberCategory } from '@/types/lib'
 import { formatClockTime } from '@/lib/library/ist-clock'
@@ -148,14 +148,17 @@ interface ViewState {
 	q: string
 	cat: string
 	lib: LibraryStatus
+	/** A learner's programme, as MyJKKN names it — BPHARM, PHARMD. */
 	prog: string
+	/** A staff member's role, as MyJKKN names it — Facilitator, HOD, Principal. */
+	role: string
 	page: number
 	per: number
 	/** A member to open straight away — the id from a link somebody sent. */
 	open: string | null
 }
 
-const DEFAULT_VIEW: ViewState = { q: '', cat: 'all', lib: 'all', prog: 'all', page: 1, per: DEFAULT_PER_PAGE, open: null }
+const DEFAULT_VIEW: ViewState = { q: '', cat: 'all', lib: 'all', prog: 'all', role: 'all', page: 1, per: DEFAULT_PER_PAGE, open: null }
 
 const LIBRARY_STATUSES: LibraryStatus[] = ['all', 'borrowed', 'fine', 'never', 'nocard', 'duplicate']
 
@@ -167,6 +170,7 @@ function readView(): ViewState {
 		cat: params.get('cat') ?? 'all',
 		lib: lib && LIBRARY_STATUSES.includes(lib) ? lib : 'all',
 		prog: params.get('prog') ?? 'all',
+		role: params.get('role') ?? 'all',
 		page: Math.max(1, Number(params.get('page')) || 1),
 		per: Number(params.get('per')) || DEFAULT_PER_PAGE,
 		open: params.get('open'),
@@ -180,6 +184,7 @@ function writeView(view: ViewState): void {
 	if (view.cat !== 'all') params.set('cat', view.cat)
 	if (view.lib !== 'all') params.set('lib', view.lib)
 	if (view.prog !== 'all') params.set('prog', view.prog)
+	if (view.role !== 'all') params.set('role', view.role)
 	if (view.page > 1) params.set('page', String(view.page))
 	if (view.per !== DEFAULT_PER_PAGE) params.set('per', String(view.per))
 	if (view.open) params.set('open', view.open)
@@ -221,30 +226,58 @@ function LazyPhoto({ src, name, className }: { src: string | null; name: string;
 	)
 }
 
-/** One click copies it. The number is what gets retyped at the desk. */
+/** How long the tick stays where the copy icon was. */
+const COPIED_TICK_MS = 1600
+
+/**
+ * One click copies it. The number is what gets retyped at the desk.
+ *
+ * The answer is given where the click was: the icon turns into a tick for a
+ * moment, and the tooltip says "Copied". No toast — one appeared bottom-right
+ * for every copy, far from the eye, and had to be dismissed or waited out.
+ */
 function CopyButton({ value, label }: { value: string; label: string }) {
-	const { toast } = useToast()
+	const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+	// The tick goes back to the icon on its own; a second click restarts it.
+	useEffect(() => {
+		if (state === 'idle') return
+		const timer = setTimeout(() => setState('idle'), COPIED_TICK_MS)
+		return () => clearTimeout(timer)
+	}, [state])
+
+	const copy = async (e: React.MouseEvent) => {
+		e.stopPropagation()
+		try {
+			await navigator.clipboard.writeText(value)
+			setState('copied')
+		} catch {
+			setState('failed')
+		}
+	}
+
 	return (
-		<Tooltip>
+		<Tooltip open={state === 'idle' ? undefined : true}>
 			<TooltipTrigger asChild>
 				<button
 					type="button"
-					className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus:opacity-100"
-					onClick={async e => {
-						e.stopPropagation()
-						try {
-							await navigator.clipboard.writeText(value)
-							toast({ title: `Copied ${label}`, description: value, className: 'bg-green-50 border-green-200 text-green-800' })
-						} catch {
-							toast({ title: 'Could not copy', variant: 'destructive' })
-						}
-					}}
-					aria-label={`Copy ${label}`}
+					className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded transition-opacity focus:opacity-100 group-hover:opacity-100 ${
+						state === 'copied'
+							? 'text-emerald-600 opacity-100 dark:text-emerald-400'
+							: state === 'failed'
+								? 'text-destructive opacity-100'
+								: 'text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground'
+					}`}
+					onClick={copy}
+					aria-label={state === 'copied' ? `Copied ${label}` : `Copy ${label}`}
+					aria-live="polite"
 				>
-					<Copy className="h-3 w-3" />
+					{state === 'copied' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
 				</button>
 			</TooltipTrigger>
-			<TooltipContent>Copy {label}</TooltipContent>
+			<TooltipContent>
+				{state === 'copied' ? 'Copied' : state === 'failed' ? 'Could not copy' : `Copy ${label}`}
+			</TooltipContent>
 		</Tooltip>
 	)
 }
@@ -626,23 +659,39 @@ export default function MembersPage() {
 		duplicate: members.filter(isDuplicate).length,
 	}), [members, isDuplicate])
 
-	/** Programmes or designations, as MyJKKN names them, within the chosen category. */
-	const programmeOptions = useMemo(() => {
+	/**
+	 * What MyJKKN calls each person, counted — programmes for learners, roles
+	 * for staff. Two lists, because a programme and a designation are two
+	 * different questions and used to share one dropdown, where BPHARM sat
+	 * beside HOD and the librarian had to read the whole list to find either.
+	 */
+	const labelOptions = useCallback((category: 'learner' | 'facilitator') => {
 		const counts = new Map<string, number>()
 		for (const m of members) {
-			if (view.cat !== 'all' && m.member_category !== view.cat) continue
+			if (m.member_category !== category) continue
 			counts.set(m.role_label, (counts.get(m.role_label) ?? 0) + 1)
 		}
 		return [...counts.entries()]
 			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 			.map(([label, count]) => ({ label, count }))
-	}, [members, view.cat])
+	}, [members])
+
+	const programmeOptions = useMemo(() => labelOptions('learner'), [labelOptions])
+	const roleOptions = useMemo(() => labelOptions('facilitator'), [labelOptions])
 
 	const filtered = useMemo(() => {
 		const term = view.q.trim().toLowerCase()
+		const byProgramme = view.prog !== 'all'
+		const byRole = view.role !== 'all'
 		return members.filter(m => {
 			if (view.cat !== 'all' && m.member_category !== view.cat) return false
-			if (view.prog !== 'all' && m.role_label !== view.prog) return false
+			// A programme narrows the learners and a role narrows the staff. Both
+			// chosen at once means both groups: the BPHARM learners and the HODs.
+			if (byProgramme || byRole) {
+				const learnerMatch = byProgramme && m.member_category === 'learner' && m.role_label === view.prog
+				const staffMatch = byRole && m.member_category === 'facilitator' && m.role_label === view.role
+				if (!learnerMatch && !staffMatch) return false
+			}
 			switch (view.lib) {
 				case 'borrowed': if (!m.has_borrowed) return false; break
 				case 'fine': if (!m.is_delinquent) return false; break
@@ -656,7 +705,7 @@ export default function MembersPage() {
 				|| (m.email?.toLowerCase().includes(term) ?? false)
 				|| m.role_label.toLowerCase().includes(term)
 		})
-	}, [members, view.q, view.cat, view.prog, view.lib, isDuplicate])
+	}, [members, view.q, view.cat, view.prog, view.role, view.lib, isDuplicate])
 
 	const pageSizeOptions = useMemo(() => {
 		const options = [25, 50, 100, 200]
@@ -742,18 +791,18 @@ export default function MembersPage() {
 	const age = ageOf(readAt, now)
 	const activeCard = 'ring-2 ring-offset-1 ring-brand-green/60 dark:ring-brand-green-400/60'
 	const scorecardButton = 'text-left w-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-green'
-	const hasFilters = view.q || view.cat !== 'all' || view.lib !== 'all' || view.prog !== 'all'
+	const hasFilters = view.q || view.cat !== 'all' || view.lib !== 'all' || view.prog !== 'all' || view.role !== 'all'
 
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
 			{/* Scorecards — each one is the filter it names */}
 			<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
-				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: 'all', lib: 'all', prog: 'all' })} aria-label="Show everyone">
+				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: 'all', lib: 'all', prog: 'all', role: 'all' })} aria-label="Show everyone">
 					<Card className={`border-l-4 border-l-brand-green dark:border-l-brand-green-400 hover-lift ${!hasFilters ? activeCard : ''}`}>
 						<CardContent className="p-4">
 							<div className="flex items-center justify-between">
 								<div>
-									<p className="text-2xl font-bold tracking-tight font-heading text-brand-green dark:text-brand-green-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.total}</p>
+									<div className="text-2xl font-bold tracking-tight font-heading text-brand-green dark:text-brand-green-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.total}</div>
 									<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Members</p>
 								</div>
 								<Users className="h-5 w-5 text-brand-green/40 dark:text-brand-green-400/40" />
@@ -761,12 +810,12 @@ export default function MembersPage() {
 						</CardContent>
 					</Card>
 				</button>
-				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: view.cat === 'learner' ? 'all' : 'learner', prog: 'all' })} aria-label="Show learners only">
+				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: view.cat === 'learner' ? 'all' : 'learner', prog: 'all', role: 'all' })} aria-label="Show learners only">
 					<Card className={`border-l-4 border-l-blue-400 hover-lift ${view.cat === 'learner' ? activeCard : ''}`}>
 						<CardContent className="p-4">
 							<div className="flex items-center justify-between">
 								<div>
-									<p className="text-2xl font-bold tracking-tight font-heading text-blue-700 dark:text-blue-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.learners}</p>
+									<div className="text-2xl font-bold tracking-tight font-heading text-blue-700 dark:text-blue-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.learners}</div>
 									<p className="text-xs font-medium text-muted-foreground mt-0.5">Learners</p>
 								</div>
 								<GraduationCap className="h-5 w-5 text-blue-400/50" />
@@ -774,12 +823,12 @@ export default function MembersPage() {
 						</CardContent>
 					</Card>
 				</button>
-				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: view.cat === 'facilitator' ? 'all' : 'facilitator', prog: 'all' })} aria-label="Show staff only">
+				<button type="button" className={scorecardButton} onClick={() => setFilter({ cat: view.cat === 'facilitator' ? 'all' : 'facilitator', prog: 'all', role: 'all' })} aria-label="Show staff only">
 					<Card className={`border-l-4 border-l-purple-400 hover-lift ${view.cat === 'facilitator' ? activeCard : ''}`}>
 						<CardContent className="p-4">
 							<div className="flex items-center justify-between">
 								<div>
-									<p className="text-2xl font-bold tracking-tight font-heading text-purple-700 dark:text-purple-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.staff}</p>
+									<div className="text-2xl font-bold tracking-tight font-heading text-purple-700 dark:text-purple-400">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.staff}</div>
 									<p className="text-xs font-medium text-muted-foreground mt-0.5">Staff</p>
 								</div>
 								<Briefcase className="h-5 w-5 text-purple-400/50" />
@@ -792,7 +841,7 @@ export default function MembersPage() {
 						<CardContent className="p-4">
 							<div className="flex items-center justify-between">
 								<div>
-									<p className="text-2xl font-bold tracking-tight font-heading text-destructive">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.owing}</p>
+									<div className="text-2xl font-bold tracking-tight font-heading text-destructive">{loading ? <Skeleton className="h-7 w-14" /> : scorecardData.owing}</div>
 									<p className="text-xs font-medium text-muted-foreground mt-0.5">Owing a Fine</p>
 								</div>
 								<AlertTriangle className="h-5 w-5 text-destructive/40" />
@@ -833,7 +882,7 @@ export default function MembersPage() {
 
 						{/* Row 2: Filters */}
 						<div className="flex items-center gap-2 flex-wrap mt-3">
-							<Select value={view.cat} onValueChange={v => setFilter({ cat: v, prog: 'all' })}>
+							<Select value={view.cat} onValueChange={v => setFilter({ cat: v, prog: 'all', role: 'all' })}>
 								<SelectTrigger className="h-8 text-sm w-[140px]"><SelectValue placeholder="Category" /></SelectTrigger>
 								<SelectContent>
 									<SelectItem value="all">All Categories</SelectItem>
@@ -842,12 +891,27 @@ export default function MembersPage() {
 									))}
 								</SelectContent>
 							</Select>
-							<Select value={view.prog} onValueChange={v => setFilter({ prog: v })}>
-								<SelectTrigger className="h-8 text-sm w-[240px]"><SelectValue placeholder="Programme / role" /></SelectTrigger>
+							{/* Programme is a learner's question and role a staff member's, so
+							    each dropdown is greyed out while the category excludes its people */}
+							<Select value={view.prog} onValueChange={v => setFilter({ prog: v })} disabled={view.cat === 'facilitator'}>
+								<SelectTrigger className="h-8 text-sm w-[170px]" title={view.cat === 'facilitator' ? 'Programmes belong to learners — choose Learners or All Categories' : undefined}>
+									<SelectValue placeholder="Programme" />
+								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">{view.cat === 'facilitator' ? 'All roles' : view.cat === 'learner' ? 'All programmes' : 'All programmes & roles'}</SelectItem>
+									<SelectItem value="all">All programmes</SelectItem>
 									{programmeOptions.map(p => (
 										<SelectItem key={p.label} value={p.label}>{p.label} <span className="text-muted-foreground">· {p.count}</span></SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<Select value={view.role} onValueChange={v => setFilter({ role: v })} disabled={view.cat === 'learner'}>
+								<SelectTrigger className="h-8 text-sm w-[170px]" title={view.cat === 'learner' ? 'Roles belong to staff — choose Staff or All Categories' : undefined}>
+									<SelectValue placeholder="Role" />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="all">All roles</SelectItem>
+									{roleOptions.map(r => (
+										<SelectItem key={r.label} value={r.label}>{r.label} <span className="text-muted-foreground">· {r.count}</span></SelectItem>
 									))}
 								</SelectContent>
 							</Select>
