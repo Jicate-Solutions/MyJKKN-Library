@@ -13,15 +13,24 @@
  *
  * A college sees its own people and no one else's. Only a super admin, or an
  * admin overseeing every campus, may ask for all of them at once.
+ *
+ * The reply carries an `X-Roll-Read-At` header: when MyJKKN was last asked for
+ * the oldest roll in the answer. The page prints it beside Refresh.
  */
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
-import { collegeDirectory, myjkknConfigured, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
+import { collegeRoll, myjkknConfigured, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 
-/** One row of the members list, as the page renders it. */
+/**
+ * One row of the members list, as the page renders it.
+ *
+ * The phone number is deliberately not here. The table never shows it, and a
+ * college of five thousand members sent it five thousand times on every visit;
+ * it travels with the one-member summary (`/api/lib/members/[id]`) instead.
+ */
 interface MemberRow {
 	/** Stable across requests, and unique within a college — MyJKKN's id, kinded. */
 	id: string
@@ -32,7 +41,6 @@ interface MemberRow {
 	member_category: string
 	display_name: string
 	email: string | null
-	phone: string | null
 	photo_url: string | null
 	/** MyJKKN's own word for what they are — their programme, or their designation. */
 	role_label: string
@@ -112,7 +120,7 @@ export async function GET(request: Request) {
 		if (institutionIds.length === 0) return NextResponse.json([])
 
 		const [rolls, facts] = await Promise.all([
-			Promise.all(institutionIds.map(id => collegeDirectory(id))),
+			Promise.all(institutionIds.map(id => collegeRoll(id))),
 			libraryFacts(institutionIds),
 		])
 
@@ -121,7 +129,7 @@ export async function GET(request: Request) {
 
 		const rows: MemberRow[] = []
 		for (const roll of rolls) {
-			for (const person of roll as DirectoryPerson[]) {
+			for (const person of roll.people as DirectoryPerson[]) {
 				if (memberCategory && person.member_category !== memberCategory) continue
 
 				if (search) {
@@ -140,7 +148,6 @@ export async function GET(request: Request) {
 					member_category: person.member_category,
 					display_name: person.display_name,
 					email: person.email,
-					phone: person.phone,
 					photo_url: person.photo_url,
 					role_label: person.role_label,
 					is_active: true,
@@ -150,7 +157,12 @@ export async function GET(request: Request) {
 			}
 		}
 
-		return NextResponse.json(rows)
+		// With several colleges on one answer, the oldest read is the honest age
+		const readAt = rolls.map(roll => roll.readAt).sort()[0] ?? null
+
+		return NextResponse.json(rows, {
+			headers: readAt ? { 'X-Roll-Read-At': readAt } : undefined,
+		})
 	} catch (error) {
 		console.error('Unexpected error listing members:', error)
 		return NextResponse.json({ error: 'Failed to read the member list from MyJKKN' }, { status: 500 })

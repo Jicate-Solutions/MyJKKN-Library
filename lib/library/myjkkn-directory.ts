@@ -409,6 +409,8 @@ interface CachedDirectory {
 	people: DirectoryPerson[]
 	/** Every number each person answers to, for the desk's exact-match lookup. */
 	byNumber: Map<string, DirectoryPerson>
+	/** When MyJKKN was last asked — shown on the members page, so the librarian knows how old the list is. */
+	builtAt: number
 	/** Handed out without question until this moment. */
 	freshUntil: number
 	/** Handed out with a rebuild started behind it until this one. */
@@ -417,10 +419,11 @@ interface CachedDirectory {
 
 /** Nothing, held briefly, so an unreachable MyJKKN is retried soon. */
 function emptyDirectory(): CachedDirectory {
-	const until = Date.now() + EMPTY_TTL_MS
+	const now = Date.now()
+	const until = now + EMPTY_TTL_MS
 	// Deliberately not servable while stale: an empty roll is not an answer
 	// worth repeating for half an hour, it is a reason to ask again shortly.
-	return { people: [], byNumber: new Map(), freshUntil: until, usableUntil: until }
+	return { people: [], byNumber: new Map(), builtAt: now, freshUntil: until, usableUntil: until }
 }
 
 const directoryCache = new Map<string, CachedDirectory>()
@@ -489,6 +492,7 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 	return {
 		people,
 		byNumber,
+		builtAt: now,
 		freshUntil: now + DIRECTORY_TTL_MS,
 		usableUntil: now + DIRECTORY_TTL_MS + DIRECTORY_STALE_MS,
 	}
@@ -572,6 +576,43 @@ function cachedDirectory(institutionId: string): CachedDirectory | null {
 /** Every member of one college: its Active learners and its Active staff. */
 export async function collegeDirectory(institutionId: string): Promise<DirectoryPerson[]> {
 	return (await directoryFor(institutionId)).people
+}
+
+/**
+ * The roll, with the moment it was read.
+ *
+ * The members page prints that moment beside its Refresh button — "read from
+ * MyJKKN 4 min ago" — so a librarian looking for this morning's admission
+ * knows whether to expect them yet or to press the button.
+ */
+export async function collegeRoll(institutionId: string): Promise<{ people: DirectoryPerson[]; readAt: string }> {
+	const roll = await directoryFor(institutionId)
+	return { people: roll.people, readAt: new Date(roll.builtAt).toISOString() }
+}
+
+/**
+ * The roll only if it is already in hand — fresh or still usable — never built.
+ *
+ * For decorating rows that already have their person on them, such as the
+ * gate register adding a programme under a name. Nothing there should wait on
+ * MyJKKN; a missing roll simply means the decoration is left off this time.
+ */
+export function collegeDirectoryInHand(institutionId: string): DirectoryPerson[] | null {
+	const cached = directoryCache.get(institutionId)
+	return cached && cached.usableUntil > Date.now() ? cached.people : null
+}
+
+/**
+ * Starts building a college's roll without waiting for it.
+ *
+ * Called as somebody signs in. The first visit to the members page after a
+ * quiet spell used to pay the whole MyJKKN walk — three seconds for a big
+ * college — because nothing had asked for the roll yet. Asked for here, on the
+ * way through the door, it is normally in hand by the time the page opens.
+ * A failure is swallowed: the page itself asks again and reports properly.
+ */
+export function warmCollegeDirectory(institutionId: string): void {
+	void directoryFor(institutionId).catch(() => {})
 }
 
 /** How many people a college's library has. */

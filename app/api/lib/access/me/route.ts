@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { identifyCaller } from '@/lib/auth/server-access'
 import { LIBRARY_ROLES } from '@/lib/auth/library-roles'
 import { allowedPagesFor } from '@/lib/auth/role-page-store'
+import { warmCollegeDirectory } from '@/lib/library/myjkkn-directory'
 
 export async function GET(request: Request) {
 	const identity = await identifyCaller(request)
@@ -49,6 +50,11 @@ export async function GET(request: Request) {
 	// route of its own because the menu, the page guard and the mobile navbar all
 	// want it and this reply is already fetched once per tab and cached.
 	const pages = await allowedPagesFor(caller.role)
+
+	// Their college's roll is started on the way in, not awaited: the members
+	// page and the desk then find it in hand instead of paying MyJKKN's walk on
+	// their first visit. A super admin has no one college, so nothing is warmed.
+	if (caller.institutionId) warmCollegeDirectory(caller.institutionId)
 
 	return NextResponse.json({
 		allowed: true,

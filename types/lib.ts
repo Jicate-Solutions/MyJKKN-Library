@@ -64,7 +64,8 @@ export interface LibDirectoryMember {
 	member_category: LibMemberCategory
 	display_name: string
 	email: string | null
-	phone: string | null
+	/** Not sent with the list any more — it travels with the one-member summary instead. */
+	phone?: string | null
 	photo_url: string | null
 	/** MyJKKN's own word for what they are — their programme, or their role. */
 	role_label: string
