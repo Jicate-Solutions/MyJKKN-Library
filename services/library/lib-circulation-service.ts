@@ -4,9 +4,50 @@ import type {
 	LibReturnPayload,
 	LibRenewPayload,
 	LibHold,
+	LibLateCharge,
 } from '@/types/lib'
+import type { DeskEvent, DeskEventKind, MemberLoan } from '@/lib/library/desk'
 
-export async function issueItem(payload: LibIssuePayload): Promise<LibCirculationTransaction> {
+/**
+ * What the three desk actions answer with.
+ *
+ * None of them returns a bare loan: each wraps the loan with what the desk
+ * needs next — the due date just set, the charge a late return raised, the
+ * due date a renewal replaced. Named here so the page reads them by name
+ * rather than casting its way in.
+ */
+export interface DeskIssueResult {
+	success: true
+	transaction: LibCirculationTransaction
+	due_date: string
+	loan_period_days: number
+	borrower_id: string
+	member_number?: string
+	display_name?: string | null
+	/** Books in the member's hands now that this one has gone out. */
+	items_on_loan?: number
+	/** The hold this issue completed, if the book had been kept for them. */
+	fulfilled_hold_id?: string | null
+	/** The new loan, as the desk lists a member's loans. */
+	loan?: MemberLoan
+}
+
+export interface DeskReturnResult {
+	success: true
+	transaction: LibCirculationTransaction
+	overdue_days: number
+	late_charge: LibLateCharge | null
+}
+
+export interface DeskRenewResult {
+	success: true
+	transaction: LibCirculationTransaction
+	new_due_date: string
+	previous_due_date?: string
+	renewals_remaining: number
+}
+
+export async function issueItem(payload: LibIssuePayload): Promise<DeskIssueResult> {
 	const res = await fetch('/api/lib/circulation/issue', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -19,7 +60,7 @@ export async function issueItem(payload: LibIssuePayload): Promise<LibCirculatio
 	return res.json()
 }
 
-export async function returnItem(payload: LibReturnPayload): Promise<LibCirculationTransaction> {
+export async function returnItem(payload: LibReturnPayload): Promise<DeskReturnResult> {
 	const res = await fetch('/api/lib/circulation/return', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -32,7 +73,7 @@ export async function returnItem(payload: LibReturnPayload): Promise<LibCirculat
 	return res.json()
 }
 
-export async function renewItem(payload: LibRenewPayload): Promise<LibCirculationTransaction> {
+export async function renewItem(payload: LibRenewPayload): Promise<DeskRenewResult> {
 	const res = await fetch('/api/lib/circulation/renew', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -43,6 +84,46 @@ export async function renewItem(payload: LibRenewPayload): Promise<LibCirculatio
 		throw new Error(err.error || 'Failed to renew item')
 	}
 	return res.json()
+}
+
+/**
+ * Takes back an issue, a return or a renewal made moments ago at the desk.
+ *
+ * A renewal needs the due date it replaced, which the renew reply carries as
+ * `previous_due_date`; the other two need only the loan.
+ */
+export async function undoDeskAction(payload: {
+	institution_id: string
+	transaction_id: string
+	action: DeskEventKind
+	previous_due_date?: string | null
+}): Promise<{ success: true; action: DeskEventKind; transaction: LibCirculationTransaction | null }> {
+	const res = await fetch('/api/lib/circulation/undo', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(payload),
+	})
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}))
+		throw new Error(err.error || 'Could not take that back')
+	}
+	return res.json()
+}
+
+/** Everything done at this college's desk since `since`, newest first. */
+export async function fetchRecentDeskEvents(institutionId: string, since: Date, limit = 20): Promise<DeskEvent[]> {
+	const params = new URLSearchParams()
+	params.set('institution_id', institutionId)
+	params.set('since', since.toISOString())
+	params.set('limit', String(limit))
+
+	const res = await fetch(`/api/lib/circulation/recent?${params}`)
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}))
+		throw new Error(err.error || 'Could not read what the desk did today')
+	}
+	const body = await res.json()
+	return Array.isArray(body?.events) ? body.events : []
 }
 
 /**

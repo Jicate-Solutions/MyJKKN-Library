@@ -55,7 +55,7 @@ export async function GET(request: Request) {
 		const person = await personByCardNumber(institutionId, barcode)
 		if (!person) {
 			return NextResponse.json(
-				{ error: `No member found for "${barcode}" — check the number, or that they are Active in MyJKKN` },
+				{ error: `No member found for "${barcode}" — check the number, or that they are Active in MyJKKN`, reason: 'no_member' },
 				{ status: 404 }
 			)
 		}

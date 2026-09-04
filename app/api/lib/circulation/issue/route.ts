@@ -89,7 +89,10 @@ export async function POST(request: Request) {
 		] = await Promise.all([
 			supabase
 				.from('lib_items')
-				.select('id, status, is_lendable, institution_id, catalogue_record_id')
+				// The title and shelf mark ride along so the reply can carry the new
+				// loan in the shape the desk lists loans in — the desk used to read
+				// the whole member again after every book just to add one line.
+				.select('id, status, is_lendable, institution_id, catalogue_record_id, accession_number, catalogue:lib_catalogue_records(title, call_number)')
 				.eq('id', item_id)
 				.single(),
 			getInstitutionSettings(institution_id),
@@ -107,7 +110,7 @@ export async function POST(request: Request) {
 				: Promise.resolve({ count: 0 }),
 			supabase
 				.from('lib_member_categories')
-				.select('loan_period_days, max_items_allowed')
+				.select('loan_period_days, max_items_allowed, renewal_limit')
 				.eq('institution_id', institution_id)
 				.eq('category_code', memberCategory)
 				.maybeSingle(),
@@ -222,7 +225,7 @@ export async function POST(request: Request) {
 		// again, but on a serverless host the function can be frozen the moment
 		// the reply is sent, and a hold left sitting as 'available' after the
 		// book has walked out is worse than 65ms.
-		await Promise.all([
+		const [{ data: fulfilledHolds }] = await Promise.all([
 			supabase
 				.from('lib_resource_holds')
 				.update({
@@ -232,7 +235,8 @@ export async function POST(request: Request) {
 				})
 				.eq('member_id', borrower.id)
 				.eq('item_id', item_id)
-				.eq('hold_status', 'available'),
+				.eq('hold_status', 'available')
+				.select('id'),
 
 			logActivity(request, {
 				action: 'create',
@@ -250,6 +254,12 @@ export async function POST(request: Request) {
 			}),
 		])
 
+		// The new loan as the desk lists a member's loans, and the count it
+		// changes, so the member card can move on without another lookup.
+		const catalogue = (item as { catalogue?: { title?: string; call_number?: string } | null }).catalogue ?? null
+		const renewalLimit = categoryConfig?.renewal_limit ?? 0
+		const fulfilledHoldId = (fulfilledHolds as { id: string }[] | null)?.[0]?.id ?? null
+
 		return NextResponse.json(
 			{
 				success: true,
@@ -257,6 +267,25 @@ export async function POST(request: Request) {
 				due_date: dueDateStr,
 				loan_period_days: loanPeriodDays,
 				borrower_id: borrower.id,
+				member_number: borrower.member_number,
+				display_name: borrower.display_name,
+				items_on_loan: (booksHeld ?? 0) + 1,
+				fulfilled_hold_id: fulfilledHoldId,
+				loan: {
+					id: transaction.id,
+					item_id,
+					accession_number: (item as { accession_number?: string }).accession_number ?? null,
+					title: catalogue?.title ?? 'Unknown title',
+					call_number: catalogue?.call_number ?? null,
+					issued_at: transaction.issued_at,
+					due_date: dueDateStr,
+					renewal_count: 0,
+					renewal_limit: renewalLimit,
+					can_renew: renewalLimit > 0,
+					is_overdue: false,
+					overdue_days: 0,
+					estimated_charge: 0,
+				},
 			},
 			{ status: 201 }
 		)

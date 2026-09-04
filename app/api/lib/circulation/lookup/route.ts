@@ -35,7 +35,7 @@ export async function GET(request: Request) {
 
 		const { data: item } = await itemQuery.maybeSingle()
 		if (!item) {
-			return NextResponse.json({ error: `No book found for "${barcode}"` }, { status: 404 })
+			return NextResponse.json({ error: `No book found for "${barcode}"`, reason: 'no_item' }, { status: 404 })
 		}
 
 		// The open loan needs the item's id and the rules need its institution, but
@@ -58,7 +58,7 @@ export async function GET(request: Request) {
 
 		if (!loan) {
 			return NextResponse.json(
-				{ error: 'This copy is not on loan — nothing to return or renew' },
+				{ error: 'This copy is not on loan — nothing to return or renew', reason: 'not_on_loan' },
 				{ status: 404 }
 			)
 		}

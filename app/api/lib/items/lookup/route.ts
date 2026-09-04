@@ -42,7 +42,7 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Lookup failed' }, { status: 500 })
 		}
 		if (!item) {
-			return NextResponse.json({ error: `No book found for "${barcode}"` }, { status: 404 })
+			return NextResponse.json({ error: `No book found for "${barcode}"`, reason: 'no_item' }, { status: 404 })
 		}
 
 		// A copy on a reference-only shelf is reference-only even if nobody

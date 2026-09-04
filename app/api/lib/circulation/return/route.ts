@@ -39,9 +39,15 @@ export async function POST(request: Request) {
 			? lookup.eq('id', transaction_id)
 			: lookup.eq('item_id', item_id)
 
-		const { data: transactions, error: txError } = await lookup
-			.order('issued_at', { ascending: false })
-			.limit(1)
+		// The loan and this campus's fine rules are two questions that do not
+		// depend on each other, so they are asked together — the rules used to
+		// wait behind the loan for nothing, with the book on the counter.
+		const [{ data: transactions, error: txError }, settings] = await Promise.all([
+			lookup
+				.order('issued_at', { ascending: false })
+				.limit(1),
+			getInstitutionSettings(institution_id),
+		])
 
 		const transaction = transactions?.[0]
 
@@ -61,7 +67,6 @@ export async function POST(request: Request) {
 
 		// 2. Calculate chargeable days using this campus's own rules — grace
 		// period and whether Sundays count both vary by institution.
-		const settings = await getInstitutionSettings(institution_id)
 		const overdueDays = chargeableLateDays(transaction.due_date, today, settings)
 
 		let chargeRecord = null

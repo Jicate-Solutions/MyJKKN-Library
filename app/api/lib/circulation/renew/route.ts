@@ -153,6 +153,8 @@ export async function POST(request: Request) {
 			success: true,
 			transaction: updated,
 			new_due_date: newDueDateStr,
+			// What it was due before, which is what taking the renewal back restores
+			previous_due_date: transaction.due_date,
 			renewals_remaining: renewalLimit - updated.renewal_count,
 		})
 	} catch (error) {
