@@ -143,7 +143,7 @@ export async function POST(request: Request) {
 			// "failed", which sends them looking at the form.
 			if (error.code === '23514') {
 				return NextResponse.json(
-					{ error: `The database does not allow the frequency "${body.frequency}" yet — run the pending database update (20260902_lib_subscription_frequency_three_eight) and try again` },
+					{ error: `The database does not allow the frequency "${body.frequency}" yet — run the pending database update (20260904_lib_subscription_frequency_semi_monthly) and try again` },
 					{ status: 400 }
 				)
 			}

@@ -50,8 +50,10 @@ const GRATIS_BADGE = 'text-blue-700 border-blue-300 dark:text-blue-300 dark:bord
 // Most issues a year first. eight_yearly and three_yearly were added on
 // 2 Sep 2026 (migration 20260902) for journals that come eight times a
 // year, or every four months — both real on the shelf, and neither had a
-// frequency to say so.
-const FREQUENCIES = ['weekly', 'fortnightly', 'monthly', 'eight_yearly', 'bimonthly', 'quarterly', 'three_yearly', 'half_yearly', 'annual'] as const
+// frequency to say so. semi_monthly followed on 4 Sep 2026 (migration
+// 20260904) for the journals that come twice a month — 24 a year, which
+// fortnightly's 26 cannot say.
+const FREQUENCIES = ['weekly', 'fortnightly', 'semi_monthly', 'monthly', 'eight_yearly', 'bimonthly', 'quarterly', 'three_yearly', 'half_yearly', 'annual'] as const
 
 /**
  * The same words, as a librarian says them.
@@ -65,6 +67,7 @@ const FREQUENCY_LABELS: Record<string, string> = {
 	daily: 'Daily',
 	weekly: 'Weekly',
 	fortnightly: 'Fortnightly',
+	semi_monthly: 'Twice a month (24 a year)',
 	monthly: 'Monthly',
 	eight_yearly: 'Eight a year',
 	bimonthly: 'Bi-monthly',
@@ -92,6 +95,7 @@ const frequencyLabel = (frequency: string | null | undefined): string =>
 const ISSUES_PER_YEAR: Record<string, number> = {
 	weekly: 52,
 	fortnightly: 26,
+	semi_monthly: 24,
 	monthly: 12,
 	eight_yearly: 8,
 	bimonthly: 6,
