@@ -1,253 +1,406 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+/**
+ * Reports — every report the library can give, one college at a time.
+ *
+ * One tab per page of the system, each listing every report that page's data
+ * can answer. Pick a report, set its filters, press Run: the rows appear on
+ * screen, and go to Excel or to a clean A4 print from the same buttons. The
+ * last tab takes a typed SELECT for the question no ready-made report asks.
+ *
+ * Nothing here writes. Every report runs through one read-only database
+ * function scoped to the chosen college (migration 20260905_lib_report_sql),
+ * so a report cannot see another college's shelves however it is written.
+ *
+ * The NAAC figures that used to fill this page live on the Dashboard.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
-import { useToast } from '@/hooks/common/use-toast'
+import { useInstitution } from '@/context/institution-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Badge } from '@/components/ui/badge'
 import {
-	BookMarked, BookOpen, TrendingUp, Newspaper,
-	MonitorPlay, Database, Users, ArrowLeftRight,
-	DollarSign, BarChart3, FileText, Calendar,
-	RefreshCw,
+	BarChart3, BookOpen, Building2, Users, ArrowLeftRight, DoorOpen, Bookmark, Clock, IndianRupee,
+	ShoppingCart, Package, Truck, Wallet, Newspaper, MonitorPlay, Archive, Shuffle, Wrench, ScrollText,
+	Terminal, Play, Loader2, ChevronRight, Info, ExternalLink,
 } from 'lucide-react'
-import Link from 'next/link'
-import type { LibNaacCriterion4Report } from '@/types/lib'
+import {
+	REPORT_TABS, reportsInTab, reportById, defaultParams, type ReportDef, type ReportParam, type TabId,
+} from '@/lib/library/reports/catalog'
+import { ReportResult, type ReportResultData } from '@/components/library/reports/report-result'
+import { SqlRunner } from '@/components/library/reports/sql-runner'
+import { cn } from '@/lib/utils'
 
-// ── Academic years for the selector ──────────────────────────────────
-function buildAcademicYears(): string[] {
-	const current = new Date().getFullYear()
-	return Array.from({ length: 6 }, (_, i) => {
-		const y = current - i
-		return `${y}-${y + 1}`
-	})
+const TAB_ICONS: Record<TabId, React.ElementType> = {
+	catalogue: BookOpen,
+	departments: Building2,
+	members: Users,
+	circulation: ArrowLeftRight,
+	gate: DoorOpen,
+	holds: Bookmark,
+	overdue: Clock,
+	charges: IndianRupee,
+	requests: ShoppingCart,
+	orders: Package,
+	suppliers: Truck,
+	budget: Wallet,
+	subscriptions: Newspaper,
+	digital: MonitorPlay,
+	retirement: Archive,
+	intercampus: Shuffle,
+	conservation: Wrench,
+	activity: ScrollText,
+	sql: Terminal,
 }
 
-const ACADEMIC_YEARS = buildAcademicYears()
+const TAB_IDS = new Set<string>(REPORT_TABS.map(t => t.id))
 
-// ── Scorecard component ───────────────────────────────────────────────
-interface ScorecardProps {
-	label: string
-	value: number | string
-	icon: React.ElementType
-	borderColor: string
-	iconColor: string
-	loading?: boolean
-	format?: 'number' | 'currency' | 'decimal'
-}
-
-function Scorecard({ label, value, icon: Icon, borderColor, iconColor, loading, format = 'number' }: ScorecardProps) {
-	const displayValue = () => {
-		if (loading) return '—'
-		if (format === 'currency') return `₹${Number(value).toLocaleString('en-IN')}`
-		if (format === 'decimal') return Number(value).toFixed(1)
-		return Number(value).toLocaleString('en-IN')
+/** What the address says, so a report can be linked to and comes back after a refresh. */
+function readAddress(): { tab: TabId; report: string | null } {
+	const params = new URLSearchParams(window.location.search)
+	const tab = params.get('tab')
+	const report = params.get('report')
+	return {
+		tab: tab && TAB_IDS.has(tab) ? (tab as TabId) : 'catalogue',
+		report: report && reportById(report) ? report : null,
 	}
+}
 
+function writeAddress(tab: TabId, report: string | null): void {
+	const params = new URLSearchParams()
+	if (tab !== 'catalogue') params.set('tab', tab)
+	if (report) params.set('report', report)
+	const query = params.toString()
+	window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+}
+
+/** "From 01-09-2026 · To 05-09-2026 · Status: all" for the print header. */
+function describeFilters(report: ReportDef, values: Record<string, string>): string {
+	const parts: string[] = []
+	for (const param of report.params) {
+		const value = values[param.key]
+		if (!value) continue
+		const shown = param.type === 'date' ? value.split('-').reverse().join('-') : param.type === 'select' ? (param.options?.find(o => o.value === value)?.label ?? value) : value
+		parts.push(`${param.label}: ${shown}`)
+	}
+	return parts.join(' · ')
+}
+
+function ParamField({ param, value, onChange, onEnter }: { param: ReportParam; value: string; onChange: (v: string) => void; onEnter: () => void }) {
+	const id = `rp-${param.key}`
+	const label = (
+		<Label htmlFor={id} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+			{param.label}{param.optional ? '' : param.type === 'text' ? ' *' : ''}
+		</Label>
+	)
+	if (param.type === 'select') {
+		return (
+			<div className="space-y-1.5">
+				{label}
+				<Select value={value} onValueChange={onChange}>
+					<SelectTrigger id={id} className="h-9 w-[180px] text-sm"><SelectValue /></SelectTrigger>
+					<SelectContent>
+						{param.options?.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+					</SelectContent>
+				</Select>
+			</div>
+		)
+	}
 	return (
-		<Card className={`border-l-4 ${borderColor} hover:shadow-md transition-shadow`}>
-			<CardContent className="p-4">
-				<div className="flex items-center justify-between">
-					<div className="flex-1 min-w-0">
-						{loading ? (
-							<div className="h-7 w-16 bg-muted animate-pulse rounded mb-1" />
-						) : (
-							<p className="text-2xl font-bold tracking-tight truncate">{displayValue()}</p>
-						)}
-						<p className="text-xs font-medium text-muted-foreground mt-0.5 leading-tight">{label}</p>
-					</div>
-					<Icon className={`h-5 w-5 shrink-0 ${iconColor} opacity-40`} />
-				</div>
-			</CardContent>
-		</Card>
+		<div className="space-y-1.5">
+			{label}
+			<Input
+				id={id}
+				type={param.type === 'date' ? 'date' : param.type === 'number' ? 'number' : 'text'}
+				min={param.type === 'number' ? 0 : undefined}
+				value={value}
+				placeholder={param.placeholder}
+				onChange={e => onChange(e.target.value)}
+				onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onEnter() } }}
+				className={`h-9 text-sm ${param.type === 'date' ? 'w-[160px]' : param.type === 'number' ? 'w-[120px]' : 'w-[220px]'}`}
+			/>
+			{param.hint && <p className="text-[11px] text-muted-foreground">{param.hint}</p>}
+		</div>
 	)
 }
 
-export default function ReportsDashboardPage() {
-	const { isReady, appendToUrl } = useInstitutionFilter()
-	const { toast } = useToast()
+export default function ReportsPage() {
+	const { isReady, institutionId, mustSelectInstitution } = useInstitutionFilter()
+	const { selectedInstitution, currentInstitution } = useInstitution()
 
-	const [report, setReport] = useState<LibNaacCriterion4Report | null>(null)
-	const [loading, setLoading] = useState(true)
-	const [academicYear, setAcademicYear] = useState<string>(ACADEMIC_YEARS[0])
-	const [dateFrom, setDateFrom] = useState(() => {
-		const d = new Date()
-		d.setFullYear(d.getFullYear() - 1)
-		return d.toISOString().split('T')[0]
-	})
-	const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0])
+	const college = selectedInstitution ?? currentInstitution
+	const collegeName = college?.institution_name ?? college?.institution_code ?? 'Library'
 
-	const fetchReport = useCallback(async () => {
-		if (!isReady) return
+	const [tab, setTab] = useState<TabId>('catalogue')
+	const [reportId, setReportId] = useState<string | null>(null)
+	const [values, setValues] = useState<Record<string, string>>({})
+	const [data, setData] = useState<ReportResultData | null>(null)
+	const [loading, setLoading] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	const [detail, setDetail] = useState<string | null>(null)
+	const [ranFilters, setRanFilters] = useState('')
+	const addressRead = useRef(false)
+
+	const report = useMemo(() => (reportId ? reportById(reportId) ?? null : null), [reportId])
+	const tabReports = useMemo(() => reportsInTab(tab), [tab])
+
+	// The address, read once, then kept up to date
+	useEffect(() => {
+		if (addressRead.current) return
+		addressRead.current = true
+		const { tab: fromTab, report: fromReport } = readAddress()
+		setTab(fromTab)
+		if (fromReport) {
+			const def = reportById(fromReport)
+			if (def) {
+				setTab(def.tab)
+				setReportId(def.id)
+				setValues(defaultParams(def))
+			}
+		}
+	}, [])
+
+	useEffect(() => {
+		if (addressRead.current) writeAddress(tab, reportId)
+	}, [tab, reportId])
+
+	const pick = useCallback((def: ReportDef) => {
+		setReportId(def.id)
+		setValues(defaultParams(def))
+		setData(null)
+		setError(null)
+		setDetail(null)
+	}, [])
+
+	const changeTab = (next: TabId) => {
+		setTab(next)
+		if (next === 'sql') {
+			setReportId(null)
+			return
+		}
+		// The first report of the tab, so the tab is never a blank column
+		const first = reportsInTab(next)[0]
+		if (first && (!report || report.tab !== next)) pick(first)
+	}
+
+	/** True when every filter that must be filled is filled. */
+	const ready = useMemo(() => {
+		if (!report) return false
+		return report.params.every(param => param.optional || param.type !== 'text' || (values[param.key] ?? '').trim() !== '')
+	}, [report, values])
+
+	const run = useCallback(async () => {
+		if (!report || !institutionId || !ready) return
+		setLoading(true)
+		setError(null)
+		setDetail(null)
 		try {
-			setLoading(true)
-			const params = new URLSearchParams()
-			params.set('date_from', dateFrom)
-			params.set('date_to', dateTo)
-			params.set('academic_year', academicYear)
-			const url = appendToUrl(`/api/lib/reports/naac?${params}`)
-			const res = await fetch(url)
-			if (!res.ok) throw new Error('Failed to load report')
-			const data = await res.json()
-			setReport(data)
+			const params = new URLSearchParams({ report: report.id, institution_id: institutionId })
+			for (const param of report.params) {
+				const value = (values[param.key] ?? '').trim()
+				if (value) params.set(param.key, value)
+			}
+			const res = await fetch(`/api/lib/reports/run?${params}`)
+			const json = await res.json().catch(() => ({}))
+			if (!res.ok) {
+				setData(null)
+				setError(json.error || 'Could not build the report')
+				setDetail(json.detail ?? null)
+				return
+			}
+			setData(json)
+			setRanFilters(describeFilters(report, values))
 		} catch {
-			toast({ title: 'Failed to load report data', variant: 'destructive' })
+			setData(null)
+			setError('Could not reach the server')
 		} finally {
 			setLoading(false)
 		}
-	}, [isReady, appendToUrl, dateFrom, dateTo, academicYear, toast])
+	}, [report, institutionId, ready, values])
 
-	useEffect(() => { fetchReport() }, [fetchReport])
+	// A report whose filters are all filled in runs as soon as it is picked
+	const lastAutoRun = useRef<string | null>(null)
+	useEffect(() => {
+		if (!report || !institutionId || !isReady) return
+		const key = `${institutionId}:${report.id}`
+		if (lastAutoRun.current === key) return
+		if (!ready) return
+		lastAutoRun.current = key
+		void run()
+	}, [report, institutionId, isReady, ready, run])
 
-	const r = report
+	// A different college: whatever was on screen was the other college's
+	useEffect(() => {
+		setData(null)
+		setError(null)
+	}, [institutionId])
+
+	const noCollege = !isReady || mustSelectInstitution || !institutionId
+	const currentTab = REPORT_TABS.find(t => t.id === tab)
 
 	return (
-		<TooltipProvider delayDuration={300}>
-			<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
+		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
+			<Card className="flex-shrink-0">
+				<CardHeader className="px-4 py-3">
+					<div className="flex flex-wrap items-center gap-3">
+						<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100">
+							<BarChart3 className="h-5 w-5 text-blue-600" />
+						</div>
+						<div className="min-w-0">
+							<h1 className="text-base font-semibold">Reports</h1>
+							<p className="text-xs text-muted-foreground">
+								Every report, one college at a time — pick a tab, a report and its filters, then Run. Excel and Print sit on every result.
+							</p>
+						</div>
+					</div>
 
-				{/* Filter Bar */}
-				<Card className="flex-shrink-0">
-					<CardHeader className="px-4 py-3 border-b">
-						<div className="flex items-center justify-between flex-wrap gap-2">
-							<div>
-								<h2 className="text-base font-semibold">Reports Dashboard</h2>
-								<p className="text-xs text-muted-foreground">NAAC Criterion 4.2 — Library and Learning Resources</p>
-							</div>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchReport}>
-										<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent>Refresh</TooltipContent>
-							</Tooltip>
-						</div>
-						<div className="flex flex-wrap items-end gap-3 mt-3">
-							<div className="space-y-1.5">
-								<Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Academic Year</Label>
-								<Select value={academicYear} onValueChange={setAcademicYear}>
-									<SelectTrigger className="h-8 text-sm w-[130px]"><SelectValue /></SelectTrigger>
-									<SelectContent>
-										{ACADEMIC_YEARS.map(y => <SelectItem key={y} value={y}>{y}</SelectItem>)}
-									</SelectContent>
-								</Select>
-							</div>
-							<div className="space-y-1.5">
-								<Label htmlFor="rpt_from" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">From</Label>
-								<Input id="rpt_from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="h-8 text-sm w-[150px]" />
-							</div>
-							<div className="space-y-1.5">
-								<Label htmlFor="rpt_to" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">To</Label>
-								<Input id="rpt_to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="h-8 text-sm w-[150px]" />
-							</div>
-							<Button className="h-8 text-sm px-5" onClick={fetchReport} disabled={loading}>
-								Apply
-							</Button>
-						</div>
-					</CardHeader>
+					{/* The tabs: one per page of the system */}
+					<div className="mt-3 flex flex-wrap gap-1.5">
+						{REPORT_TABS.map(t => {
+							const Icon = TAB_ICONS[t.id]
+							const active = t.id === tab
+							return (
+								<button
+									key={t.id}
+									type="button"
+									onClick={() => changeTab(t.id)}
+									className={cn(
+										'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors',
+										active
+											? 'border-brand-green bg-brand-green-50 font-medium text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-400 dark:border-brand-green-600'
+											: 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
+									)}
+								>
+									<Icon className="h-3.5 w-3.5" />
+									{t.title}
+									{t.id !== 'sql' && <span className="opacity-60">{reportsInTab(t.id).length}</span>}
+								</button>
+							)
+						})}
+					</div>
+				</CardHeader>
+			</Card>
+
+			{noCollege ? (
+				<Card>
+					<CardContent className="flex items-center gap-3 p-6 text-sm text-muted-foreground">
+						<Info className="h-5 w-5 shrink-0" />
+						Choose a college in the header first — every report is one library's.
+					</CardContent>
 				</Card>
+			) : tab === 'sql' ? (
+				<Card>
+					<CardContent className="p-4">
+						<div className="mb-3 flex flex-wrap items-center gap-2">
+							<h2 className="text-sm font-semibold">Run SQL</h2>
+							<span className="text-xs text-muted-foreground">
+								A SELECT of your own against {collegeName}. It reads this college's tables only, cannot write, and stops at 5,000 rows or 60 seconds.
+							</span>
+						</div>
+						<SqlRunner institutionId={institutionId} college={collegeName} />
+					</CardContent>
+				</Card>
+			) : (
+				<div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+					{/* The reports of this tab */}
+					<Card className="h-fit">
+						<CardHeader className="px-4 py-3">
+							<div className="flex items-center gap-2">
+								<h2 className="text-sm font-semibold">{currentTab?.title}</h2>
+								<Badge variant="outline" className="text-[10px]">{tabReports.length}</Badge>
+								{currentTab && (
+									<Link href={currentTab.page} className="ml-auto text-[11px] text-muted-foreground hover:text-foreground hover:underline" title="The page this data comes from">
+										open page <ExternalLink className="ml-0.5 inline h-3 w-3" />
+									</Link>
+								)}
+							</div>
+						</CardHeader>
+						<CardContent className="p-2 pt-0">
+							<ul className="space-y-0.5">
+								{tabReports.map(def => {
+									const active = def.id === reportId
+									return (
+										<li key={def.id}>
+											<button
+												type="button"
+												onClick={() => pick(def)}
+												className={cn(
+													'flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+													active ? 'bg-brand-green-50 dark:bg-brand-green-900/30' : 'hover:bg-muted'
+												)}
+											>
+												<ChevronRight className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', active ? 'text-brand-green-700 dark:text-brand-green-400' : 'text-muted-foreground/50')} />
+												<span className="min-w-0">
+													<span className={cn('block text-sm', active ? 'font-medium text-brand-green-700 dark:text-brand-green-400' : '')}>{def.title}</span>
+													<span className="block text-[11px] leading-snug text-muted-foreground">{def.description}</span>
+												</span>
+											</button>
+										</li>
+									)
+								})}
+							</ul>
+							{tab === 'circulation' && (
+								<p className="mt-2 border-t px-2.5 pt-2 text-[11px] text-muted-foreground">
+									The older <Link href="/reports/circulation" className="underline hover:text-foreground">circulation summary page</Link> is still there too.
+								</p>
+							)}
+						</CardContent>
+					</Card>
 
-				{/* NAAC 4.2 Collection Metrics — row 1 */}
-				<div className="space-y-2">
-					<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-						<BookMarked className="h-3.5 w-3.5" />Collection Metrics
-					</p>
-					<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-						<Scorecard label="Total Volumes" value={r?.total_volumes ?? 0} icon={BookMarked} borderColor="border-l-blue-500" iconColor="text-blue-500" loading={loading} />
-						<Scorecard label="Total Titles" value={r?.total_titles ?? 0} icon={BookOpen} borderColor="border-l-indigo-500" iconColor="text-indigo-500" loading={loading} />
-						<Scorecard label="Volumes Added" value={r?.volumes_added_this_year ?? 0} icon={TrendingUp} borderColor="border-l-emerald-500" iconColor="text-emerald-500" loading={loading} />
-						<Scorecard label="Print Journals" value={r?.print_journals_subscribed ?? 0} icon={Newspaper} borderColor="border-l-purple-500" iconColor="text-purple-500" loading={loading} />
-					</div>
-				</div>
-
-				{/* NAAC 4.2 Digital & Access Metrics — row 2 */}
-				<div className="space-y-2">
-					<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-						<MonitorPlay className="h-3.5 w-3.5" />Digital and Access
-					</p>
-					<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-						<Scorecard label="Digital Resources" value={r?.digital_resources_count ?? 0} icon={MonitorPlay} borderColor="border-l-teal-500" iconColor="text-teal-500" loading={loading} />
-						<Scorecard label="INFLIBNET Databases" value={r?.inflibnet_databases ?? 0} icon={Database} borderColor="border-l-cyan-500" iconColor="text-cyan-500" loading={loading} />
-						<Scorecard label="Active Members" value={r?.active_members ?? 0} icon={Users} borderColor="border-l-rose-500" iconColor="text-rose-500" loading={loading} />
-						<Scorecard label="Lending Transactions" value={r?.total_lending_transactions ?? 0} icon={ArrowLeftRight} borderColor="border-l-amber-500" iconColor="text-amber-500" loading={loading} />
-					</div>
-				</div>
-
-				{/* Annual Expenditure */}
-				<div className="space-y-2">
-					<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-						<DollarSign className="h-3.5 w-3.5" />Annual Expenditure
-					</p>
-					<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-						<Scorecard label="Books" value={r?.annual_books_expenditure ?? 0} icon={BookOpen} borderColor="border-l-blue-500" iconColor="text-blue-500" loading={loading} format="currency" />
-						<Scorecard label="Journals" value={r?.annual_journals_expenditure ?? 0} icon={Newspaper} borderColor="border-l-purple-500" iconColor="text-purple-500" loading={loading} format="currency" />
-						<Scorecard label="Digital" value={r?.annual_digital_expenditure ?? 0} icon={MonitorPlay} borderColor="border-l-teal-500" iconColor="text-teal-500" loading={loading} format="currency" />
-						<Card className="border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
-							<CardContent className="p-4">
-								<div className="flex items-center justify-between">
-									<div className="flex-1 min-w-0">
-										{loading ? (
-											<div className="h-7 w-20 bg-muted animate-pulse rounded mb-1" />
-										) : (
-											<p className="text-2xl font-bold tracking-tight text-emerald-600 truncate">
-												₹{(r?.total_annual_expenditure ?? 0).toLocaleString('en-IN')}
-											</p>
-										)}
-										<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Annual</p>
+					{/* The chosen report: filters, Run, result */}
+					<Card className="min-w-0">
+						<CardContent className="min-w-0 space-y-4 p-4">
+							{report ? (
+								<>
+									<div>
+										<h2 className="text-base font-semibold">{report.title}</h2>
+										<p className="text-xs text-muted-foreground">{report.description}</p>
 									</div>
-									<DollarSign className="h-5 w-5 text-emerald-500/40 shrink-0" />
+
+									<div className="flex flex-wrap items-end gap-3">
+										{report.params.map(param => (
+											<ParamField
+												key={param.key}
+												param={param}
+												value={values[param.key] ?? ''}
+												onChange={v => setValues(prev => ({ ...prev, [param.key]: v }))}
+												onEnter={() => { void run() }}
+											/>
+										))}
+										<Button onClick={() => { void run() }} disabled={loading || !ready} className="h-9">
+											{loading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+											Run
+										</Button>
+										{report.params.length === 0 && (
+											<span className="text-xs text-muted-foreground">No filters — this report is the whole picture.</span>
+										)}
+									</div>
+
+									<ReportResult
+										data={data}
+										loading={loading}
+										error={error}
+										detail={detail}
+										money={report.money}
+										context={{ college: collegeName, title: report.title, filters: ranFilters }}
+									/>
+								</>
+							) : (
+								<div className="flex flex-col items-center justify-center gap-1 py-16 text-sm text-muted-foreground">
+									<Info className="h-6 w-6 text-muted-foreground/40" />
+									Pick a report on the left.
 								</div>
-							</CardContent>
-						</Card>
-					</div>
+							)}
+						</CardContent>
+					</Card>
 				</div>
-
-				{/* Footfall */}
-				<div className="space-y-2">
-					<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-						<Calendar className="h-3.5 w-3.5" />Library Footfall
-					</p>
-					<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-						<Scorecard label="Total Annual Visits" value={r?.total_annual_visits ?? 0} icon={Calendar} borderColor="border-l-orange-500" iconColor="text-orange-500" loading={loading} />
-						<Scorecard label="Daily Average Footfall" value={r?.daily_avg_footfall ?? 0} icon={BarChart3} borderColor="border-l-amber-500" iconColor="text-amber-500" loading={loading} format="decimal" />
-					</div>
-				</div>
-
-				{/* Detailed Report Links */}
-				<div className="space-y-2">
-					<p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-						<FileText className="h-3.5 w-3.5" />Detailed Reports
-					</p>
-					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-						{[
-							{ label: 'Accession Register', href: '/registry', icon: BookOpen, color: 'text-blue-600' },
-							// Opens the reports, not the desk. The desk is where books are
-						// issued; this tile is where questions about them are answered.
-						{ label: 'Circulation Summary', href: '/reports/circulation', icon: ArrowLeftRight, color: 'text-indigo-600' },
-							{ label: 'Overdue Analysis', href: '/circulation/overdue', icon: TrendingUp, color: 'text-rose-600' },
-							{ label: 'Budget Utilisation', href: '/acquisition/budget', icon: DollarSign, color: 'text-emerald-600' },
-							{ label: 'Member Statistics', href: '/members', icon: Users, color: 'text-purple-600' },
-							{ label: 'Subscription Status', href: '/periodicals', icon: Newspaper, color: 'text-amber-600' },
-						].map(link => (
-							<Link key={link.href} href={link.href}>
-								<Card className="cursor-pointer hover:shadow-md transition-shadow hover:border-blue-200 group">
-									<CardContent className="p-4 flex items-center gap-3">
-										<div className={`p-2 rounded-md bg-muted group-hover:bg-blue-50 transition-colors`}>
-											<link.icon className={`h-4 w-4 ${link.color}`} />
-										</div>
-										<span className="font-medium text-sm">{link.label}</span>
-									</CardContent>
-								</Card>
-							</Link>
-						))}
-					</div>
-				</div>
-
-			</div>
-		</TooltipProvider>
+			)}
+		</div>
 	)
 }
