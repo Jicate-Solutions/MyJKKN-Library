@@ -24,20 +24,22 @@
  *   * the green Inside badge is the mark-out button; Close day says how many;
  *   * the last five scans sit under the box, so the queue can be checked
  *     without scrolling; a card scanned twice in a minute is one entry;
- *   * an unknown card answers in the big card in red, with a beep if wanted;
+ *   * an unknown card answers in the big card in red — no sound, the
+ *     screen is the whole answer (the beep and its switch went on 5 Sep 2026);
  *   * the register refreshes itself every minute while today is on screen,
  *     paints from this tab's copy on a revisit, and long ranges are summarised
  *     by day and paged;
- *   * every name opens the person on the Members page; the range and the
+ *   * every name opens the person in a side panel, without leaving the door
+ *     (a link to the Members page until 5 Sep 2026); the range and the
  *     search live in the address; the Excel has a by-day sheet.
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import Link from 'next/link'
 import * as XLSX from 'xlsx'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useInstitution } from '@/context/institution-context'
 import { useScanFocus } from '@/hooks/library/use-scan-focus'
+import { MemberPanel, CopyButton, type MemberPanelSubject } from '@/components/library/member-panel'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -54,7 +56,7 @@ import {
 import {
 	RefreshCw, ScanLine, Lock, LogIn, LogOut, Users, Search,
 	CalendarDays, Download, DoorClosed, ChevronLeft, ChevronRight,
-	Volume2, VolumeX, AlertTriangle, X, Building2, UserCheck,
+	AlertTriangle, X, Building2, UserCheck,
 } from 'lucide-react'
 import { istToday, istTimeNow, formatClockTime, durationBetween } from '@/lib/library/ist-clock'
 
@@ -124,6 +126,26 @@ const RECENT_SCANS = 5
 
 /** How often today's register is read again on its own while the tab is showing. */
 const AUTO_REFRESH_MS = 60_000
+
+/**
+ * Telling a scanner from a hand.
+ *
+ * A barcode scanner is a keyboard that types the whole card in one burst and
+ * then stops. Most send a character every few milliseconds; a Bluetooth one,
+ * or one set up with a delay between characters, can take a tenth of a second
+ * each. Fingers reading an ID off a card are slower than either — a librarian
+ * copying "PB25001" leaves a good part of a second between keys, and even a
+ * fast typist rarely gets under 150ms. So a code whose every key arrived
+ * faster than FAST_KEY_MS was scanned, and once the burst has been silent for
+ * SETTLE_MS the card has been read in full and can be recorded without
+ * waiting for an Enter the scanner may never send. A code typed by hand keeps
+ * waiting for Enter, exactly as before.
+ */
+const FAST_KEY_MS = 150
+const SETTLE_MS = 300
+
+/** Shorter than any card number — a burst this short is noise, not a card. */
+const MIN_SCAN_LENGTH = 4
 
 function initials(name: string): string {
 	const parts = name.trim().split(/\s+/)
@@ -241,7 +263,6 @@ function writeView(view: ViewState, today: string): void {
 // ── Remembered between visits ───────────────────────────────────────────────
 
 const REMEMBER_PREFIX = 'lib:gate:'
-const SOUND_KEY = 'lib:gate:sound'
 
 function rememberedToday(key: string): Visit[] | null {
 	try {
@@ -257,29 +278,8 @@ function rememberToday(key: string, rows: Visit[]): void {
 	try { sessionStorage.setItem(REMEMBER_PREFIX + key, JSON.stringify(rows)) } catch { /* full or blocked */ }
 }
 
-// ── A beep, for a door where nobody is looking at the corner of the screen ──
-
-let audio: AudioContext | null = null
-
-function beep(kind: 'in' | 'out' | 'error'): void {
-	try {
-		audio = audio ?? new AudioContext()
-		const osc = audio.createOscillator()
-		const gain = audio.createGain()
-		osc.connect(gain)
-		gain.connect(audio.destination)
-		osc.type = kind === 'error' ? 'square' : 'sine'
-		osc.frequency.value = kind === 'in' ? 880 : kind === 'out' ? 620 : 200
-		gain.gain.value = 0.06
-		osc.start()
-		osc.stop(audio.currentTime + (kind === 'error' ? 0.35 : 0.09))
-	} catch {
-		// No audio on this machine — the screen still says it
-	}
-}
-
 export function GateEntry() {
-	const { isReady, institutionId, institutionCode, appendToUrl, mustSelectInstitution } = useInstitutionFilter()
+	const { isReady, institutionId, appendToUrl, mustSelectInstitution } = useInstitutionFilter()
 	const { availableInstitutions, selectInstitution } = useInstitution()
 	const { toast } = useToast()
 
@@ -292,12 +292,13 @@ export function GateEntry() {
 	const [forbidden, setForbidden] = useState<string | null>(null)
 	const [barcode, setBarcode] = useState('')
 	const [scanning, setScanning] = useState(false)
+	/** The row whose person is open in the side panel. */
+	const [openMember, setOpenMember] = useState<MemberPanelSubject | null>(null)
 	const [last, setLast] = useState<ScanResult | null>(null)
 	const [refused, setRefused] = useState<ScanRefusal | null>(null)
 	const [recent, setRecent] = useState<ScanResult[]>([])
 	const [closingDay, setClosingDay] = useState(false)
 	const [confirmClose, setConfirmClose] = useState(false)
-	const [sound, setSound] = useState(true)
 	const [page, setPage] = useState(1)
 	/** Rows still open on days before today, offered for closing in one press. */
 	const [stale, setStale] = useState<{ count: number; lastDate: string } | null>(null)
@@ -330,19 +331,11 @@ export function GateEntry() {
 	useEffect(() => {
 		setView(readView(today))
 		setViewReady(true)
-		try { setSound(localStorage.getItem(SOUND_KEY) !== 'off') } catch { /* keep default */ }
 	}, [today])
 
 	useEffect(() => {
 		if (viewReady) writeView(view, today)
 	}, [view, viewReady, today])
-
-	const toggleSound = () => {
-		setSound(prev => {
-			try { localStorage.setItem(SOUND_KEY, prev ? 'off' : 'on') } catch { /* fine */ }
-			return !prev
-		})
-	}
 
 	// ── The days on screen ──
 	// The two pickers can never cross: moving one past the other drags the
@@ -551,15 +544,37 @@ export function GateEntry() {
 		})
 	}, [today, institutionId])
 
-	const handleScan = async () => {
-		const code = barcode.trim()
-		if (!code || scanning) return
+	// ── The scan box: a scanner's burst records itself, a hand waits for Enter ──
+	/** When the last character landed in the box. */
+	const lastKeyAt = useRef(0)
+	/** Set the moment any key arrives at a human pace; cleared when the box empties. */
+	const typedByHand = useRef(false)
+	/** The wait for the burst to finish, so the card is not recorded half-read. */
+	const settle = useRef<ReturnType<typeof setTimeout> | null>(null)
+	/** A scan in flight, readable from inside a timer that captured an older render. */
+	const inFlight = useRef(false)
+
+	const clearSettle = () => {
+		if (settle.current) clearTimeout(settle.current)
+		settle.current = null
+	}
+
+	// A pending burst must not fire into a screen that has gone
+	useEffect(() => clearSettle, [])
+
+	const handleScan = async (explicit?: string) => {
+		// Whether Enter, Tab, the button or the burst timer asked, only one scan
+		// of this code goes — the others find it already in flight
+		clearSettle()
+		const code = (explicit ?? barcode).trim()
+		if (!code || inFlight.current) return
 		if (!institutionId) {
 			toast({ title: 'Choose the college first', variant: 'destructive' })
 			return
 		}
 
 		try {
+			inFlight.current = true
 			setScanning(true)
 			const res = await fetch('/api/lib/visits/scan', {
 				method: 'POST',
@@ -572,14 +587,12 @@ export function GateEntry() {
 				// missed and the queue moves on
 				setLast(null)
 				setRefused({ message: data.error || 'Scan failed', repeat: data.repeat === true, member: data.member })
-				if (sound) beep('error')
 				return
 			}
 
 			setRefused(null)
 			setLast(data)
 			setRecent(prev => [data, ...prev].slice(0, RECENT_SCANS))
-			if (sound) beep(data.direction)
 			if (!data.member.is_active) {
 				toast({
 					title: '⚠️ Membership is not active',
@@ -593,12 +606,41 @@ export function GateEntry() {
 		} catch (err) {
 			setLast(null)
 			setRefused({ message: err instanceof Error ? err.message : 'Scan failed', repeat: false })
-			if (sound) beep('error')
 		} finally {
 			setBarcode('')
+			typedByHand.current = false
+			inFlight.current = false
 			setScanning(false)
 			// Straight back to the box — the next student is already at the door
 			focusScanBox()
+		}
+	}
+
+	const onBarcodeChange = (value: string) => {
+		const now = performance.now()
+		clearSettle()
+
+		if (!value) {
+			// Emptied — whatever comes next starts clean
+			typedByHand.current = false
+			setBarcode('')
+			return
+		}
+
+		if (!barcode) {
+			// The first character of a new code
+			typedByHand.current = false
+		} else if (now - lastKeyAt.current >= FAST_KEY_MS) {
+			// A pause no scanner makes: somebody is typing
+			typedByHand.current = true
+		}
+		lastKeyAt.current = now
+		setBarcode(value)
+
+		// A burst, and long enough to be a card: record it the moment it stops.
+		// A code pasted in whole arrives the same way, and means the same thing.
+		if (!typedByHand.current && value.trim().length >= MIN_SCAN_LENGTH) {
+			settle.current = setTimeout(() => handleScan(value), SETTLE_MS)
 		}
 	}
 
@@ -651,7 +693,7 @@ export function GateEntry() {
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement | null
-			if (e.key === 'Escape' && target === inputRef.current) { setBarcode(''); return }
+			if (e.key === 'Escape' && target === inputRef.current) { clearSettle(); typedByHand.current = false; setBarcode(''); return }
 			const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
 			if (e.key === '/' && !typing) { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return }
 			if (typing || confirmClose) return
@@ -762,39 +804,27 @@ export function GateEntry() {
 									<Input
 										ref={inputRef}
 										autoFocus
-										placeholder="Scan the college ID card, or type the ID and press Enter"
+										placeholder="Scan the college ID card — it records by itself. Or type the ID and press Enter"
 										value={barcode}
-										onChange={e => setBarcode(e.target.value)}
-										onKeyDown={e => { if (e.key === 'Enter') handleScan() }}
+										onChange={e => onBarcodeChange(e.target.value)}
+										// Some scanners end a card with Tab instead of Enter; at
+										// the door both mean "that was the whole card"
+										onKeyDown={e => {
+											if (e.key === 'Enter') handleScan()
+											if (e.key === 'Tab' && barcode.trim()) { e.preventDefault(); handleScan() }
+										}}
 										// Held rather than disabled: a disabled box loses the
 										// cursor, and the next card would scan into nothing
 										readOnly={scanning}
 										className="h-11 text-base min-w-0"
 									/>
-									{/* Which register this scan goes into — always in view */}
-									{institutionCode && (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<Badge variant="secondary" className="h-7 shrink-0 font-mono">{institutionCode}</Badge>
-											</TooltipTrigger>
-											<TooltipContent>Scanning for {institutionCode}</TooltipContent>
-										</Tooltip>
-									)}
 									<Button
-										onClick={handleScan}
+										onClick={() => handleScan()}
 										disabled={scanning || !barcode.trim()}
 										className="h-11 px-4 sm:px-6 shrink-0 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
 									>
 										{scanning ? 'Working...' : 'Record'}
 									</Button>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={toggleSound} aria-label={sound ? 'Turn the beep off' : 'Turn the beep on'}>
-												{sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-muted-foreground" />}
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent>{sound ? 'Beep on every scan — click to silence' : 'Silent — click for a beep on every scan'}</TooltipContent>
-									</Tooltip>
 								</div>
 							) : (
 								<div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground py-2">
@@ -1103,20 +1133,34 @@ export function GateEntry() {
 										) : paged.map(v => (
 											<TableRow key={v.id} className="hover:bg-muted/50">
 												<TableCell className="text-sm">
-													{/* The name opens the person — loans, fines, visits — on the Members page */}
-													{v.myjkkn_id && v.person_kind ? (
-														<Link
-															href={`/members?open=${encodeURIComponent(`${v.person_kind}:${v.myjkkn_id}`)}`}
-															className="font-medium hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
+													{/* The name opens the person — loans, fines, visits — right here,
+													    without leaving the door; the next card still scans */}
+													{v.myjkkn_id && v.person_kind && v.institution_id ? (
+														<button
+															type="button"
+															onClick={() => setOpenMember({
+																id: `${v.person_kind}:${v.myjkkn_id}`,
+																institution_id: v.institution_id as string,
+																display_name: v.member?.display_name ?? '—',
+																member_number: v.member?.member_number ?? null,
+																member_category: v.member?.member_category ?? null,
+																role_label: v.role_label ?? null,
+															})}
+															className="font-medium text-left hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
 														>
 															{v.member?.display_name ?? '—'}
-														</Link>
+														</button>
 													) : (
 														<span className="font-medium">{v.member?.display_name ?? '—'}</span>
 													)}
 													{v.role_label && <div className="text-[11px] text-muted-foreground truncate max-w-[320px]">{v.role_label}</div>}
 												</TableCell>
-												<TableCell className="text-sm text-muted-foreground font-mono">{v.member?.member_number ?? '—'}</TableCell>
+												<TableCell className="text-sm text-muted-foreground font-mono">
+													{/* One click copies the number, as on Members — the icon shows on hover */}
+													{v.member?.member_number
+														? <span className="group inline-flex items-center">{v.member.member_number}<CopyButton value={v.member.member_number} label="number" /></span>
+														: '—'}
+												</TableCell>
 												{mustSelectInstitution && <TableCell className="text-sm">{institutionCodeOf.get(v.institution_id ?? '') ?? '—'}</TableCell>}
 												{!isSingleDay && <TableCell className="text-sm tabular-nums">{shortDate(v.visit_date)}</TableCell>}
 												<TableCell className="text-sm text-muted-foreground hidden sm:table-cell">
@@ -1189,6 +1233,15 @@ export function GateEntry() {
 						</AlertDialogFooter>
 					</AlertDialogContent>
 				</AlertDialog>
+
+				{/* The person behind a row, opened over the register. The desk
+				    hand-over needs one college chosen, as it does on Members. */}
+				<MemberPanel
+					member={openMember}
+					institutionCode={openMember ? (institutionCodeOf.get(openMember.institution_id) ?? null) : null}
+					deskReady={!mustSelectInstitution && !!institutionId}
+					onClose={() => { setOpenMember(null); focusScanBox() }}
+				/>
 			</div>
 		</TooltipProvider>
 	)
