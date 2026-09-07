@@ -77,7 +77,10 @@ export const navGroups: NavGroup[] = [
 	{
 		label: 'Overview',
 		items: [
-			{ title: 'Dashboard', url: '/', icon: LayoutDashboard },
+			// Straight to the page. '/' is a bare spinner outside this layout that
+			// forwards here a moment later, so the whole shell unloaded and came
+			// back like a refresh on every click of this one item.
+			{ title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
 		],
 	},
 	{
@@ -128,7 +131,11 @@ export const navGroups: NavGroup[] = [
 		items: [
 			{ title: 'Reports Dashboard', url: '/reports', icon: BarChart3 },
 			{ title: 'Library Rules', url: '/settings', icon: SlidersHorizontal },
-			{ title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
+			// Shelf Locations (/settings/locations) is hidden from the menu since
+			// 5 Sep 2026, at Deepak's request, until it is wanted. The page and
+			// its API are untouched and still open at the address; put the line
+			// back to show it again:
+			// { title: 'Shelf Locations', url: '/settings/locations', icon: Layers },
 			{ title: 'Activity Log', url: '/activity-log', icon: ScrollText },
 			// Staff Access (/access) is deliberately absent. It is still a live
 			// page and still super_admin's alone — the page guard and its API both

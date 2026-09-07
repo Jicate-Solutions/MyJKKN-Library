@@ -104,9 +104,13 @@ export async function PUT(request: Request) {
 
 		if (error) {
 			console.error('Error saving library settings:', error)
-			if (error.code === '42P01') {
+			// A database that never had the table. Postgres says 42P01; PostgREST,
+			// which answers first from its own picture of the schema, says PGRST205
+			// — so a missing table reached the librarian as a blank "Failed to save"
+			// on every college until both were read as the same thing.
+			if (error.code === '42P01' || error.code === 'PGRST205') {
 				return NextResponse.json(
-					{ error: 'Settings table not created yet — run the pending migration first' },
+					{ error: 'The settings table has not been created in this database yet — run the pending database update (20260811_lib_institution_settings, then 20260904_lib_gate_rescan_seconds) and try again' },
 					{ status: 503 }
 				)
 			}

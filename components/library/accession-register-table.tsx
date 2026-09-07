@@ -649,7 +649,8 @@ export function AccessionRegisterTable({
 											>
 												<TableCell className="text-sm font-mono font-medium">{r.accession_number}</TableCell>
 												<TableCell className="max-w-[300px]">
-													<div className="text-sm font-medium truncate">{r.title}</div>
+													{/* The title reads as the link it is: green and underlined under the pointer, as on Gate Entry */}
+													<div className={`text-sm font-medium truncate transition-colors ${r.catalogue_record_id ? 'group-hover:text-brand-green group-hover:underline dark:group-hover:text-brand-green-400' : ''}`}>{r.title}</div>
 													<div className="text-xs text-muted-foreground truncate">
 														{r.edition && `${r.edition} ed.`}
 														{/* Says plainly that the other copies are separate lines */}
