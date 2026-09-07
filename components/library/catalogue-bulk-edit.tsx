@@ -9,6 +9,13 @@
  * Book ID it is saved under. That id is what lets a line be read as a
  * correction — including a corrected accession number, which an upload sheet
  * could only ever read as a new book.
+ *
+ * Two downloads, cut exactly like the two upload templates: the Books sheet
+ * (Books, Projects, Others) and the Magazine & Journals sheet. One sheet used
+ * to carry all of them together, with every column any of them could have — a
+ * librarian correcting forty journals scrolled past twelve thousand books, and
+ * every journal row carried an Author, a Price and a Total Pages it does not
+ * have. The upload side reads either sheet back, worked out from its headers.
  */
 
 import { useRef, useState } from 'react'
@@ -21,13 +28,30 @@ import { useToast } from '@/hooks/common/use-toast'
 import { FilePenLine, Download, Upload, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
-	TEMPLATE_COLUMNS,
+	editColumnsFor,
 	EDIT_ID_COLUMN,
 	departmentsFor,
 	templateColumnFor,
-	BOOK_TYPE_LABELS,
+	bookTypesForSheet,
+	CATALOGUE_SHEET_LABELS,
 	LANGUAGES,
+	type CatalogueSheetKind,
+	type TemplateColumn,
 } from '@/lib/library/catalogue-options'
+
+/** Both sheets, so an upload can be matched against whichever one it came from. */
+const SHEET_KINDS: CatalogueSheetKind[] = ['books', 'periodicals']
+
+/** Every column either sheet can carry, for reading a file's headers back. */
+const ALL_COLUMNS: TemplateColumn[] = (() => {
+	const byKey = new Map<string, TemplateColumn>()
+	for (const kind of SHEET_KINDS) {
+		for (const column of editColumnsFor(kind)) {
+			if (!byKey.has(column.key)) byKey.set(column.key, column)
+		}
+	}
+	return [...byKey.values()]
+})()
 
 interface RowFailure {
 	row: number
@@ -54,9 +78,6 @@ interface Props {
 	disabled?: boolean
 }
 
-/** Every column of the edit sheet: the Book ID first, then the usual ones. */
-const EDIT_COLUMNS = [EDIT_ID_COLUMN, ...TEMPLATE_COLUMNS]
-
 /** Books per request — same reasoning as the upload side: a bar that moves. */
 const BATCH_SIZE = 50
 
@@ -80,42 +101,49 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 	const [progress, setProgress] = useState({ done: 0, total: 0 })
 	const [result, setResult] = useState<EditResult | null>(null)
 
-	const downloadBooks = async () => {
+	const downloadSheet = async (kind: CatalogueSheetKind) => {
 		if (!institutionId) {
 			toast({ title: '❌ Select a college first', variant: 'destructive' })
 			return
 		}
 
+		const columns = editColumnsFor(kind)
+		const isBooks = kind === 'books'
+		const label = CATALOGUE_SHEET_LABELS[kind]
+
 		try {
-			// Nothing to count while the server is gathering the books, so the bar
+			// Nothing to count while the server is gathering the rows, so the bar
 			// runs without a number until the file is written
 			setBusyTitle('Preparing the sheet')
 			setProgress({ done: 0, total: 0 })
 			setBusy(true)
 
-			const res = await fetch(`/api/lib/catalogue/bulk-edit?institution_id=${institutionId}`)
+			const res = await fetch(`/api/lib/catalogue/bulk-edit?institution_id=${institutionId}&sheet=${kind}`)
 			const data = await res.json()
 
 			if (!res.ok) {
-				toast({ title: '❌ ' + (data.error ?? 'Could not load the books'), variant: 'destructive' })
+				toast({ title: '❌ ' + (data.error ?? 'Could not load the sheet'), variant: 'destructive' })
 				return
 			}
 
 			const rows: Array<Record<string, string>> = data.rows ?? []
 			if (rows.length === 0) {
-				toast({ title: 'No books to edit yet', description: 'Add books first, then come back to edit them in bulk' })
+				toast({
+					title: isBooks ? 'No books to edit yet' : 'No magazines or journals to edit yet',
+					description: `Add ${isBooks ? 'books' : 'magazines or journals'} first, then come back to edit them in bulk`,
+				})
 				return
 			}
 
-			const headers = EDIT_COLUMNS.map(c => c.required ? `${c.header} *` : c.header)
-			const body = rows.map(row => EDIT_COLUMNS.map(c => row[c.key] ?? ''))
+			const headers = columns.map(c => c.required ? `${c.header} *` : c.header)
+			const body = rows.map(row => columns.map(c => row[c.key] ?? ''))
 
-			const books = XLSX.utils.aoa_to_sheet([headers, ...body])
-			books['!cols'] = EDIT_COLUMNS.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
+			const sheet = XLSX.utils.aoa_to_sheet([headers, ...body])
+			sheet['!cols'] = columns.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
 
 			const guide = XLSX.utils.aoa_to_sheet([
 				['Column', 'Must fill?', 'What to write'],
-				...EDIT_COLUMNS.map(c => [c.header, c.required ? 'Yes' : 'Optional', c.note ?? '']),
+				...columns.map(c => [c.header, c.required ? 'Yes' : 'Optional', c.note ?? '']),
 				[],
 				[
 					'Departments',
@@ -124,22 +152,33 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 						? departments.join(', ')
 						: 'Your list is not set up yet — type the department name and it will be accepted',
 				],
-				['Book Types', '', BOOK_TYPE_LABELS.join(', ')],
+				[
+					'Book Types',
+					'',
+					isBooks
+						? 'Books / Projects / Others — magazines and journals are on the Magazine & Journals sheet'
+						: 'Magazine / Journals — books are on the Books sheet',
+				],
 				['Languages', '', LANGUAGES.join(', ')],
 				[],
+				[`This is the ${label} edit sheet. It takes only these Book Types: ${bookTypesForSheet(kind).join(', ')}. A row saying anything else is skipped and reported.`],
 				['Change any field you like and upload this same file back.'],
 				['Never change or delete the Book ID column — that is how each line finds its book.'],
 				['A line you do not want changed can be left exactly as it is, or the whole row deleted.'],
-				['Changing Title or Author moves that copy out of its book and files it under the new name —'],
+				isBooks
+					? ['Changing Title or Author moves that copy out of its book and files it under the new name —']
+					: ['Changing the Title moves that copy out of its title and files it under the new name —'],
 				['the old book\'s copy count drops by one. Every other field is a correction to the book itself.'],
 				['Deleting a row here does not delete the book. Use the register to remove a copy.'],
 			])
 			guide['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 90 }]
 
 			const book = XLSX.utils.book_new()
-			XLSX.utils.book_append_sheet(book, books, 'Books')
+			XLSX.utils.book_append_sheet(book, sheet, isBooks ? 'Books' : 'Magazines & Journals')
 			XLSX.utils.book_append_sheet(book, guide, 'How to edit')
-			XLSX.writeFile(book, 'library-books-bulk-edit.xlsx')
+			XLSX.writeFile(book, isBooks
+				? 'library-books-bulk-edit.xlsx'
+				: 'library-magazine-journal-bulk-edit.xlsx')
 		} catch (err) {
 			toast({
 				title: '❌ Could not build the sheet',
@@ -181,16 +220,38 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 			// A column renamed since a sheet was downloaded is still recognised —
 			// "Edition" and "Edition/Issue" are the same column
 			const headerRow = (grid[0] as unknown[]).map(h => cellToText(h).replace(/\*/g, ''))
-			const keyByIndex = headerRow.map(h => templateColumnFor(EDIT_COLUMNS, h)?.key ?? null)
+			const keyByIndex = headerRow.map(h => templateColumnFor(ALL_COLUMNS, h)?.key ?? null)
 
-			const missing = EDIT_COLUMNS
-				.filter(c => c.required && !keyByIndex.includes(c.key))
-				.map(c => c.header)
+			// Without the Book ID it is an upload sheet, not an edit sheet, and
+			// reading it here would change nothing — said plainly before anything
+			// else is measured
+			if (!keyByIndex.includes(EDIT_ID_COLUMN.key)) {
+				toast({
+					title: '❌ This is not an edit sheet',
+					description: `There is no ${EDIT_ID_COLUMN.header} column. Download the books or the magazines & journals from this menu and edit that file.`,
+					variant: 'destructive',
+				})
+				return
+			}
 
-			if (missing.length > 0) {
+			// Either sheet is accepted, so the file is measured against both and
+			// judged by whichever it is closer to. A Books sheet is then never told
+			// it is missing a Journal/Magazine Type column, nor a magazine sheet an
+			// Author one.
+			const shortfalls = SHEET_KINDS.map(kind => ({
+				kind,
+				missing: editColumnsFor(kind)
+					.filter(c => c.required && !keyByIndex.includes(c.key))
+					.map(c => c.header),
+			}))
+			const closest = shortfalls.reduce((best, next) =>
+				next.missing.length < best.missing.length ? next : best
+			)
+
+			if (closest.missing.length > 0) {
 				toast({
 					title: '❌ This is not the edit sheet',
-					description: `Missing column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Download the books again and edit that file.`,
+					description: `Closest to the ${CATALOGUE_SHEET_LABELS[closest.kind]} sheet, but missing: ${closest.missing.join(', ')}. Download the sheet again and edit that file.`,
 					variant: 'destructive',
 				})
 				return
@@ -224,7 +285,15 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 				const res = await fetch('/api/lib/catalogue/bulk-edit', {
 					method: 'PUT',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ institution_id: institutionId, rows: batch, row_offset: start }),
+					body: JSON.stringify({
+						institution_id: institutionId,
+						rows: batch,
+						row_offset: start,
+						// Which sheet this file is, worked out from its own headers above.
+						// The server refuses a row that belongs on the other sheet, and it
+						// cannot tell from a bare list of rows which sheet they came from.
+						sheet_kind: closest.kind,
+					}),
 				})
 				const data = await res.json()
 
@@ -289,21 +358,32 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" className="w-72">
 					<DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-						Change many books at once
+						Change many at once
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem onClick={downloadBooks} className="gap-2 py-2.5">
+					{/* Two sheets, cut like the two upload templates: a book has an
+					    ISBN and a department, a magazine or journal an ISSN and a
+					    supplier. One sheet would leave a third of every row blank. */}
+					<DropdownMenuItem onClick={() => downloadSheet('books')} className="gap-2 py-2.5">
 						<Download className="h-4 w-4 text-muted-foreground" />
 						<div>
-							<p className="text-sm font-medium">Download books</p>
-							<p className="text-xs text-muted-foreground">Every book in this library, with its Book ID</p>
+							<p className="text-sm font-medium">Download — Books</p>
+							<p className="text-xs text-muted-foreground">Every book, project and other, with its Book ID</p>
 						</div>
 					</DropdownMenuItem>
+					<DropdownMenuItem onClick={() => downloadSheet('periodicals')} className="gap-2 py-2.5">
+						<Download className="h-4 w-4 text-muted-foreground" />
+						<div>
+							<p className="text-sm font-medium">Download — Magazine &amp; Journals</p>
+							<p className="text-xs text-muted-foreground">Every magazine and journal, with its Book ID</p>
+						</div>
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
 					<DropdownMenuItem onClick={() => fileInput.current?.click()} className="gap-2 py-2.5">
 						<Upload className="h-4 w-4 text-muted-foreground" />
 						<div>
 							<p className="text-sm font-medium">Upload edited sheet</p>
-							<p className="text-xs text-muted-foreground">Any number of books in one file</p>
+							<p className="text-xs text-muted-foreground">Either sheet, any number of rows</p>
 						</div>
 					</DropdownMenuItem>
 				</DropdownMenuContent>
@@ -322,7 +402,7 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 						<DialogDescription>
 							{result && (
 								<>
-									<span className="font-medium text-emerald-700">{result.updated}</span> book{result.updated !== 1 ? 's' : ''} updated
+									<span className="font-medium text-emerald-700">{result.updated}</span> {result.updated !== 1 ? 'rows' : 'row'} updated
 									{/* A moved copy is the one change that alters another book's
 									    count, so it is said out loud rather than left to be noticed */}
 									{result.moved > 0 && (

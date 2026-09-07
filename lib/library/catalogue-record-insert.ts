@@ -67,3 +67,39 @@ export async function insertCatalogueRecord(
 		? { id: null, error: second.error }
 		: { id: (second.data as { id: string }).id, error: null }
 }
+
+/**
+ * Corrects one catalogue title, with the same bridge.
+ *
+ * Bulk edit writes `periodical_scope` back for every magazine and journal on
+ * its sheet. On a database that has not run the migration that would refuse
+ * every one of those rows — so the write is tried without the column instead,
+ * and the rest of the correction still lands.
+ */
+export async function updateCatalogueRecord(
+	supabase: Supabase,
+	recordId: string,
+	institutionId: string,
+	values: Record<string, unknown>
+): Promise<{ error: { code?: string; message?: string } | null }> {
+	const write = (row: Record<string, unknown>) =>
+		supabase.from('lib_catalogue_records').update(row).eq('id', recordId).eq('institution_id', institutionId)
+
+	const first = await write(values)
+	if (!first.error) return { error: null }
+
+	const column = missingColumn(first.error)
+	if (!column) return { error: first.error }
+
+	if (!warned) {
+		warned = true
+		console.warn(
+			`[catalogue] This library's database has no ${column} column yet — run the pending database update. ` +
+			'Titles are being saved without it.'
+		)
+	}
+
+	const { [column]: _dropped, ...rest } = values
+	const second = await write(rest)
+	return { error: second.error }
+}

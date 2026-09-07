@@ -590,8 +590,9 @@ export function templateColumnsForBookType(bookType: string): TemplateColumn[] {
  *   * Reference Only — magazines and journals never circulate, so it is not a
  *     choice on the form and must not become one on the sheet.
  *
- * Only the upload sheet is cut this way. Bulk edit still carries the full set,
- * because editing an existing row is a different job from creating one.
+ * The bulk edit sheets are cut the same way — see `editColumnsFor` — so a
+ * magazine is downloaded, corrected and uploaded with exactly the columns it
+ * was entered with.
  */
 const PERIODICAL_UPLOAD_SKIP_KEYS: string[] = [
 	'accession_number',
@@ -604,8 +605,8 @@ const PERIODICAL_UPLOAD_SKIP_KEYS: string[] = [
 /**
  * National or International, on the sheet as on the form.
  *
- * Added to the upload sheet only. Bulk edit keeps the column set it had — see
- * the note above.
+ * On the Magazine & Journals sheets — upload and edit alike — and never on the
+ * Books sheets, where the question does not apply.
  */
 export const PERIODICAL_SCOPE_COLUMN: TemplateColumn = {
 	key: 'periodical_scope',
@@ -680,4 +681,27 @@ export const EDIT_ID_COLUMN: TemplateColumn = {
 	header: 'Book ID',
 	required: true,
 	note: 'Given by the system. Do not change or delete it — it is how the edit finds the book.',
+}
+
+/**
+ * The two edit sheets: the Book ID, then exactly the columns of the matching
+ * upload sheet.
+ *
+ * One edit sheet used to carry every book, magazine and journal together with
+ * every column any of them could have. A librarian correcting fifty journals
+ * scrolled past twelve thousand books to find them, and every journal row had
+ * an Author, an Edition, a Price and a Total Pages column that meant nothing
+ * for it. Two sheets, cut like the upload ones, so what comes down is what the
+ * librarian asked for and nothing they will have to ignore.
+ */
+export function editColumnsFor(kind: CatalogueSheetKind): TemplateColumn[] {
+	return [EDIT_ID_COLUMN, ...uploadColumnsFor(kind)]
+}
+
+/**
+ * The rules one edited row is judged by, chosen from what the row says it is —
+ * the same rules its upload sheet used, plus the Book ID.
+ */
+export function editColumnsForBookType(bookType: string): TemplateColumn[] {
+	return [EDIT_ID_COLUMN, ...uploadColumnsForBookType(bookType)]
 }

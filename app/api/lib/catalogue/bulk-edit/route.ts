@@ -1,8 +1,9 @@
 /**
  * Bulk edit of books already on the shelf.
  *
- *   GET  /api/lib/catalogue/bulk-edit  — the whole register as sheet rows, each
- *                                        carrying the Book ID it was saved with
+ *   GET  /api/lib/catalogue/bulk-edit?sheet=books|periodicals
+ *        — one side of the register as sheet rows, each carrying the Book ID
+ *          it was saved with
  *   PUT  /api/lib/catalogue/bulk-edit  — those rows back, changed
  *
  * The Book ID is the whole idea. Bulk upload reads a sheet as new books and has
@@ -10,6 +11,12 @@
  * fixing one misspelt author had to open twenty books one at a time. Here every
  * line names the copy it belongs to, so any field on it can be retyped,
  * including the accession number.
+ *
+ * Two sheets, cut exactly like the two upload sheets. The Books sheet carries
+ * Books, Projects and Others with their ISBN, author, price and shelf marks;
+ * the Magazine & Journals sheet carries the periodicals with their ISSN,
+ * supplier and National/International type. A row is judged by the rules its
+ * own sheet used on the way in, so what was accepted then is accepted now.
  *
  * Both directions are pinned to one college by the guard, never by the request,
  * so a librarian downloads their own register and can only write back into it.
@@ -24,19 +31,31 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
 import {
-	TEMPLATE_COLUMNS,
 	EDIT_ID_COLUMN,
-	templateColumnsForBookType,
+	editColumnsForBookType,
 	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
+	isReferenceOnlyForced,
 	isbnRequiredFor,
 	departmentRequiredFor,
 	usesBookOnlyFields,
+	usesTypedAccessionNumber,
+	usesPageCount,
+	usesShelfMarks,
+	usesPeriodicalScope,
+	usesSupplier,
+	periodicalScopeFromLabel,
+	PERIODICAL_SCOPES,
+	sheetTakesBookType,
+	wrongSheetMessage,
+	type CatalogueSheetKind,
 } from '@/lib/library/catalogue-options'
+import { insertCatalogueRecord, updateCatalogueRecord } from '@/lib/library/catalogue-record-insert'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 import { toSheetDate } from '@/lib/library/sheet-date'
+import { supplierLookupFor } from '@/lib/library/supplier-by-name'
 import { logActivity } from '@/lib/library/activity-log'
 
 /** How many books are changed at once. Same reasoning as the upload route. */
@@ -62,6 +81,23 @@ const soft = (value: unknown): string => text(value).toLowerCase().replace(/\s+/
 /** What the shelf calls this copy: a title and an author, nothing else. */
 const bookKey = (title: unknown, author: unknown): string => `${soft(title)}|${soft(author)}`
 
+/** Which sheet a request names, or null for a caller that named neither. */
+function sheetKindOf(value: unknown): CatalogueSheetKind | null {
+	return value === 'books' || value === 'periodicals' ? value : null
+}
+
+/**
+ * The two sheets split the register between them, exactly, by Book Type.
+ *
+ * Written as a filter on the joined title so the database does the splitting:
+ * a college with twelve thousand books must not read all of them to hand over
+ * its forty journals. The two filters are complements of one another, so every
+ * copy is on one sheet and none is on both — a title with no type at all is a
+ * book, as it is everywhere else in the register.
+ */
+const PERIODICAL_FILTER = 'book_type.ilike.magazine,book_type.ilike.journals'
+const BOOK_FILTER = 'book_type.is.null,and(book_type.not.ilike.magazine,book_type.not.ilike.journals)'
+
 interface ItemOnShelf {
 	id: string
 	accession_number: string
@@ -71,16 +107,23 @@ interface ItemOnShelf {
 }
 
 /**
- * Checks one row against the rules the form and the upload sheet use.
+ * Checks one row against the rules its upload sheet used.
  * Returns the error message, or null when the row is good.
  */
-function validateRow(row: IncomingRow, institutionCode: string | null): string | null {
+function validateRow(row: IncomingRow, institutionCode: string | null, sheetKind: CatalogueSheetKind | null): string | null {
 	const bookType = text(row.book_type)
+
+	// Each sheet takes one kind of material and refuses the other, as the upload
+	// sheets do. A magazine retyped as "Books" on the periodicals sheet would
+	// otherwise be asked for an ISBN the sheet has no column for.
+	if (sheetKind && bookType && !sheetTakesBookType(sheetKind, bookType)) {
+		return wrongSheetMessage(sheetKind)
+	}
 
 	// Judged by what the row is, exactly as the upload sheet judges it — a
 	// magazine that was allowed in without a department must not be refused when
 	// it comes back through bulk edit.
-	for (const column of templateColumnsForBookType(bookType)) {
+	for (const column of editColumnsForBookType(bookType)) {
 		if (column.required && !text(row[column.key])) {
 			return `${column.header} is empty`
 		}
@@ -95,8 +138,11 @@ function validateRow(row: IncomingRow, institutionCode: string | null): string |
 		if (isNaN(Number(price)) || Number(price) < 0) return 'Price must be a number'
 	}
 
-	const pages = text(row.pages)
-	if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
+	// A magazine or journal has no page count as a title, and no column for one
+	if (usesPageCount(bookType)) {
+		const pages = text(row.pages)
+		if (isNaN(Number(pages)) || Number(pages) <= 0) return 'Total Pages must be a number'
+	}
 
 	// Read the same way the upload sheet reads it, so a file that goes in one
 	// way is not refused coming back the other
@@ -104,13 +150,21 @@ function validateRow(row: IncomingRow, institutionCode: string | null): string |
 		return 'Date of Adding is not a date — write it as 2026-08-12 or 12-08-2026'
 	}
 
-	if (isbnRequiredFor(text(row.book_type)) && !text(row.isbn)) {
+	if (isbnRequiredFor(bookType) && !text(row.isbn)) {
 		return 'ISBN is empty — books must have one'
 	}
 
-	const lendable = text(row.reference_only).toLowerCase()
-	if (lendable !== 'lendable' && lendable !== 'non-lendable') {
-		return 'Reference Only must be Lendable or Non-lendable'
+	// Magazines and journals never circulate, so this is settled by the material
+	if (!isReferenceOnlyForced(bookType)) {
+		const lendable = text(row.reference_only).toLowerCase()
+		if (lendable !== 'lendable' && lendable !== 'non-lendable') {
+			return 'Reference Only must be Lendable or Non-lendable'
+		}
+	}
+
+	// National or International, and only those two
+	if (usesPeriodicalScope(bookType) && !periodicalScopeFromLabel(row.periodical_scope)) {
+		return `Journal/Magazine Type must be ${PERIODICAL_SCOPES.join(' or ')}`
 	}
 
 	const department = text(row.department)
@@ -122,7 +176,8 @@ function validateRow(row: IncomingRow, institutionCode: string | null): string |
 }
 
 /**
- * The register as a sheet: one row per physical copy, each with its Book ID.
+ * One side of the register as a sheet: one row per physical copy, each with
+ * its Book ID.
  */
 export async function GET(request: Request) {
 	try {
@@ -135,26 +190,42 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Select a college first' }, { status: 400 })
 		}
 
+		// An older screen asking for no sheet gets the books, which is what its
+		// column set could carry
+		const sheetKind: CatalogueSheetKind = sheetKindOf(searchParams.get('sheet')) ?? 'books'
+
 		const supabase = getSupabaseServer()
 
 		// Sliced: one request returns at most a thousand rows, and a sheet that
 		// quietly stopped at the thousandth book would be edited as if the rest
 		// of the library did not exist.
-		const { data, error } = await fetchAllRows(range =>
+		//
+		// `periodical_scope` arrives with a migration that may not have been run
+		// — see catalogue-record-insert. Asked for first; if the database has no
+		// such column the register is read again without it, and the sheet's
+		// Journal/Magazine Type column simply comes down blank.
+		const read = (withScope: boolean) => fetchAllRows(range =>
 			supabase
 				.from('lib_items')
 				.select(`
 					id, accession_number, accession_date, price, is_lendable,
-					catalogue:lib_catalogue_records(
+					supplier:lib_suppliers(supplier_name),
+					catalogue:lib_catalogue_records!inner(
 						title, subtitle, author, edition, publisher_name, publisher_place,
 						publication_year, book_type, isbn, issn, language, pages, price,
-						call_number, classification_number, department, book_location
+						call_number, classification_number, department, book_location${withScope ? ', periodical_scope' : ''}
 					)
 				`)
 				.eq('institution_id', institutionId)
+				.or(sheetKind === 'periodicals' ? PERIODICAL_FILTER : BOOK_FILTER, { referencedTable: 'catalogue' })
 				.order('accession_number', { ascending: true })
 				.range(range.from, range.to)
 		)
+
+		let { data, error } = await read(true)
+		if (error && (error as { code?: string }).code === '42703') {
+			({ data, error } = await read(false))
+		}
 
 		if (error) {
 			console.error('Error loading the register for bulk edit:', error)
@@ -163,6 +234,7 @@ export async function GET(request: Request) {
 
 		const rows = (data || []).map(item => {
 			const catalogue = (item.catalogue ?? {}) as unknown as Record<string, unknown>
+			const supplier = (item.supplier ?? {}) as unknown as Record<string, unknown>
 			return {
 				id: item.id,
 				accession_number: item.accession_number ?? '',
@@ -172,10 +244,13 @@ export async function GET(request: Request) {
 				edition: text(catalogue.edition),
 				publisher_name: text(catalogue.publisher_name),
 				publisher_place: text(catalogue.publisher_place),
+				// The vendor this copy came from, by name — what the sheet asks for
+				supplier: text(supplier.supplier_name),
 				publication_year: text(catalogue.publication_year),
 				// The copy's own price, falling back to what the title was bought at
 				price: text(item.price ?? catalogue.price),
 				book_type: text(catalogue.book_type),
+				periodical_scope: text(catalogue.periodical_scope),
 				isbn: text(catalogue.isbn),
 				issn: text(catalogue.issn),
 				language: text(catalogue.language),
@@ -190,7 +265,7 @@ export async function GET(request: Request) {
 			}
 		})
 
-		return NextResponse.json({ rows, total: rows.length })
+		return NextResponse.json({ rows, total: rows.length, sheet: sheetKind })
 	} catch (error) {
 		console.error('Unexpected error building the bulk edit sheet:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -214,6 +289,11 @@ export async function PUT(request: Request) {
 		}
 		// No ceiling here either: the sheet that came down carries the whole
 		// library, so the one going back up must be allowed to carry it too.
+
+		// Which sheet the file is, worked out by the screen from the file's own
+		// headers. A caller naming neither leaves each row judged by what it says
+		// it is.
+		const sheetKind = sheetKindOf(body.sheet_kind)
 
 		const supabase = getSupabaseServer()
 
@@ -256,14 +336,19 @@ export async function PUT(request: Request) {
 			}
 			seenId.set(bookId.toLowerCase(), rowNumber)
 
-			const earlierAccession = seenAccession.get(accession.toLowerCase())
-			if (earlierAccession) {
-				fail(`Accession number repeats row ${earlierAccession} of this sheet`)
-				return
+			// Only for numbers the librarian types. A magazine's JM number is not
+			// on its sheet, so every magazine row would otherwise read as a repeat
+			// of the one before it.
+			if (usesTypedAccessionNumber(text(row.book_type))) {
+				const earlierAccession = seenAccession.get(accession.toLowerCase())
+				if (earlierAccession) {
+					fail(`Accession number repeats row ${earlierAccession} of this sheet`)
+					return
+				}
+				seenAccession.set(accession.toLowerCase(), rowNumber)
 			}
-			seenAccession.set(accession.toLowerCase(), rowNumber)
 
-			const problem = validateRow(row, institutionCode)
+			const problem = validateRow(row, institutionCode, sheetKind)
 			if (problem) fail(problem)
 			else valid.push({ row: rowNumber, data: row })
 		})
@@ -309,8 +394,10 @@ export async function PUT(request: Request) {
 		// An accession number moved onto a book that is not in this sheet would
 		// collide with the book already holding it. Caught here so the row is
 		// reported by number rather than failing later as a database error.
-		if (valid.length > 0) {
-			const numbers = valid.map(v => text(v.data.accession_number))
+		// Typed numbers only: a magazine keeps the JM number it was allotted.
+		const typedRows = valid.filter(v => usesTypedAccessionNumber(text(v.data.book_type)))
+		if (typedRows.length > 0) {
+			const numbers = typedRows.map(v => text(v.data.accession_number))
 			const { data: existing } = await supabase
 				.from('lib_items')
 				.select('id, accession_number')
@@ -322,6 +409,7 @@ export async function PUT(request: Request) {
 			)
 
 			for (let i = valid.length - 1; i >= 0; i--) {
+				if (!usesTypedAccessionNumber(text(valid[i].data.book_type))) continue
 				const bookId = text(valid[i].data[EDIT_ID_COLUMN.key])
 				const accession = text(valid[i].data.accession_number)
 				const holder = holderByNumber.get(accession.toLowerCase())
@@ -336,6 +424,13 @@ export async function PUT(request: Request) {
 				}
 			}
 		}
+
+		// This college's vendors, read once for the whole batch and only when a
+		// row on it carries a supplier — the Books sheet has no such column, and a
+		// sheet of books must not pay for a vendor list it will never look at.
+		const suppliers = valid.some(v => usesSupplier(text(v.data.book_type)))
+			? await supplierLookupFor(supabase, institutionId)
+			: null
 
 		let updated = 0
 		let movedOut = 0
@@ -363,16 +458,29 @@ export async function PUT(request: Request) {
 				for (const { row, data } of chain) {
 					const bookId = text(data[EDIT_ID_COLUMN.key])
 					const item = onShelf.get(bookId) as ItemOnShelf
-					const accession = text(data.accession_number)
 					const bookType = text(data.book_type)
-					const referenceOnly = isReferenceOnlyFromLabel(text(data.reference_only))
 
-					// The edit sheet carries every book on the shelf, so it keeps the
-					// author, issue and price columns for the books that have them.
-					// A magazine or journal row leaves them empty, and empty is what
-					// is written — not 0, and not a blank string.
+					// A typed number is a correction; an allotted JM number is not on
+					// the sheet and stays what it is
+					const typedAccession = usesTypedAccessionNumber(bookType)
+					const accession = typedAccession ? text(data.accession_number) : item.accession_number
+
+					// Never circulates, so it is not read from the sheet: the column
+					// is not on the magazine sheet at all
+					const referenceOnly = isReferenceOnlyForced(bookType)
+						|| isReferenceOnlyFromLabel(text(data.reference_only))
+
+					// Written exactly as the Add Title form and the upload sheet write
+					// them: a magazine or journal keeps no author, issue, price, page
+					// count or class mark, and empty is what is written — not 0, and
+					// not a blank string.
 					const bookOnly = usesBookOnlyFields(bookType)
 					const price = bookOnly && text(data.price) ? Number(text(data.price)) : null
+					const pageCount = usesPageCount(bookType) ? Number(text(data.pages)) : null
+					const shelfMarks = usesShelfMarks(bookType)
+					const periodicalScope = usesPeriodicalScope(bookType)
+						? periodicalScopeFromLabel(data.periodical_scope)
+						: null
 
 					const identity = {
 						title: text(data.title),
@@ -397,13 +505,14 @@ export async function PUT(request: Request) {
 						edition: identity.edition || null,
 						publication_year: identity.publication_year,
 						language: text(data.language) || 'English',
-						classification_number: text(data.classification_number) || null,
-						call_number: text(data.call_number) || null,
+						classification_number: shelfMarks ? (text(data.classification_number) || null) : null,
+						call_number: shelfMarks ? (text(data.call_number) || null) : null,
+						periodical_scope: periodicalScope,
 						publisher_name: identity.publisher_name || null,
 						publisher_place: identity.publisher_place || null,
-						pages: Number(text(data.pages)),
+						pages: pageCount,
 						price,
-						department: text(data.department),
+						department: text(data.department) || null,
 						book_location: text(data.book_location) || null,
 						is_reference_only: referenceOnly,
 					}
@@ -416,14 +525,12 @@ export async function PUT(request: Request) {
 					if (sameBook) {
 						// Still the same book, so the rest of the line is a correction to
 						// it — and to every copy of it, which is what a shared record means.
-						const { error: updateError } = await supabase
-							.from('lib_catalogue_records')
-							.update(bookFields)
-							.eq('id', item.catalogue_record_id)
-							.eq('institution_id', institutionId)
+						const { error: updateError } = await updateCatalogueRecord(
+							supabase, item.catalogue_record_id, institutionId, bookFields
+						)
 
 						if (updateError) {
-							outcomes.push({ row, book_id: bookId, accession_number: accession, error: updateError.message })
+							outcomes.push({ row, book_id: bookId, accession_number: accession, error: updateError.message ?? 'Could not save the correction' })
 							continue
 						}
 					} else {
@@ -435,18 +542,14 @@ export async function PUT(request: Request) {
 						if (existing && existing.id !== item.catalogue_record_id) {
 							targetRecordId = existing.id
 						} else {
-							const { data: record, error: recordError } = await supabase
-								.from('lib_catalogue_records')
-								.insert({
-									institution_id: institutionId,
-									...bookFields,
-									currency_code: 'INR',
-									is_active: true,
-								})
-								.select('id')
-								.single()
+							const { id: recordId, error: recordError } = await insertCatalogueRecord(supabase, {
+								institution_id: institutionId,
+								...bookFields,
+								currency_code: 'INR',
+								is_active: true,
+							})
 
-							if (recordError || !record) {
+							if (recordError || !recordId) {
 								outcomes.push({
 									row,
 									book_id: bookId,
@@ -456,7 +559,7 @@ export async function PUT(request: Request) {
 								continue
 							}
 
-							targetRecordId = record.id
+							targetRecordId = recordId
 
 							// The registry list and author search read the joined table
 							if (identity.author) {
@@ -478,6 +581,13 @@ export async function PUT(request: Request) {
 						accession_date: toSheetDate(data.accession_date),
 						price,
 						is_lendable: !referenceOnly,
+					}
+
+					// The vendor named on the sheet, added to this college's list the
+					// first time it appears; blank means none. Only a magazine or
+					// journal row carries the column, so a book's supplier is left alone.
+					if (suppliers && usesSupplier(bookType)) {
+						copyFields.supplier_id = await suppliers.resolve(data.supplier)
 					}
 
 					if (moved) {
@@ -531,6 +641,7 @@ export async function PUT(request: Request) {
 			error_message: failures.length > 0 ? `${failures.length} row(s) were not changed` : null,
 			metadata: {
 				edit: true,
+				sheet: sheetKind,
 				records_count: updated,
 				moved_to_another_title: movedOut,
 				error_count: failures.length,
