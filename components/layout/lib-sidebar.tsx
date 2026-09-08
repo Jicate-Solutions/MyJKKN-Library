@@ -25,8 +25,7 @@ import {
 	Recycle,
 	ArrowLeftRight,
 	Wrench,
-	PanelLeftClose,
-	PanelLeft,
+	LogOut,
 	Crown,
 	ScanLine,
 	SlidersHorizontal,
@@ -52,7 +51,18 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ChevronRight } from 'lucide-react'
+import { useAuth } from '@/lib/auth/auth-context'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { isMemberAllowedPage } from '@/lib/auth/member-access'
 import { canOpenPath } from '@/lib/auth/role-pages'
@@ -185,9 +195,27 @@ export function visibleNavGroups(
 
 export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const pathname = usePathname()
-	const { toggleSidebar, state } = useSidebar()
+	const { state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
 	const { isMember, role, pages } = useLibraryRole()
+	const { logout } = useAuth()
+
+	// The foot of the sidebar is Log out (it was Collapse until 8 Sep 2026; the
+	// header's arrow still folds the sidebar). Asked twice on purpose — a
+	// librarian mid-queue must not lose the desk to one stray click.
+	const [confirmLogout, setConfirmLogout] = React.useState(false)
+	const [loggingOut, setLoggingOut] = React.useState(false)
+
+	const handleLogout = async () => {
+		try {
+			setLoggingOut(true)
+			await logout()
+		} catch (error) {
+			console.error('Logout error:', error)
+			setLoggingOut(false)
+			setConfirmLogout(false)
+		}
+	}
 
 	const visibleGroups = React.useMemo(
 		() => visibleNavGroups(role, isMember, pages),
@@ -280,19 +308,36 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 			<SidebarFooter className="border-t border-sidebar-border">
 				<button
 					type="button"
-					onClick={toggleSidebar}
+					onClick={() => setConfirmLogout(true)}
 					className="flex items-center justify-center gap-2 w-full p-2 rounded-md hover:bg-sidebar-accent transition-colors text-sidebar-foreground"
-					title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+					title="Log out"
 				>
-					{isCollapsed ? (
-						<PanelLeft className="h-5 w-5 text-blue-600" />
-					) : (
-						<>
-							<PanelLeftClose className="h-5 w-5 text-blue-600" />
-							<span className="text-sm font-medium text-slate-600 dark:text-slate-300">Collapse</span>
-						</>
+					<LogOut className="h-5 w-5 text-blue-600" />
+					{!isCollapsed && (
+						<span className="text-sm font-medium text-slate-600 dark:text-slate-300">Logout</span>
 					)}
 				</button>
+
+				<AlertDialog open={confirmLogout} onOpenChange={open => { if (!loggingOut) setConfirmLogout(open) }}>
+					<AlertDialogContent className="sm:max-w-[400px]">
+						<AlertDialogHeader>
+							<AlertDialogTitle>Log out?</AlertDialogTitle>
+							<AlertDialogDescription>
+								You will be signed out of the library and taken to the login page.
+							</AlertDialogDescription>
+						</AlertDialogHeader>
+						<AlertDialogFooter>
+							<AlertDialogCancel disabled={loggingOut}>No</AlertDialogCancel>
+							<AlertDialogAction
+								onClick={e => { e.preventDefault(); handleLogout() }}
+								disabled={loggingOut}
+								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+							>
+								{loggingOut ? 'Logging out…' : 'Yes, log out'}
+							</AlertDialogAction>
+						</AlertDialogFooter>
+					</AlertDialogContent>
+				</AlertDialog>
 			</SidebarFooter>
 			<SidebarRail />
 		</Sidebar>
