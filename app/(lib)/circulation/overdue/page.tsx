@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import {
 	AlertTriangle, Clock, Timer, AlarmClock,
 	Search, RefreshCw, ChevronLeft, ChevronRight,
@@ -253,7 +254,7 @@ export default function OverduePage() {
 														<div className="text-xs text-muted-foreground">{t.member?.member_number}</div>
 													</TableCell>
 													<TableCell className="max-w-[200px]">
-														<div className="truncate text-sm">{t.item?.catalogue_record?.title ?? t.item_id}</div>
+														<OverflowText as="div" text={t.item?.catalogue_record?.title ?? t.item_id} className="text-sm" />
 														<div className="text-xs text-muted-foreground">{t.item?.accession_number}</div>
 													</TableCell>
 													<TableCell className="text-sm text-red-600 font-medium">
@@ -309,7 +310,7 @@ export default function OverduePage() {
 												{days}d overdue
 											</Badge>
 										</div>
-										<p className="text-sm truncate">{t.item?.catalogue_record?.title ?? t.item_id}</p>
+										<OverflowText as="p" text={t.item?.catalogue_record?.title ?? t.item_id} className="text-sm" />
 										<div className="flex items-center justify-between text-xs">
 											<span className="text-red-600 font-medium">Due: {new Date(t.due_date).toLocaleDateString('en-IN')}</span>
 											<span className="font-medium">₹{(t.late_charge_amount ?? 0).toFixed(2)}</span>

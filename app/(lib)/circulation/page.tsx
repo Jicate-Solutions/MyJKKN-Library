@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Switch } from '@/components/ui/switch'
 import { BarcodeScannerInput } from '@/components/library/barcode-scanner-input'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
@@ -277,7 +278,7 @@ function MemberLoansPanel({
 				{loans.map(loan => (
 					<div key={loan.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
 						<div className="min-w-0 flex-1">
-							<p className="truncate text-sm font-medium">{loan.title}</p>
+							<OverflowText as="p" text={loan.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{loan.accession_number && <span className="font-mono">{loan.accession_number}</span>}
 								<span>Taken {asDate(loan.issued_at)}</span>
@@ -379,7 +380,7 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
 				{holds.map(hold => (
 					<div key={hold.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
 						<div className="min-w-0 flex-1">
-							<p className="truncate text-sm font-medium">{hold.title}</p>
+							<OverflowText as="p" text={hold.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{hold.call_number && <span className="font-mono">{hold.call_number}</span>}
 								<span>Since {asDate(hold.hold_placed_at)}</span>
@@ -444,7 +445,7 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 				{charges.map(charge => (
 					<div key={charge.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
 						<div className="min-w-0 flex-1">
-							<p className="truncate text-sm font-medium">{charge.title}</p>
+							<OverflowText as="p" text={charge.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{charge.accession_number && <span className="font-mono">{charge.accession_number}</span>}
 								{charge.due_date && <span>Was due {asDate(charge.due_date)}</span>}
@@ -1029,7 +1030,7 @@ function IssueTab({
 							{issued.map((line, index) => (
 								<div key={line.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
 									<span className="w-5 shrink-0 text-xs text-muted-foreground">{index + 1}.</span>
-									<span className="min-w-0 flex-1 truncate font-medium">{line.title}</span>
+									<OverflowText text={line.title} className="min-w-0 flex-1 font-medium" />
 									<span className="font-mono text-xs text-muted-foreground">{line.accession_number}</span>
 									<span className="text-xs text-muted-foreground">Due {asDate(line.due_date)}</span>
 								</div>
@@ -1149,7 +1150,7 @@ function DoneNowCard({
 						return (
 							<div key={line.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
 								<span className="w-5 shrink-0 text-xs text-muted-foreground">{index + 1}.</span>
-								<span className="min-w-0 flex-1 truncate font-medium">{line.title}</span>
+								<OverflowText text={line.title} className="min-w-0 flex-1 font-medium" />
 								{line.accession_number && <span className="font-mono text-xs text-muted-foreground">{line.accession_number}</span>}
 								<span className="truncate text-xs text-muted-foreground">{line.member_name}</span>
 								{kind === 'return' ? (
@@ -1277,7 +1278,7 @@ function ReturnTab({
 							</div>
 							<div>
 								<p className="text-xs text-muted-foreground">Item</p>
-								<p className="font-medium mt-0.5 truncate">{loanItemTitle(transaction)}</p>
+								<OverflowText as="p" text={loanItemTitle(transaction)} className="font-medium mt-0.5" />
 							</div>
 							<div>
 								<p className="text-xs text-muted-foreground">Issued</p>
@@ -1415,7 +1416,7 @@ function RenewTab({
 							</div>
 							<div>
 								<p className="text-xs text-muted-foreground">Item</p>
-								<p className="font-medium mt-0.5 truncate">{loanItemTitle(transaction)}</p>
+								<OverflowText as="p" text={loanItemTitle(transaction)} className="font-medium mt-0.5" />
 							</div>
 							<div>
 								<p className="text-xs text-muted-foreground">Current Due Date</p>

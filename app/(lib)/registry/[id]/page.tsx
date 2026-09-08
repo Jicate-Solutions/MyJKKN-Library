@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -231,8 +232,8 @@ export default function CatalogueDetailPage() {
 					<Link href="/registry"><ArrowLeft className="h-4 w-4" /></Link>
 				</Button>
 				<div className="flex-1 min-w-0">
-					<h1 className="text-lg font-semibold leading-tight truncate">{record.title}</h1>
-					{record.subtitle && <p className="text-sm text-muted-foreground truncate">{record.subtitle}</p>}
+					<OverflowText as="h1" text={record.title} className="text-lg font-semibold leading-tight" />
+					{record.subtitle && <OverflowText as="p" text={record.subtitle} className="text-sm text-muted-foreground" />}
 					<div className="flex flex-wrap gap-1.5 mt-1.5">
 						<Badge variant="secondary" className="capitalize text-xs">{record.resource_format}</Badge>
 						{record.is_reference_only && <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">Reference Only</Badge>}

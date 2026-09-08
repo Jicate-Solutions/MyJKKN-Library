@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import {
 	BookOpen, BookMarked, Library, BookLock,
 	MoreHorizontal, Edit, Trash2, Search, RefreshCw,
@@ -650,7 +651,10 @@ export function AccessionRegisterTable({
 												<TableCell className="text-sm font-mono font-medium">{r.accession_number}</TableCell>
 												<TableCell className="max-w-[300px]">
 													{/* The title reads as the link it is: green and underlined under the pointer, as on Gate Entry */}
-													<div className={`text-sm font-medium truncate transition-colors ${r.catalogue_record_id ? 'group-hover:text-brand-green group-hover:underline dark:group-hover:text-brand-green-400' : ''}`}>{r.title}</div>
+													<OverflowText
+														text={r.title}
+														className={`text-sm font-medium transition-colors ${r.catalogue_record_id ? 'group-hover:text-brand-green group-hover:underline dark:group-hover:text-brand-green-400' : ''}`}
+													/>
 													<div className="text-xs text-muted-foreground truncate">
 														{r.edition && `${r.edition} ed.`}
 														{/* Says plainly that the other copies are separate lines */}
@@ -763,7 +767,7 @@ export function AccessionRegisterTable({
 											disabled={!r.catalogue_record_id}
 										>
 											<p className="text-sm font-mono font-semibold">{r.accession_number}</p>
-											<p className="font-medium text-sm truncate mt-0.5">{r.title}</p>
+											<OverflowText text={r.title} className="font-medium text-sm mt-0.5" />
 											<p className="text-xs text-muted-foreground truncate">{byline(r) ?? '—'}</p>
 										</button>
 										<DropdownMenu>

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Textarea } from '@/components/ui/textarea'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -318,7 +319,7 @@ export default function IntercampusPage() {
 										) : paginated.map(r => (
 											<TableRow key={r.id} className="hover:bg-muted/50">
 												<TableCell className="max-w-[180px]">
-													<div className="truncate text-sm font-medium">{r.title}</div>
+													<OverflowText as="div" text={r.title} className="text-sm font-medium" />
 													{r.author && <div className="text-xs text-muted-foreground truncate">{r.author}</div>}
 												</TableCell>
 												<TableCell>
@@ -378,7 +379,7 @@ export default function IntercampusPage() {
 								<div key={r.id} className="rounded-lg border p-4 space-y-2">
 									<div className="flex items-start justify-between">
 										<div>
-											<p className="font-medium text-sm truncate max-w-[200px]">{r.title}</p>
+											<OverflowText as="p" text={r.title} className="font-medium text-sm max-w-[200px]" />
 											<p className="text-xs text-muted-foreground">{r.member?.display_name ?? r.member_id}</p>
 										</div>
 										<DropdownMenu>

@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import {
 	BookCopy, Clock, CheckCircle2, BookCheck,
 	MoreHorizontal, XCircle, Search, RefreshCw,
@@ -243,7 +244,7 @@ export default function HoldsPage() {
 													<div className="text-xs text-muted-foreground">{h.member?.member_number}</div>
 												</TableCell>
 												<TableCell className="max-w-[200px]">
-													<div className="truncate text-sm">{h.catalogue_record?.title ?? h.catalogue_record_id}</div>
+													<OverflowText as="div" text={h.catalogue_record?.title ?? h.catalogue_record_id} className="text-sm" />
 												</TableCell>
 												<TableCell>
 													<Badge variant="outline" className={`text-xs capitalize ${HOLD_STATUS_COLORS[h.hold_status] ?? ''}`}>
@@ -311,7 +312,7 @@ export default function HoldsPage() {
 											</DropdownMenu>
 										)}
 									</div>
-									<p className="text-sm truncate">{h.catalogue_record?.title ?? h.catalogue_record_id}</p>
+									<OverflowText as="p" text={h.catalogue_record?.title ?? h.catalogue_record_id} className="text-sm" />
 									<div className="flex items-center gap-2 flex-wrap">
 										<Badge variant="outline" className={`text-xs capitalize ${HOLD_STATUS_COLORS[h.hold_status] ?? ''}`}>
 											{h.hold_status}

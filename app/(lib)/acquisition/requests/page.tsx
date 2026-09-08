@@ -14,6 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Textarea } from '@/components/ui/textarea'
 import {
 	ShoppingCart, Clock, CheckCircle2, PackageCheck,
@@ -405,7 +406,7 @@ export default function PurchaseRequestsPage() {
 											<TableRow key={r.id} className="hover:bg-muted/50">
 												<TableCell className="text-xs font-mono font-medium">{r.request_number}</TableCell>
 												<TableCell className="max-w-[180px]">
-													<div className="truncate text-sm font-medium">{r.title}</div>
+													<OverflowText as="div" text={r.title} className="text-sm font-medium" />
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground">{r.author ?? '—'}</TableCell>
 												<TableCell className="text-sm">{r.quantity}</TableCell>

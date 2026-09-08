@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -330,7 +331,7 @@ export default function ConservationPage() {
 													{r.item?.accession_number ?? r.item_id ?? '—'}
 												</TableCell>
 												<TableCell className="max-w-[150px]">
-													<div className="truncate text-sm">{r.item?.catalogue_record?.title ?? '—'}</div>
+													<OverflowText as="div" text={r.item?.catalogue_record?.title ?? '—'} className="text-sm" />
 												</TableCell>
 												<TableCell className="text-sm">{r.binder_name ?? '—'}</TableCell>
 												<TableCell className="text-sm">

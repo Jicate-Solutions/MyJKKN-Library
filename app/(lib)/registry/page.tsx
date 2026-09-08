@@ -16,6 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import {
 	BookOpen, BookMarked, Newspaper, BookLock,
 	MoreHorizontal, Edit, Trash2, Search, RefreshCw,
@@ -731,7 +732,7 @@ export default function RegistryPage() {
 										) : paginated.map(r => (
 											<TableRow key={r.id} className="hover:bg-muted/50">
 												<TableCell className="max-w-[260px]">
-													<div className="text-sm font-medium truncate">{r.title}</div>
+													<OverflowText as="div" text={r.title} className="text-sm font-medium" />
 													{r.edition && <div className="text-xs text-muted-foreground">{r.edition} ed.</div>}
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground max-w-[180px]">
@@ -793,7 +794,7 @@ export default function RegistryPage() {
 								<div key={r.id} className="rounded-lg border p-4 space-y-2">
 									<div className="flex items-start justify-between">
 										<div className="flex-1 min-w-0">
-											<p className="font-medium text-sm truncate">{r.title}</p>
+											<OverflowText as="p" text={r.title} className="font-medium text-sm" />
 											<p className="text-xs text-muted-foreground truncate">{r.authors?.map(a => a.author_name).join(', ') ?? '—'}</p>
 										</div>
 										<DropdownMenu>

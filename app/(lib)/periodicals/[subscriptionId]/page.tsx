@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -318,9 +319,7 @@ export default function SubscriptionDetailPage() {
 					<Link href="/periodicals"><ArrowLeft className="h-4 w-4" /></Link>
 				</Button>
 				<div className="flex-1 min-w-0">
-					<h1 className="text-lg font-semibold leading-tight truncate">
-						{subscription.catalogue_record?.title ?? 'Subscription Detail'}
-					</h1>
+					<OverflowText as="h1" text={subscription.catalogue_record?.title ?? 'Subscription Detail'} className="text-lg font-semibold leading-tight" />
 					{/* No "Sub #…" line. It showed the first eight characters of the
 					    row's database id whenever no subscription number had been
 					    given — which was always — and a fragment of an id is not a

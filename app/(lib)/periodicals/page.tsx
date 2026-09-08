@@ -15,6 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import {
 	Newspaper, CheckCircle2, AlertCircle, Gift,
@@ -667,9 +668,9 @@ export default function PeriodicalSubscriptionsPage() {
 													    browser shows where it goes before it is clicked. */}
 													<Link
 														href={`/periodicals/${s.id}`}
-														className="block truncate text-sm font-medium hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
+														className="block text-sm font-medium hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
 													>
-														{s.catalogue_record?.title ?? s.catalogue_record_id}
+														<OverflowText text={s.catalogue_record?.title ?? s.catalogue_record_id} />
 													</Link>
 												</TableCell>
 												<TableCell className="text-sm text-muted-foreground">{s.supplier?.supplier_name ?? '—'}</TableCell>
@@ -741,9 +742,9 @@ export default function PeriodicalSubscriptionsPage() {
 											{/* Clickable here too, so the phone behaves like the table */}
 											<Link
 												href={`/periodicals/${s.id}`}
-												className="block font-medium text-sm truncate hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
+												className="block font-medium text-sm hover:text-brand-green hover:underline dark:hover:text-brand-green-400"
 											>
-												{s.catalogue_record?.title ?? s.catalogue_record_id}
+												<OverflowText text={s.catalogue_record?.title ?? s.catalogue_record_id} />
 											</Link>
 											<p className="text-xs text-muted-foreground">{s.supplier?.supplier_name ?? '—'} · {s.fiscal_year}</p>
 										</div>

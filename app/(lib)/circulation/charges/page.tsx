@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import {
 	IndianRupee, AlertCircle, CheckCircle2, MinusCircle,
 	MoreHorizontal, CreditCard, Undo2, Search, RefreshCw,
@@ -282,7 +283,7 @@ export default function ChargesPage() {
 													<div className="text-xs text-muted-foreground">{c.member?.member_number}</div>
 												</TableCell>
 												<TableCell className="max-w-[180px]">
-													<div className="truncate text-sm">{c.transaction?.item?.catalogue_record?.title ?? c.transaction_id}</div>
+													<OverflowText as="div" text={c.transaction?.item?.catalogue_record?.title ?? c.transaction_id} className="text-sm" />
 												</TableCell>
 												<TableCell className="text-sm">{c.overdue_days}</TableCell>
 												<TableCell className="text-sm">₹{c.total_charge.toFixed(2)}</TableCell>
@@ -360,7 +361,7 @@ export default function ChargesPage() {
 											</DropdownMenu>
 										)}
 									</div>
-									<p className="text-sm truncate">{c.transaction?.item?.catalogue_record?.title ?? c.transaction_id}</p>
+									<OverflowText as="p" text={c.transaction?.item?.catalogue_record?.title ?? c.transaction_id} className="text-sm" />
 									<div className="flex items-center gap-2 flex-wrap">
 										<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[c.payment_status]}`}>
 											{c.payment_status}

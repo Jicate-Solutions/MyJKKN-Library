@@ -353,8 +353,10 @@ export default function ReportsPage() {
 						</CardContent>
 					</Card>
 
-					{/* The chosen report: filters, Run, result */}
-					<Card className="min-w-0">
+					{/* The chosen report: filters, Run, result. `h-fit` like the list
+					    beside it: the grid would otherwise stretch this card to the
+					    list's height and leave a blank half-page under the pagination. */}
+					<Card className="min-w-0 h-fit">
 						<CardContent className="min-w-0 space-y-4 p-4">
 							{report ? (
 								<>

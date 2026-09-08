@@ -21,6 +21,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -344,7 +345,7 @@ export function MemberPanel({
 													{summary.charges.map(charge => (
 														<li key={charge.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
 															<div className="min-w-0">
-																<div className="font-medium leading-tight truncate">{charge.title}</div>
+																<OverflowText as="div" text={charge.title} className="font-medium leading-tight" />
 																<div className="text-xs text-muted-foreground">{charge.accession_number ?? '—'}{charge.payment_status === 'partial' ? ' · part paid' : ''}</div>
 															</div>
 															<span className="shrink-0 font-medium text-destructive">{rupees(charge.net_payable)}</span>
@@ -360,7 +361,7 @@ export function MemberPanel({
 											<ul className="mt-1.5 space-y-1 text-sm">
 												{summary.holds.map(hold => (
 													<li key={hold.id} className="flex items-center gap-2">
-														<span className="truncate">{hold.title}</span>
+														<OverflowText text={hold.title} className="min-w-0" />
 														<Badge variant="outline" className="text-[10px] capitalize">{hold.hold_status}</Badge>
 													</li>
 												))}

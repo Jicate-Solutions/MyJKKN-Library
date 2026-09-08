@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { OverflowText } from '@/components/library/overflow-text'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ChevronDown, Clock, Loader2, RefreshCw, Undo2 } from 'lucide-react'
 import { asDate, asTime, canUndo, describeUndo, rupees, type DeskEvent } from '@/lib/library/desk'
@@ -108,9 +109,9 @@ export function DeskTodayStrip({
 										<Badge variant="outline" className={cn('shrink-0 text-[11px]', badge.className)}>
 											{event.undone ? `${badge.word} — undone` : badge.word}
 										</Badge>
-										<span className={cn('min-w-0 flex-1 truncate', event.undone && 'line-through')}>
-											<span className="font-medium">{event.title}</span>
-											{event.accession_number && <span className="ml-1.5 font-mono text-xs text-muted-foreground">{event.accession_number}</span>}
+										<span className={cn('flex min-w-0 flex-1 items-baseline gap-1.5', event.undone && 'line-through')}>
+											<OverflowText text={event.title} className="min-w-0 font-medium" />
+											{event.accession_number && <span className="shrink-0 font-mono text-xs text-muted-foreground">{event.accession_number}</span>}
 										</span>
 										<span className="truncate text-xs text-muted-foreground">
 											{event.member_name}
