@@ -1,7 +1,8 @@
 'use client'
 
-import { useRef, useEffect } from 'react'
 import { Input } from '@/components/ui/input'
+import { useScanFocus } from '@/hooks/library/use-scan-focus'
+import { CameraScanner } from '@/components/library/camera-scanner'
 import { ScanLine, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -9,6 +10,23 @@ interface BarcodeScannerInputProps {
 	onScan: (value: string) => void
 	placeholder?: string
 	disabled?: boolean
+	/**
+	 * The camera button beside the box, for a desk working from a tablet or a
+	 * phone. On by default: a handheld scanner types into the box exactly as it
+	 * always did, and the button is simply the other way in.
+	 */
+	camera?: boolean
+	/** What the camera is being pointed at, said in the camera window. */
+	cameraLabel?: string
+	/**
+	 * Whether the cursor comes back here on its own.
+	 *
+	 * On by default, because a desk is a scanner and a queue: a stray click on
+	 * the page, a toast, a panel closing, would otherwise leave the next card
+	 * typed into nothing. It is given up willingly to a field somebody is using
+	 * and to anything open on top, and a box on a hidden tab never takes it.
+	 */
+	keepFocus?: boolean
 	/**
 	 * A lookup is running for what was just scanned.
 	 *
@@ -32,16 +50,14 @@ export function BarcodeScannerInput({
 	className,
 	value,
 	onChange,
+	camera = true,
+	cameraLabel,
+	keepFocus = true,
 }: BarcodeScannerInputProps) {
-	const inputRef = useRef<HTMLInputElement>(null)
-
-	// Focus comes back on its own the moment the box is usable again, so the
-	// next book can be scanned without the librarian reaching for the mouse.
-	useEffect(() => {
-		if (!disabled && !busy) {
-			inputRef.current?.focus()
-		}
-	}, [disabled, busy])
+	// The cursor lives here: on arrival, the moment the box is usable again
+	// after a lookup, and after any stray click or key that took it elsewhere.
+	// The same keeper the gate uses, so the desk and the door behave alike.
+	const { inputRef } = useScanFocus(keepFocus && !disabled && !busy)
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		if (e.key === 'Enter') {
@@ -58,25 +74,51 @@ export function BarcodeScannerInput({
 		}
 	}
 
+	/**
+	 * A code read by the camera means what a scanned one means.
+	 *
+	 * It goes through the same `onScan` as a burst ending in Enter, and clears
+	 * the box the same way, so nothing downstream can tell the two apart.
+	 */
+	const handleCamera = (code: string) => {
+		if (busy) return
+		const val = code.trim()
+		if (!val) return
+		onScan(val)
+		if (onChange) onChange('')
+		else if (inputRef.current) inputRef.current.value = ''
+	}
+
 	return (
-		<div className="relative">
-			{busy ? (
-				<Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-blue-600" />
-			) : (
-				<ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+		<div className="flex items-center gap-2">
+			<div className="relative min-w-0 flex-1">
+				{busy ? (
+					<Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-blue-600" />
+				) : (
+					<ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+				)}
+				<Input
+					ref={inputRef}
+					type="text"
+					placeholder={busy ? 'Checking…' : placeholder}
+					disabled={disabled || busy}
+					className={cn('pl-10 font-mono', className)}
+					onKeyDown={handleKeyDown}
+					value={value}
+					onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+					autoComplete="off"
+					// No autoFocus: with three tabs mounted at once it is the wrong
+					// box that wins. The keeper above puts the cursor in the one that
+					// is actually on screen.
+				/>
+			</div>
+			{camera && (
+				<CameraScanner
+					onScan={handleCamera}
+					disabled={disabled || busy}
+					label={cameraLabel ?? 'Point the camera at the QR on the card, or the barcode on the book'}
+				/>
 			)}
-			<Input
-				ref={inputRef}
-				type="text"
-				placeholder={busy ? 'Checking…' : placeholder}
-				disabled={disabled || busy}
-				className={cn('pl-10 font-mono', className)}
-				onKeyDown={handleKeyDown}
-				value={value}
-				onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-				autoComplete="off"
-				autoFocus
-			/>
 		</div>
 	)
 }
