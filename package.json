@@ -57,6 +57,8 @@
     "@tiptap/starter-kit": "^3.14.0",
     "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
     "autoprefixer": "^10.4.23",
     "axios": "^1.11.0",
     "class-variance-authority": "^0.7.1",

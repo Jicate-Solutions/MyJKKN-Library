@@ -27,7 +27,10 @@
  *   * `personByCardNumber` / `personByMyjkknId` — one person, for the desk and
  *     the gate. Answered from the roll where it is in hand; a staff member can
  *     also be asked for directly, and a person already identified once is
- *     re-checked by their MyJKKN id in a single call.
+ *     re-checked by their MyJKKN id in a single call. Since the cards went
+ *     over to QR, a scan may also be the permanent JKKN id printed on the
+ *     card, which `lib/library/jkkn-identity.ts` turns into its owner before
+ *     any of this — the membership question below is unchanged and still MyJKKN's.
  *
  * Field names here follow what MyJKKN actually returns (see
  * `Reference_Documents/learners-staff-api-reference-data.md`), which is not the
@@ -43,6 +46,7 @@
  */
 
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { looksLikeJkknId, personBehindJkknId } from '@/lib/library/jkkn-identity'
 
 const MYJKKN_API_URL = process.env.MYJKKN_API_URL || 'https://www.jkkn.ai/api'
 /** No fallback written here: this repository is public. */
@@ -625,8 +629,12 @@ export async function collegeMemberCount(institutionId: string): Promise<number>
 /**
  * The person whose card carries this number, in this college.
  *
- * Three steps, in this order:
+ * Four steps, in this order:
  *
+ *   0. The QR from a new ID card, which carries a permanent JKKN id and not a
+ *      number anybody is listed under. It is turned into its owner first —
+ *      only when the value is that exact shape, so no card scanned today pays
+ *      for it — and then checked against this college like any other person.
  *   1. The roll, if it happens to be in hand already. No network at all, so a
  *      queue of scans costs nothing once the first one has been answered.
  *   2. Otherwise ask MyJKKN about this one person. Staff only — their endpoint
@@ -652,6 +660,19 @@ export async function personByCardNumber(
 ): Promise<DirectoryPerson | null> {
 	const wanted = normalise(cardNumber)
 	if (!wanted) return null
+
+	// A QR card names its owner by an id no roll is keyed on, so looking for it
+	// as a number would walk the whole college to find nothing. Placed here it
+	// costs one indexed read, and only for values shaped exactly like a JKKN id.
+	if (looksLikeJkknId(cardNumber)) {
+		const holder = await personBehindJkknId(cardNumber)
+		// Whether they are a member HERE is still MyJKKN's answer, not the
+		// card's: a card from another campus finds its owner and is turned away
+		// all the same. A card that places nobody — retired, unlinked, or one of
+		// the people who are both a learner and staff — is simply not found, and
+		// there is nothing further to try, because no member number is this shape.
+		return holder ? await personByMyjkknId(institutionId, holder.person_kind, holder.myjkkn_id) : null
+	}
 
 	const inHand = cachedDirectory(institutionId)
 	if (inHand) {
