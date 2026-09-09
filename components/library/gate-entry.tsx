@@ -32,6 +32,12 @@
  *   * every name opens the person in a side panel, without leaving the door
  *     (a link to the Members page until 5 Sep 2026); the range and the
  *     search live in the address; the Excel has a by-day sheet.
+ *
+ * Since 9 Sep 2026 the cards carry a QR instead of a barcode. A 2D scanner
+ * types it into the same box, and where there is no scanner the camera button
+ * beside it reads the card from a phone or a tablet. Both arrive at the same
+ * place: the id inside the QR is turned into its owner by
+ * `lib/library/jkkn-identity.ts` before the college's roll is asked about them.
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
@@ -40,6 +46,7 @@ import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useInstitution } from '@/context/institution-context'
 import { useScanFocus } from '@/hooks/library/use-scan-focus'
 import { MemberPanel, CopyButton, type MemberPanelSubject } from '@/components/library/member-panel'
+import { CameraScanner } from '@/components/library/camera-scanner'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -760,8 +767,10 @@ export function GateEntry() {
 		)
 	}
 
+	// 44px tall on a phone, the small pill again from sm: up. A 28px chip is
+	// under half a fingertip; the register is read on a tablet at the door.
 	const chip = (active: boolean, tone: 'green' | 'amber' = 'green') =>
-		`h-7 rounded-full border px-2.5 text-xs transition-colors ${
+		`h-11 sm:h-7 rounded-full border px-3 sm:px-2.5 text-xs transition-colors ${
 			active
 				? tone === 'green'
 					? 'border-brand-green bg-brand-green-50 text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-400 dark:border-brand-green-600'
@@ -788,7 +797,10 @@ export function GateEntry() {
 										const inst = availableInstitutions.find(i => i.institution_code === code)
 										if (inst) selectInstitution(inst)
 									}}>
-										<SelectTrigger className="h-9 w-[260px] ml-auto"><SelectValue placeholder="Select the college…" /></SelectTrigger>
+										{/* 260px is wider than the 256px a card has at 320px, which
+										    scrolled the whole page sideways. Full width until there
+										    is room for it. */}
+										<SelectTrigger className="h-11 w-full sm:h-9 sm:w-[260px] ml-auto"><SelectValue placeholder="Select the college…" /></SelectTrigger>
 										<SelectContent>
 											{availableInstitutions.map(i => (
 												<SelectItem key={i.institution_code} value={i.institution_code}>
@@ -799,7 +811,11 @@ export function GateEntry() {
 									</Select>
 								</div>
 							) : isToday ? (
-								<div className="flex items-center gap-3">
+								// Wraps rather than squeezes. On one line the icon, camera and
+								// Record take 177px of the 256px a card has at 320px, leaving
+								// 79px of box to read a scanned number in. Allowed to wrap, the
+								// box keeps 168px and Record takes a line of its own.
+								<div className="flex flex-wrap items-center gap-3">
 									<ScanLine className="h-5 w-5 text-brand-green dark:text-brand-green-400 flex-shrink-0" />
 									<Input
 										ref={inputRef}
@@ -816,12 +832,27 @@ export function GateEntry() {
 										// Held rather than disabled: a disabled box loses the
 										// cursor, and the next card would scan into nothing
 										readOnly={scanning}
-										className="h-11 text-base min-w-0"
+										// `basis-36` (144px) rather than the input's own w-full:
+										// in a wrapping row a 100% basis would take a line to
+										// itself and push the camera off. It grows into whatever
+										// the line has left, so on a wide screen it is as before.
+										className="h-11 text-base min-w-0 grow basis-36"
+									/>
+									{/* The other way in, for a gate run from a tablet or a phone.
+									    A card read by the camera records itself exactly as a
+									    scanned one does. */}
+									<CameraScanner
+										onScan={code => { void handleScan(code) }}
+										disabled={scanning}
+										label="Point the camera at the QR code on the college ID card"
+										className="h-11 w-11 p-0"
 									/>
 									<Button
 										onClick={() => handleScan()}
 										disabled={scanning || !barcode.trim()}
-										className="h-11 px-4 sm:px-6 shrink-0 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
+										// Its own full-width line on a phone, back beside the box
+										// from sm: up — where everything fits on one line anyway.
+										className="h-11 basis-full sm:basis-auto px-4 sm:px-6 shrink-0 bg-brand-green hover:bg-brand-green-600 text-white dark:bg-brand-green-400 dark:hover:bg-brand-green-500 dark:text-brand-green-900"
 									>
 										{scanning ? 'Working...' : 'Record'}
 									</Button>
@@ -834,7 +865,7 @@ export function GateEntry() {
 											? 'You are looking at an older day’s register. Go back to today to scan cards.'
 											: 'You are looking at a range of days. Go back to today to scan cards.'}
 									</span>
-									<Button variant="outline" size="sm" className="h-8 ml-auto" onClick={backToToday}>
+									<Button variant="outline" size="sm" className="h-11 sm:h-8 ml-auto" onClick={backToToday}>
 										Back to today
 									</Button>
 								</div>
@@ -856,20 +887,25 @@ export function GateEntry() {
 										</div>
 										<div className="text-sm text-muted-foreground">{refused.message}</div>
 									</div>
-									<Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setRefused(null)} aria-label="Dismiss">
+									<Button variant="ghost" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 shrink-0" onClick={() => setRefused(null)} aria-label="Dismiss">
 										<X className="h-4 w-4" />
 									</Button>
 								</div>
 							)}
 							{canScan && !refused && last && (
-								<div className={`flex items-center gap-4 mt-3 pt-3 border-t ${last.direction === 'in' ? '' : 'opacity-90'}`}>
+								// The IN/OUT block is about 156px and the face 56px, which on a
+								// 256px card left 12px for the name. It is allowed to drop to
+								// its own line instead, still right-aligned by ml-auto.
+								<div className={`flex flex-wrap items-center gap-4 mt-3 pt-3 border-t ${last.direction === 'in' ? '' : 'opacity-90'}`}>
 									<Avatar className="h-14 w-14">
 										{last.member.photo_url && <AvatarImage src={last.member.photo_url} alt={last.member.display_name ?? ''} />}
 										<AvatarFallback className="text-sm bg-brand-green-50 text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-400">
 											{initials(last.member.display_name ?? last.member.member_number)}
 										</AvatarFallback>
 									</Avatar>
-									<div className="min-w-0">
+									{/* 96px of name before the badge is pushed to the next line,
+									    then it grows into whatever the line has spare. */}
+									<div className="min-w-0 grow basis-24">
 										<div className="text-base font-semibold font-heading truncate">
 											{last.member.display_name ?? last.member.member_number}
 										</div>
@@ -880,7 +916,7 @@ export function GateEntry() {
 											</span>
 										</div>
 									</div>
-									<div className={`ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
+									<div className={`ml-auto flex shrink-0 items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
 										last.direction === 'in'
 											? 'bg-brand-green-50 text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-400'
 											: 'bg-brand-yellow-100 text-brand-yellow-800 dark:bg-brand-yellow-900/30 dark:text-brand-yellow-500'
@@ -942,7 +978,7 @@ export function GateEntry() {
 							<strong>{stale.count}</strong> {stale.count === 1 ? 'person is' : 'people are'} still showing as inside from earlier days (last: {shortDate(stale.lastDate)}).
 							They will be marked out at the library’s closing time on their own day.
 						</span>
-						<Button variant="outline" size="sm" className="h-6 ml-auto text-xs" onClick={closeStale} disabled={closingStale}>
+						<Button variant="outline" size="sm" className="h-11 sm:h-6 ml-auto text-xs" onClick={closeStale} disabled={closingStale}>
 							{closingStale ? 'Closing…' : `Close ${stale.count === 1 ? 'it' : 'them'}`}
 						</Button>
 					</div>
@@ -970,7 +1006,7 @@ export function GateEntry() {
 								<button type="button" className={chip(preset === 'month')} onClick={() => showRange(`${today.slice(0, 8)}01`, today)}>This month</button>
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={() => stepDays(-1)} aria-label="A day earlier">
+										<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={() => stepDays(-1)} aria-label="A day earlier">
 											<ChevronLeft className="h-4 w-4" />
 										</Button>
 									</TooltipTrigger>
@@ -982,7 +1018,7 @@ export function GateEntry() {
 									value={fromDate}
 									max={today}
 									onChange={e => pickFrom(e.target.value)}
-									className="h-8 w-[150px] shrink-0 text-sm"
+									className="h-11 sm:h-8 w-[150px] shrink-0 text-sm"
 								/>
 								<span className="text-xs text-muted-foreground">to</span>
 								<Input
@@ -991,11 +1027,11 @@ export function GateEntry() {
 									value={toDate}
 									max={today}
 									onChange={e => pickTo(e.target.value)}
-									className="h-8 w-[150px] shrink-0 text-sm"
+									className="h-11 sm:h-8 w-[150px] shrink-0 text-sm"
 								/>
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={() => stepDays(1)} disabled={toDate >= today} aria-label="A day later">
+										<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={() => stepDays(1)} disabled={toDate >= today} aria-label="A day later">
 											<ChevronRight className="h-4 w-4" />
 										</Button>
 									</TooltipTrigger>
@@ -1009,7 +1045,7 @@ export function GateEntry() {
 										value={view.q}
 										onChange={e => patch({ q: e.target.value })}
 										onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); patch({ q: '' }) } }}
-										className="pl-8 pr-7 h-8 text-sm"
+										className="pl-8 pr-7 h-11 sm:h-8 text-sm"
 									/>
 									{view.q && (
 										<button type="button" aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => patch({ q: '' })}>
@@ -1021,7 +1057,7 @@ export function GateEntry() {
 								{isSingleDay && inside.length > 0 && (
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<Button variant="outline" className="h-8 text-sm px-3" onClick={() => setConfirmClose(true)}>
+											<Button variant="outline" className="h-11 sm:h-8 text-sm px-3" onClick={() => setConfirmClose(true)}>
 												<DoorClosed className="h-4 w-4 mr-1.5" />
 												<span className="hidden sm:inline">Close day</span>
 												<span className="ml-1 tabular-nums">· {inside.length}</span>
@@ -1032,13 +1068,13 @@ export function GateEntry() {
 								)}
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={exportRegister}>
+										<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={exportRegister}>
 											<Download className="h-4 w-4" />
 										</Button>
 									</TooltipTrigger>
 									<TooltipContent>{isSingleDay ? 'Export this day to Excel' : 'Export these days to Excel'} — with a by-day sheet</TooltipContent>
 								</Tooltip>
-								<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={() => fetchData(true)} aria-label="Read again">
+								<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={() => fetchData(true)} aria-label="Read again">
 									<RefreshCw className={`h-4 w-4 ${loading || refreshing ? 'animate-spin' : ''}`} />
 								</Button>
 							</div>
