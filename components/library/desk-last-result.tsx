@@ -84,13 +84,13 @@ export function DeskLastResult({
 				</span>
 			</span>
 
-			<span className="flex shrink-0 items-center gap-2">
+			<span className="flex min-w-0 flex-wrap items-center gap-2">
 				{owing && (
 					<>
-						<Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onSettle(owing, 'waive')}>
+						<Button size="sm" variant="outline" className="h-9 text-xs sm:h-7" onClick={() => onSettle(owing, 'waive')}>
 							Waive
 						</Button>
-						<Button size="sm" className="h-7 text-xs" onClick={() => onSettle(owing, 'collect')}>
+						<Button size="sm" className="h-9 text-xs sm:h-7" onClick={() => onSettle(owing, 'collect')}>
 							<IndianRupee className="mr-1 h-3 w-3" />
 							Collect {rupees(owing.net_payable)}
 						</Button>
@@ -100,7 +100,7 @@ export function DeskLastResult({
 					<Button
 						size="sm"
 						variant="ghost"
-						className="h-7 text-xs"
+						className="h-9 text-xs sm:h-7"
 						disabled={busy}
 						title={describeUndo(event)}
 						onClick={() => onUndo(event)}

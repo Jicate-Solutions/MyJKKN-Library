@@ -1,512 +1,137 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
-## Quick Reference
+## What this is
+
+**MyJKKN Library** ("JKKN Learning Commons") — the library management system for the JKKN group of colleges. Next.js 16 (App Router, Turbopack) + React 19 + TypeScript + Supabase (PostgreSQL) + Tailwind CSS + Shadcn UI.
+
+It serves **seven colleges, each with its own separate library**:
+
+| Code | College |
+|------|---------|
+| COP | Pharmacy |
+| AHS | Allied Health Sciences |
+| CAS | Arts and Science |
+| CET | Engineering and Technology |
+| CNR | Nursing |
+| COE | Education |
+| DCH | Dental |
+
+A feature goes to all seven unless the request names one college. One college's rules, fines, holidays or data must never leak into another's.
+
+## Quick reference
 
 ```bash
-npm run dev          # Start development server (http://localhost:3000)
-npm run build        # Build production bundle
-npm run lint         # Run ESLint
+npm run dev          # https://localhost:3000  (start with: npm run dev -- --experimental-https)
+npm run build        # production build
+npm run lint         # eslint (currently broken project-wide by its config)
+npx tsc --noEmit     # type-check; a few pre-existing errors exist in myjkkn staff/[id], students/[id] and lib-reports-service.ts
 ```
 
-**Key Paths:**
-- Auth: `lib/auth/`, `middleware.ts`, `components/protected-route.tsx`
-- API Routes: `app/api/`
-- Pages: `app/(coe)/`
-- Services: `services/`
-- Types: `types/`
-- Migrations: `supabase/migrations/`
+- Local dev is **https** — use `curl -sk`. Login does not work over plain http.
+- If every page 404s after a restart, stop the server, delete `.next/dev` (the Turbopack cache), and start again.
+- Supabase project `lbmkvwwpxaoojfhmvtlz`. SQL is run **by hand** in the Supabase SQL editor; give the query, never run it. The editor runs a script as one transaction — one error rolls the whole script back — so migrations must be safe to run twice.
 
-## Database Architecture
+## Key paths
 
-**CRITICAL:** When debugging database issues, always check BOTH databases:
+| Area | Path |
+|------|------|
+| Pages (all behind login) | `app/(lib)/…` — one folder per module |
+| Login / OAuth callback | `app/login/page.tsx`, `app/auth/callback/route.ts` |
+| API routes | `app/api/lib/*` (library), `app/api/auth/*` (session) |
+| Auth and access | `lib/auth/` |
+| Domain helpers | `lib/library/` (desk, reports, catalogue, activity log, MyJKKN directory…) |
+| Services (server data access) | `services/library/lib-*-service.ts` |
+| Types | `types/lib.ts`, `types/lib-departments.ts`, `types/myjkkn.ts` |
+| Institution context | `context/institution-context.tsx`, `hooks/use-institution-filter.ts` |
+| Layout and sidebar | `app/(lib)/layout.tsx`, `components/layout/lib-sidebar.tsx`, `lib/auth/role-pages.ts` |
+| Library components | `components/library/` |
+| Migrations | `supabase/migrations/YYYYMMDD_lib_<topic>.sql` |
+| Requirements (not in git) | `LIBRARY-REQUIREMENTS-*.md`, `Reference_Documents/` |
+| Daily work log (not in git) | `today-work/YYYY-MM-DD.txt` |
 
-| Database | Contains | Key Tables |
-|----------|----------|------------|
-| **COE (Local Supabase)** | Exam data, registrations, marks, results | `exam_registrations`, `internal_marks`, `final_marks`, `course_offerings`, `institutions` |
-| **MyJKKN (External API)** | Learner profiles, photos, DOB, batches | `learners_profiles` (via API), `student_photo_url`, `date_of_birth` |
+## Modules (sidebar order)
 
-**Common Mistake:** Assuming learner photos/DOB exist in COE - they don't! Always fetch from MyJKKN API.
+- **Overview**: Dashboard (`/dashboard`, also carries the NAAC cards)
+- **Knowledge Registry**: Catalogue (`/registry`), Department Libraries, Members
+- **Circulation**: Circulation Desk, Gate Entry (`/visits`), Holds, Overdue, Late Charges
+- **Acquisition**: Purchase Requests, Orders, Suppliers, Budget
+- **Periodicals**: Subscriptions, Digital Resources
+- **Other**: Retirement, Inter-Campus, Conservation, OPAC Search
+- **Reports**: Reports Dashboard (`/reports`, 19 tabs + Run SQL), Library Rules (`/settings`), Activity Log, Role Management; Shelf Locations exists but is hidden from the menu
 
-## Project Overview
+`lib/auth/role-pages.ts` holds the same list for role-based page access; keep the two in step.
 
-JKKN COE (Controller of Examination) - Next.js 15 app with TypeScript, Supabase, and Tailwind CSS for managing examination systems.
+## Authentication and roles
 
-**Complete PRD:** See `.claude/COE PRD.txt` for requirements and roadmap.
+- Sign-in is **Google via Supabase Auth** (`signInWithOAuth`), callback at `/auth/callback`. The browser gets its profile only from `GET /api/auth/session`.
+- **Roles come from MyJKKN, never from this app.** Only four MyJKKN role keys open the library, highest first: `super_admin`, `library_admin`, `librarian`, `assistant_librarian` (`lib/auth/library-roles.ts`). Anyone else sees the restricted page. Role keys arrive in mixed shapes (`Library Admin`, `LIBRARY-ADMIN`) and are normalised before comparison.
+- Identity is the MyJKKN staff UUID. Temporary access can be granted with the `LIBRARY_ACCESS_GRANTS` env var (with an expiry); never add a users table or a second password login.
+- A **member** (borrower) may only view Circulation screens and OPAC, read-only; write verbs are refused by method (`lib/auth/member-access.ts`).
+- "View as" impersonation exists; every write made while impersonating is logged automatically by the API guards.
 
-**Tech Stack:** Next.js 15, React 19, Supabase (PostgreSQL), Shadcn UI, Tailwind CSS, Zod
+## Institution scoping (the most important rule)
 
-## JKKN Terminology Standards
-
-**CRITICAL:** Always use JKKN terminology:
-
-| Standard Term | JKKN Term | Example |
-|---------------|-----------|---------|
-| Student | **Learner** | `types/learners.ts`, not `types/students.ts` |
-| student_id | learner_id | Database fields, API parameters |
-| /students | /learners | API routes |
-
-**Positive Language:** "Needs improvement" not "Failed", "Learning opportunity" not "Backlog"
-
-## Architecture
-
-### Authentication & RBAC
-
-**Flow:** Google OAuth → Supabase Auth → Middleware validation → Auth Context → Protected Routes
-
-**Key Files:**
-- `lib/supabase-server.ts` - Server-side client (service role key)
-- `middleware.ts` - Session validation, `is_active` check
-- `lib/auth/auth-context.tsx` - Client auth state
-- `components/protected-route.tsx` - Route guards
-
-**Usage:**
-```typescript
-// Auth context
-const { user, hasPermission, hasRole } = useAuth()
-
-// Protected route
-<ProtectedRoute requiredPermissions={['courses:read']} requiredRoles={['admin']}>
-  {children}
-</ProtectedRoute>
-
-// Server-side
-import { getSupabaseServer } from '@/lib/supabase-server'
-const supabase = getSupabaseServer()
-```
-
-**Public Routes:** `/login`, `/auth/callback`, `/contact-admin`, `/verify-email`, `/`
-
-### Multi-Tenant Institution Context
-
-Users see only their institution's data unless super_admin.
-
-**Key Files:** `context/institution-context.tsx`, `hooks/use-institution-filter.ts`, `hooks/use-institution-field.ts`
-
-**Full Guide:** See `.claude/skills/myjkkn-coe-dev-rules/SKILL.md` for complete rules.
+Every `lib_*` table has `institution_id`. Every `/api/lib/*` route resolves the caller server-side and forces the scope — the URL is never trusted.
 
 ```typescript
-// In pages - use the dedicated hook
-const {
-  filter,
-  isReady,
-  appendToUrl,
-  getInstitutionIdForCreate,
-  mustSelectInstitution,  // true when "All Institutions" selected
-  shouldFilter,
-  institutionId
-} = useInstitutionFilter()
+// Collection route
+const guard = await guardCollection(request, searchParams.get('institution_id'))
+if (!guard.ok) return guard.response
+const institutionId = guard.institutionId   // null only for super_admin = All
 
-// Fetch with filter
-useEffect(() => {
-  if (isReady) {
-    const url = appendToUrl('/api/entity')
-    fetch(url).then(...)
-  }
-}, [isReady, filter])
+// Write route: the row is written with guard.institutionId, never with the body's value
+const guard = await guardWrite(request, body.institution_id)
+
+// One row: 404 (not 403) when it belongs to another college
+const guard = await guardRecord(request, 'lib_items', id)
 ```
 
-**Role Behavior:**
-
-| User Type | View | Create | Update | Delete | Upload | Download |
-|-----------|------|--------|--------|--------|--------|----------|
-| Normal User | Own institution | Own institution (auto-filled) | Own records | Own records | Own institution | Own institution |
-| super_admin (All) | ALL institutions | Must select in form | Any record | Any record | Must select | ALL data |
-| super_admin (Specific) | Selected only | Selected (auto-filled) | Selected records | Selected records | Selected | Selected |
-
-**Key Properties:**
-- `mustSelectInstitution` - `true` when super_admin views "All Institutions" (show institution UI)
-- `shouldFilter` - `true` when filtering should be applied
-- `getInstitutionIdForCreate()` - Returns institution ID for new records
-
-### MyJKKN API Integration
-
-COE integrates with MyJKKN for shared data (regulations, learners, batches).
-
-**Full Guide:** See `.claude/skills/myjkkn-coe-dev-rules/SKILL.md` for complete field mappings.
-
-**Critical Constraints:**
-1. Use `myjkkn_institution_ids` array directly - no two-step lookup needed!
-2. Server-side filtering often ignored - **always filter client-side by `institution_id`**
-3. Deduplicate by CODE field (e.g., `regulation_code`, `program_id`), NOT by `id`
-
-**Field Name Differences (MyJKKN → COE):**
-
-| MyJKKN Field | COE Local Field | Notes |
-|--------------|-----------------|-------|
-| `course_name` | `course_title` | **Different name!** |
-| `program_id` | `program_code` | MyJKKN `program_id` is CODE ("BCA"), NOT UUID |
-| `institution_id` | `institutions_id` | COE uses **plural** form |
-| `college_email` | `learner_email` | Multiple fallbacks |
-
-**Use the hook:** `useMyJKKNInstitutionFilter` from `hooks/use-myjkkn-institution-filter.ts`
-
-```typescript
-const { fetchPrograms, fetchRegulations } = useMyJKKNInstitutionFilter()
-
-// Get myjkkn_institution_ids from COE institution
-const institution = institutions.find(i => i.id === institutionId)
-const myjkknIds = institution?.myjkkn_institution_ids || []
-
-// Use IDs directly - no lookup needed!
-const programs = await fetchPrograms(myjkknIds)
-const regulations = await fetchRegulations(myjkknIds)
-```
-
-## Development Standards
-
-**See:** `.cursor/rules/DEVELOPMENT_STANDARDS.md` for full standards.
-
-**Key Conventions:**
-- **PascalCase**: Components, Types, Interfaces
-- **kebab-case**: Directories, files
-- **camelCase**: Variables, functions, hooks
-- **UPPERCASE**: Environment variables, constants
-
-**Code Style:** Tabs, single quotes, no semicolons, strict equality (`===`)
-
-**Next.js:** Default Server Components, use `'use client'` only when needed
-
-## Data Requirements
-
-**Before testing or debugging marks generation:**
-
-| Course Type | Required Data | Notes |
-|-------------|---------------|-------|
-| Regular (External Exam) | `exam_registrations` + `exam_timetables` + `internal_marks` | Must have valid timetable entries |
-| CIA (Internal Only) | `exam_registrations` + `internal_marks` | No external exam - ensure `internal_marks` exist |
-
-**Checklist before final marks generation:**
-1. Verify `exam_registrations` exist for all learners in the course
-2. Verify `internal_marks` records exist (especially for CIA courses)
-3. Check course `exam_type` field to determine if external marks are expected
-
-## Key Patterns
-
-### Form Validation
-
-```typescript
-const [errors, setErrors] = useState<Record<string, string>>({})
-
-const validate = () => {
-  const e: Record<string, string> = {}
-  if (!formData.field.trim()) e.field = 'Required'
-  // Pattern: !/^regex$/.test(value)
-  // Range: Number(value) < min || Number(value) > max
-  setErrors(e)
-  return Object.keys(e).length === 0
-}
-```
-
-### API Error Handling
-
-```typescript
-// Server-side (API routes)
-if (error) {
-  if (error.code === '23505') return NextResponse.json({ error: 'Already exists' }, { status: 400 })
-  if (error.code === '23503') return NextResponse.json({ error: 'Invalid reference' }, { status: 400 })
-  return NextResponse.json({ error: 'Failed to save' }, { status: 500 })
-}
-```
-
-**PostgreSQL Error Codes:** 23505 (duplicate), 23503 (FK violation), 23514 (check constraint), 23502 (not-null)
-
-### Foreign Key Auto-Mapping
-
-Always resolve codes to UUIDs before insert:
-
-```typescript
-// 1. Lookup institution_code → institutions_id
-const { data: inst } = await supabase.from('institutions').select('id').eq('institution_code', code).single()
-if (!inst) return NextResponse.json({ error: `Institution "${code}" not found` }, { status: 400 })
-
-// 2. Insert with both ID and code
-.insert({ institutions_id: inst.id, institution_code: code, ... })
-```
-
-### Toast Patterns
-
-```typescript
-// Success
-toast({ title: '✅ Created', description: '...', className: 'bg-green-50 border-green-200 text-green-800' })
-// Error
-toast({ title: '❌ Failed', description: '...', variant: 'destructive' })
-```
-
-### Form Sheet Pattern
-
-Reference: `app/(coe)/master/degrees/page.tsx`
-
-```typescript
-<Sheet open={sheetOpen} onOpenChange={(o) => { if (!o) resetForm(); setSheetOpen(o) }}>
-  <SheetContent className="sm:max-w-[800px] overflow-y-auto">
-    {/* Form sections with space-y-8 */}
-  </SheetContent>
-</Sheet>
-```
-
-## API Route Patterns
-
-### GET Route Structure
-
-```typescript
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const institutionCode = searchParams.get('institution_code')
-  const institutionsId = searchParams.get('institutions_id')
-  const search = searchParams.get('search')
-
-  let query = supabase.from('entity').select('*')
-
-  // Institution filtering
-  if (institutionCode) {
-    query = query.eq('institution_code', institutionCode)
-  } else if (institutionsId) {
-    query = query.eq('institutions_id', institutionsId)
-  }
-
-  // Search filter (multi-field)
-  if (search) {
-    query = query.or(`code.ilike.%${search}%,name.ilike.%${search}%`)
-  }
-
-  // Override default 1000-row limit
-  const { data, error } = await query.range(0, 9999)
-
-  if (error) {
-    console.error('Fetch error:', error)
-    return NextResponse.json({ error: 'Failed to fetch' }, { status: 500 })
-  }
-
-  return NextResponse.json(data || [])
-}
-```
-
-### POST Route Structure
-
-```typescript
-export async function POST(request: Request) {
-  const body = await request.json()
-
-  // 1. Required field validation
-  if (!body.code?.trim()) {
-    return NextResponse.json({ error: 'Code is required' }, { status: 400 })
-  }
-
-  // 2. FK Auto-Mapping (code → UUID)
-  let institutions_id = body.institutions_id
-  let institution_code = body.institution_code
-
-  if (institution_code && !institutions_id) {
-    const { data: inst } = await supabase
-      .from('institutions')
-      .select('id')
-      .eq('institution_code', institution_code)
-      .maybeSingle()
-    if (!inst) {
-      return NextResponse.json({ error: `Institution "${institution_code}" not found` }, { status: 400 })
-    }
-    institutions_id = inst.id
-  }
-
-  // 3. Insert with both ID and code
-  const { data, error } = await supabase
-    .from('entity')
-    .insert({
-      institutions_id,
-      institution_code,
-      code: body.code.trim(),
-      name: body.name?.trim() || null,
-    })
-    .select()
-    .single()
-
-  // 4. Error handling
-  if (error) {
-    if (error.code === '23505') return NextResponse.json({ error: 'Already exists' }, { status: 400 })
-    if (error.code === '23503') return NextResponse.json({ error: 'Invalid reference' }, { status: 400 })
-    return NextResponse.json({ error: 'Failed to create' }, { status: 500 })
-  }
-
-  return NextResponse.json(data, { status: 201 })
-}
-```
-
-### PUT Route Structure
-
-```typescript
-export async function PUT(request: Request) {
-  const body = await request.json()
-  const { id, ...updateData } = body
-
-  if (!id) {
-    return NextResponse.json({ error: 'ID is required' }, { status: 400 })
-  }
-
-  // Don't allow changing institution after creation
-  delete updateData.institutions_id
-  delete updateData.institution_code
-
-  const { data, error } = await supabase
-    .from('entity')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: 'Failed to update' }, { status: 500 })
-  }
-
-  return NextResponse.json(data)
-}
-```
-
-### DELETE Route Structure
-
-```typescript
-export async function DELETE(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const id = searchParams.get('id')
-
-  if (!id) {
-    return NextResponse.json({ error: 'ID is required' }, { status: 400 })
-  }
-
-  const { error } = await supabase.from('entity').delete().eq('id', id)
-
-  if (error) {
-    if (error.code === '23503') {
-      return NextResponse.json({ error: 'Cannot delete - has related records' }, { status: 400 })
-    }
-    return NextResponse.json({ error: 'Failed to delete' }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
-}
-```
-
-### Complex Query Patterns
-
-**Nested Relationships:**
-```typescript
-const { data } = await supabase
-  .from('exam_registrations')
-  .select(`
-    id,
-    student_id,
-    course_offerings(
-      id,
-      course_mapping:course_id(
-        courses:course_id(id, course_code, course_name)
-      )
-    )
-  `)
-  .eq('examination_session_id', sessionId)
-```
-
-**Separate Bulk Fetch (for one-to-many):**
-```typescript
-// 1. Get primary data
-const { data: registrations } = await supabase.from('exam_registrations').select('*')
-
-// 2. Extract IDs for related data
-const courseOfferingIds = [...new Set(registrations.map(r => r.course_offering_id))]
-
-// 3. Bulk fetch related data
-const { data: timetables } = await supabase
-  .from('exam_timetables')
-  .select('*')
-  .in('course_offering_id', courseOfferingIds)
-
-// 4. Create lookup map
-const timetablesMap = new Map(timetables.map(tt => [tt.course_offering_id, tt]))
-```
-
-### MyJKKN API Route Pattern
-
-```typescript
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const institutionId = searchParams.get('institutions_id')
-
-  // Get myjkkn_institution_ids from COE institution
-  const { data: institution } = await supabase
-    .from('institutions')
-    .select('myjkkn_institution_ids')
-    .eq('id', institutionId)
-    .single()
-
-  const myjkknIds = institution?.myjkkn_institution_ids || []
-
-  // Fetch from MyJKKN for each institution ID
-  const allPrograms: any[] = []
-  const seenCodes = new Set<string>()
-
-  for (const myjkknInstId of myjkknIds) {
-    const response = await fetch(`${MYJKKN_API}/programs?institution_id=${myjkknInstId}`)
-    const data = await response.json()
-    const programs = data.data || data || []
-
-    // Client-side filter + deduplicate by CODE
-    for (const p of programs) {
-      const code = p.program_id || p.program_code
-      if (code && p.institution_id === myjkknInstId && !seenCodes.has(code)) {
-        seenCodes.add(code)
-        allPrograms.push(p)
-      }
-    }
-  }
-
-  return NextResponse.json(allPrograms)
-}
-```
-
-### Response Formats
-
-```typescript
-// Simple array
-return NextResponse.json(data || [])
-
-// With metadata
-return NextResponse.json({
-  data: formattedData,
-  total: formattedData.length,
-  metadata: { institution_id: institutionId }
-})
-
-// Success with details
-return NextResponse.json({
-  success: true,
-  data: hallTicketData,
-  student_count: students.length
-})
-```
-
-## Debugging Guidelines
-
-**Before assuming data is missing, check status first:**
-
-| Symptom | Check This First |
-|---------|------------------|
-| Course missing from marksheet | Is `final_marks.status` = `Pending` instead of `Published`? |
-| Learner photo not showing | Is `student_photo_url` null in COE? → Fetch from MyJKKN API |
-| Marks not appearing in report | Is course `is_locked` = false (amber UI state)? |
-| Export showing wrong data | Are you filtering by correct `institution_id`? |
-
-**Data Status Workflow:**
-```
-Draft → Pending → Published → Locked
-         ↑                      ↑
-    (editable)            (read-only)
-```
-
-## Important Notes
-
-- **Race Conditions:** Use atomic updates with conditional checks (`.is('used_at', null)`)
-- **RLS Bypass:** Service role key bypasses RLS - use in server API routes only
-- **Session Handling:** Middleware validates sessions and handles inactive users
-- **MyJKKN Responses:** Always handle both `response.data` and direct array: `const data = response.data || response || []`
-- **Row Limits:** Use `.range(0, 9999)` to override Supabase's default 1000-row limit
-- **Institution in Updates:** Never allow changing `institutions_id` after record creation
+- `super_admin` may pass no institution (All Institutions); anyone else is pinned to their own college and refused outright if they ask for another.
+- Writes that span institutions (super_admin, or library_admin without a college) must name `institution_id` — the guard returns 400 otherwise.
+- Client side: `useInstitutionFilter()` gives `institutionId`, `institutionCode`, `mustSelectInstitution` (super_admin on All), `isReady`, `appendToUrl(url)`. Fetch only when `isReady`. The query param is always `institution_id`.
+
+## Data model (Supabase, all `lib_*`)
+
+Catalogue and stock: `lib_catalogue_records`, `lib_catalogue_authors`, `lib_items` (copies, one accession number each), `lib_accession_sequences`, `lib_locations`, `lib_department_transfers`.
+Circulation: `lib_borrowers`, `lib_members`, `lib_member_categories`, `lib_lending_transactions`, `lib_resource_holds`, `lib_late_charges`, `lib_member_visits` (gate), `lib_notification_log`.
+Acquisition: `lib_procurement_requests`, `lib_procurement_orders`, `lib_procurement_items`, `lib_suppliers`, `lib_budget_heads`.
+Periodicals: `lib_periodical_subscriptions`, `lib_periodical_issues`, `lib_digital_resources`.
+Other: `lib_retirement_requests`, `lib_intercampus_requests`, `lib_conservation_requests`.
+System: `lib_institution_settings` (per-college rules), `lib_role_pages`, `lib_page_favourites`, `lib_activity_log`, `lib_impersonation_log`.
+Reports: schema `report` with one scoped view per table and the read-only function `public.lib_report_sql(p_sql, p_institution, p_limit)` — re-run `20260905_lib_report_sql.sql` after any schema change.
+
+Rules learned the hard way:
+- **Migrations sit unrun for weeks.** Never assume a new column or table exists; map `42703`/`42P01`/`PGRST205` to a clear "run migration X" message instead of a generic 500.
+- RLS is on for `lib_*`; the server client (`getSupabaseServer()`, service role) bypasses it. Use it only in API routes.
+- Supabase returns 1000 rows by default — use `.range(0, 9999)` or `lib/library/fetch-all.ts` for full lists.
+- Members are **not stored** as a roll: they come from MyJKKN; `lib_borrowers` is written only when someone borrows.
+
+## MyJKKN integration
+
+- `lib/myjkkn-api.ts`, `lib/library/myjkkn-directory.ts`, `lib/library/myjkkn-profile.ts`; env `MYJKKN_API_URL`, `MYJKKN_API_KEY`.
+- MyJKKN has 14 institutions; the library covers 7. Map through `institutions.myjkkn_institution_ids`.
+- Server-side filters are often ignored — **always filter client-side by `institution_id`** and deduplicate by code fields, not `id`.
+- Learners come in as `learner`, staff as `facilitator` (`member_category`); programme/role labels come from MyJKKN.
+- Each validate call is ~1.7 s; profile and directory caches exist — do not add per-request calls.
+
+## Conventions
+
+- Terminology: **Learner** (not student), **Facilitator** (staff), **Programme**, **Copy** / **Accession number** for a physical book. Positive wording in UI ("Needs attention" over "Failed").
+- Code style: tabs, single quotes, no semicolons, `===`. Project files use **CRLF**; keep new files CRLF.
+- Server Components by default; `'use client'` only when needed. Pages are client components that fetch `/api/lib/*`.
+- Every API write logs with `logActivity(request, { action, resource_type, resource_id, institution_id, … })` from `lib/library/activity-log.ts`.
+- Error mapping in routes: `23505` duplicate → 400, `23503` bad reference → 400, `23514` check constraint → name the migration, `42501` permission, `57014` timeout.
+- Date/time is IST everywhere on screen (`lib/library/ist-clock.ts`); store UTC.
+- Brand tokens only (`brand-green` etc.); no new UI layouts mid-feature.
+- Long titles: one line, full text on hover via `components/library/overflow-text.tsx`.
+
+## Ways of working
+
+- Reply with an **English** block, then a **Tamil** block in Tanglish (plain ASCII, no Tamil script).
+- Do only the requested work; touch no other module. When asked a question, answer in one line and change nothing.
+- Confirm understanding before building; ask on any doubt.
+- **Never** `git push`, `git pull`, `git fetch` or any GitHub action unless explicitly asked. Never commit other people's uncommitted changes. Never commit `.env`, `Reference_Documents/`, `today-work/`, `page-performace-report/` or `LIBRARY-REQUIREMENTS-*.md`.
+- Append finished code work to `today-work/YYYY-MM-DD.txt` in Tanglish for MD sir — no questions or doubts in it.
+- `/perf-audit` runs a read-only performance audit on request; it is never scheduled.

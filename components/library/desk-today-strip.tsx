@@ -56,12 +56,12 @@ export function DeskTodayStrip({
 
 	return (
 		<Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border bg-card">
-			<div className="flex items-center gap-2 px-3 py-2">
+			<div className="flex items-start gap-2 px-3 py-2 sm:items-center">
 				<CollapsibleTrigger asChild>
-					<button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm">
+					<button type="button" className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left text-sm">
 						<Clock className="h-4 w-4 shrink-0 text-muted-foreground" />
 						<span className="font-medium">Today at this desk</span>
-						<span className="truncate text-xs text-muted-foreground">
+						<span className="order-last w-full truncate pl-6 text-xs text-muted-foreground sm:order-none sm:w-auto sm:pl-0">
 							{loading && events.length === 0
 								? 'reading…'
 								: live.length === 0
@@ -74,7 +74,7 @@ export function DeskTodayStrip({
 				<Button
 					size="sm"
 					variant="ghost"
-					className="h-7 w-7 shrink-0 p-0"
+					className="h-9 w-9 shrink-0 p-0 sm:h-7 sm:w-7"
 					onClick={onRefresh}
 					disabled={loading}
 					title="Read again"
@@ -109,11 +109,11 @@ export function DeskTodayStrip({
 										<Badge variant="outline" className={cn('shrink-0 text-[11px]', badge.className)}>
 											{event.undone ? `${badge.word} — undone` : badge.word}
 										</Badge>
-										<span className={cn('flex min-w-0 flex-1 items-baseline gap-1.5', event.undone && 'line-through')}>
+										<span className={cn('flex min-w-[8rem] flex-1 items-baseline gap-1.5', event.undone && 'line-through')}>
 											<OverflowText text={event.title} className="min-w-0 font-medium" />
 											{event.accession_number && <span className="shrink-0 font-mono text-xs text-muted-foreground">{event.accession_number}</span>}
 										</span>
-										<span className="truncate text-xs text-muted-foreground">
+										<span className="min-w-[6rem] truncate text-xs text-muted-foreground">
 											{event.member_name}
 											{event.member_number ? ` · ${event.member_number}` : ''}
 											{event.kind !== 'return' && event.due_date ? ` · due ${asDate(event.due_date)}` : ''}
@@ -124,7 +124,7 @@ export function DeskTodayStrip({
 											<Button
 												size="sm"
 												variant="ghost"
-												className="h-6 px-2 text-xs"
+												className="h-8 px-2 text-xs sm:h-6"
 												disabled={undoingKey === event.key}
 												title={describeUndo(event)}
 												onClick={() => onUndo(event)}

@@ -476,7 +476,7 @@ export function AccessionRegisterTable({
 										</>}
 								</p>
 							</div>
-							<div className="flex items-center gap-1.5 shrink-0">{headerActions}</div>
+							<div className="flex min-w-0 flex-wrap items-center gap-1.5">{headerActions}</div>
 						</div>
 
 						{/* A box per field. Nothing happens until Enter or the button, so a
@@ -488,7 +488,7 @@ export function AccessionRegisterTable({
 							onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); clearSearch() } }}
 						>
 							<Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setCurrentPage(1) }}>
-								<SelectTrigger className="h-8 text-sm w-[150px]" aria-label="Book type"><SelectValue placeholder="Book type" /></SelectTrigger>
+								<SelectTrigger className="h-10 sm:h-8 text-sm w-[150px]" aria-label="Book type"><SelectValue placeholder="Book type" /></SelectTrigger>
 								<SelectContent>
 									<SelectItem value="all">All Types</SelectItem>
 									{typesInUse.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
@@ -503,7 +503,7 @@ export function AccessionRegisterTable({
 									placeholder="e.g. 65"
 									value={draft.accession}
 									onChange={e => setDraft(d => ({ ...d, accession: e.target.value }))}
-									className="h-8 text-sm mt-0.5"
+									className="h-10 sm:h-8 text-sm mt-0.5"
 									autoComplete="off"
 								/>
 							</div>
@@ -515,7 +515,7 @@ export function AccessionRegisterTable({
 									placeholder="With or without dashes"
 									value={draft.isbn}
 									onChange={e => setDraft(d => ({ ...d, isbn: e.target.value }))}
-									className="h-8 text-sm mt-0.5"
+									className="h-10 sm:h-8 text-sm mt-0.5"
 									autoComplete="off"
 								/>
 							</div>
@@ -527,18 +527,18 @@ export function AccessionRegisterTable({
 									placeholder="Any part of the title"
 									value={draft.title}
 									onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
-									className="h-8 text-sm mt-0.5"
+									className="h-10 sm:h-8 text-sm mt-0.5"
 									autoComplete="off"
 								/>
 							</div>
 
-							<Button type="submit" className="h-8 text-sm px-4">
+							<Button type="submit" className="h-10 sm:h-8 text-sm px-4">
 								<Search className="h-4 w-4 mr-1.5" />
 								Search
 							</Button>
 
 							{(hasSearch || hasDraft) && (
-								<Button type="button" variant="ghost" className="h-8 text-sm px-3" onClick={clearSearch}>
+								<Button type="button" variant="ghost" className="h-10 sm:h-8 text-sm px-3" onClick={clearSearch}>
 									Clear
 								</Button>
 							)}
@@ -549,7 +549,7 @@ export function AccessionRegisterTable({
 										type="button"
 										variant="outline"
 										size="icon"
-										className="h-8 w-8 p-0"
+										className="h-10 w-10 p-0 sm:h-8 sm:w-8"
 										onClick={downloadExcel}
 										disabled={showSkeleton || filtered.length === 0}
 										aria-label="Download this list as Excel"
@@ -562,7 +562,7 @@ export function AccessionRegisterTable({
 
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button type="button" variant="outline" size="icon" className="h-8 w-8 p-0" onClick={onRefresh} aria-label="Refresh">
+									<Button type="button" variant="outline" size="icon" className="h-10 w-10 p-0 sm:h-8 sm:w-8" onClick={onRefresh} aria-label="Refresh">
 										<RefreshCw className={`h-4 w-4 ${loading || refreshing ? 'animate-spin' : ''}`} />
 									</Button>
 								</TooltipTrigger>
@@ -581,7 +581,7 @@ export function AccessionRegisterTable({
 										type="button"
 										aria-pressed={active}
 										onClick={() => chooseQuick(active && chip.key !== 'all' ? 'all' : chip.key)}
-										className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-xs font-medium transition-colors ${
+										className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 h-9 sm:h-7 text-xs font-medium transition-colors ${
 											active
 												? 'bg-primary text-primary-foreground border-primary'
 												: 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -772,7 +772,7 @@ export function AccessionRegisterTable({
 										</button>
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
-												<Button variant="ghost" className="h-7 w-7 p-0 shrink-0" aria-label="More">
+												<Button variant="ghost" className="h-9 w-9 p-0 shrink-0" aria-label="More">
 													<MoreHorizontal className="h-4 w-4" />
 												</Button>
 											</DropdownMenuTrigger>
@@ -817,7 +817,7 @@ export function AccessionRegisterTable({
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>
-									<SelectTrigger className="h-7 w-[70px] text-xs" aria-label="Rows per page"><SelectValue /></SelectTrigger>
+									<SelectTrigger className="h-9 sm:h-7 w-[70px] text-xs" aria-label="Rows per page"><SelectValue /></SelectTrigger>
 									<SelectContent>
 										{pageSizeOptions.map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
 									</SelectContent>
@@ -829,10 +829,10 @@ export function AccessionRegisterTable({
 										? '0 of 0'
 										: `${(page - 1) * effectivePerPage + 1}–${Math.min(page * effectivePerPage, filtered.length)} of ${filtered.length}`}
 								</span>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={page <= 1} onClick={() => setCurrentPage(p => p - 1)} aria-label="Previous page">
+								<Button variant="outline" size="icon" className="h-9 w-9 p-0 sm:h-7 sm:w-7" disabled={page <= 1} onClick={() => setCurrentPage(p => p - 1)} aria-label="Previous page">
 									<ChevronLeft className="h-4 w-4" />
 								</Button>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={page >= totalPages} onClick={() => setCurrentPage(p => p + 1)} aria-label="Next page">
+								<Button variant="outline" size="icon" className="h-9 w-9 p-0 sm:h-7 sm:w-7" disabled={page >= totalPages} onClick={() => setCurrentPage(p => p + 1)} aria-label="Next page">
 									<ChevronRight className="h-4 w-4" />
 								</Button>
 							</div>

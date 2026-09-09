@@ -160,7 +160,7 @@ export default function OPACPage() {
 
 					{/* Search bar */}
 					<div className="w-full max-w-2xl">
-						<div className="flex gap-2">
+						<div className="flex flex-col gap-2 sm:flex-row">
 							<div className="relative flex-1">
 								<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
 								<Input
@@ -172,7 +172,7 @@ export default function OPACPage() {
 									aria-label="Search catalogue"
 								/>
 							</div>
-							<Button className="h-12 px-6 text-base" onClick={handleSearch} disabled={loading}>
+							<Button className="h-12 w-full px-6 text-base sm:w-auto" onClick={handleSearch} disabled={loading}>
 								{loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : 'Search'}
 							</Button>
 						</div>

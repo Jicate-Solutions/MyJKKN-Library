@@ -196,22 +196,3 @@ export function describeUndo(event: DeskEvent): string {
 	}
 }
 
-// ── Desk preferences, kept in this browser ───────────────────────────────────
-
-const CONFIRM_ON_SCAN_KEY = 'lib:desk:confirm-on-scan'
-
-export function readConfirmOnScan(): boolean {
-	try {
-		return window.localStorage.getItem(CONFIRM_ON_SCAN_KEY) === '1'
-	} catch {
-		return false
-	}
-}
-
-export function writeConfirmOnScan(on: boolean): void {
-	try {
-		window.localStorage.setItem(CONFIRM_ON_SCAN_KEY, on ? '1' : '0')
-	} catch {
-		// A browser that refuses storage still gets the switch for this visit
-	}
-}

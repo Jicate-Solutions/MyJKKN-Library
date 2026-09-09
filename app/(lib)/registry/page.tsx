@@ -667,7 +667,7 @@ export default function RegistryPage() {
 						{/* Row 2: Filters */}
 						<div className="flex items-center gap-2 flex-wrap mt-3">
 							<Select value={formatFilter} onValueChange={v => { setFormatFilter(v); setCurrentPage(1) }}>
-								<SelectTrigger className="h-8 text-sm w-[150px]"><SelectValue placeholder="Format" /></SelectTrigger>
+								<SelectTrigger className="h-10 sm:h-8 text-sm w-[150px]"><SelectValue placeholder="Format" /></SelectTrigger>
 								<SelectContent>
 									<SelectItem value="all">All Formats</SelectItem>
 									{FORMATS.map(f => (
@@ -681,12 +681,12 @@ export default function RegistryPage() {
 									placeholder="Search title, ISBN, call number, author..."
 									value={search}
 									onChange={e => { setSearch(e.target.value); setCurrentPage(1) }}
-									className="pl-8 h-8 text-sm"
+									className="pl-8 h-10 sm:h-8 text-sm"
 								/>
 							</div>
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
+									<Button variant="outline" size="icon" className="h-10 w-10 p-0 sm:h-8 sm:w-8" onClick={fetchData}>
 										<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 									</Button>
 								</TooltipTrigger>
@@ -799,7 +799,7 @@ export default function RegistryPage() {
 										</div>
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
-												<Button variant="ghost" className="h-7 w-7 p-0 shrink-0">
+												<Button variant="ghost" className="h-9 w-9 p-0 shrink-0">
 													<MoreHorizontal className="h-4 w-4" />
 												</Button>
 											</DropdownMenuTrigger>
@@ -841,7 +841,7 @@ export default function RegistryPage() {
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>
-									<SelectTrigger className="h-7 w-[70px] text-xs"><SelectValue /></SelectTrigger>
+									<SelectTrigger className="h-9 sm:h-7 w-[70px] text-xs"><SelectValue /></SelectTrigger>
 									<SelectContent>
 										{pageSizeOptions.map(n => (
 											<SelectItem key={n} value={String(n)}>{n === filtered.length ? 'All' : n}</SelectItem>
@@ -853,10 +853,10 @@ export default function RegistryPage() {
 								<span className="text-xs text-muted-foreground px-2 tabular-nums">
 									{filtered.length === 0 ? '0 of 0' : `${(currentPage - 1) * effectivePerPage + 1}–${Math.min(currentPage * effectivePerPage, filtered.length)} of ${filtered.length}`}
 								</span>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
+								<Button variant="outline" size="icon" className="h-9 w-9 p-0 sm:h-7 sm:w-7" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
 									<ChevronLeft className="h-4 w-4" />
 								</Button>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
+								<Button variant="outline" size="icon" className="h-9 w-9 p-0 sm:h-7 sm:w-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
 									<ChevronRight className="h-4 w-4" />
 								</Button>
 							</div>

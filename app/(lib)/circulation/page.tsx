@@ -8,28 +8,25 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { OverflowText } from '@/components/library/overflow-text'
-import { Switch } from '@/components/ui/switch'
 import { BarcodeScannerInput } from '@/components/library/barcode-scanner-input'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
 import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { DeskMemberSearch } from '@/components/library/desk-member-search'
 import { DeskLastResult } from '@/components/library/desk-last-result'
 import { DeskTodayStrip } from '@/components/library/desk-today-strip'
 import { SettleChargeDialog, type SettleMode, type SettleRequest } from '@/components/library/settle-charge-dialog'
 import {
 	CheckCircle, RefreshCw, RotateCcw, BookOpen, AlertTriangle, ArrowRightLeft, Loader2, UserPlus,
-	Bookmark, IndianRupee, X, Volume2, VolumeX, Info,
+	Bookmark, IndianRupee, X, Info,
 } from 'lucide-react'
 import {
 	issueItem, returnItem, renewItem, cancelHold, undoDeskAction, fetchRecentDeskEvents,
 } from '@/services/library/lib-circulation-service'
 import {
-	asDate, itemTitle, rupees, messageOf, eventKey, canUndo, readConfirmOnScan, writeConfirmOnScan,
+	asDate, itemTitle, rupees, messageOf, eventKey, canUndo,
 	UNDO_WINDOW_MS,
 	type DeskEvent, type DeskItem, type DeskMember, type MemberCharge, type MemberHold, type MemberLoan,
 } from '@/lib/library/desk'
-import { deskBeep, deskBuzz, isDeskMuted, setDeskMuted } from '@/lib/library/desk-sounds'
 import type { LibLendingTransaction, LibItem, LibLateCharge } from '@/types/lib'
 
 // ─── What the tabs share ──────────────────────────────────────────────────────
@@ -57,8 +54,7 @@ interface Handoff {
 interface DeskShared {
 	institutionId: string | null
 	active: boolean
-	confirmOnScan: boolean
-	/** Something was done: a line for the strip and the result line, and a beep. */
+	/** Something was done: a line for the strip and the result line. */
 	onEvent: (event: DeskEvent) => void
 	/** The code belongs to another tab — a card in the book box, a book in the card box. */
 	redirect: (code: string, guess: 'member' | 'item' | 'loan') => void
@@ -161,7 +157,7 @@ function ScanFeedback({
 		return (
 			<div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
 				<AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-				<span>
+				<span className="min-w-0 break-words">
 					{error}
 					{code ? <> — scanned <span className="font-mono">{code}</span></> : null}
 				</span>
@@ -244,7 +240,6 @@ function MemberLoansPanel({
 			}
 			onChanged()
 		} catch (err) {
-			deskBuzz()
 			toast({
 				title: '❌ ' + (err instanceof Error ? err.message : 'Action failed'),
 				variant: 'destructive',
@@ -277,7 +272,7 @@ function MemberLoansPanel({
 			<div className="divide-y rounded-md border">
 				{loans.map(loan => (
 					<div key={loan.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-						<div className="min-w-0 flex-1">
+						<div className="min-w-[8rem] flex-1">
 							<OverflowText as="p" text={loan.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{loan.accession_number && <span className="font-mono">{loan.accession_number}</span>}
@@ -303,7 +298,7 @@ function MemberLoansPanel({
 							<Button
 								size="sm"
 								variant="outline"
-								className="h-8 text-xs"
+								className="h-10 text-xs sm:h-8"
 								disabled={busyId === loan.id || !loan.can_renew}
 								title={loan.can_renew ? 'Extend the due date' : 'Renewal limit reached'}
 								onClick={() => act(loan, 'renew')}
@@ -315,7 +310,7 @@ function MemberLoansPanel({
 							</Button>
 							<Button
 								size="sm"
-								className="h-8 text-xs"
+								className="h-10 text-xs sm:h-8"
 								disabled={busyId === loan.id}
 								onClick={() => act(loan, 'return')}
 							>
@@ -353,14 +348,12 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
 		try {
 			setBusyId(hold.id)
 			await cancelHold(hold.id, 'Cancelled at the desk')
-			deskBeep()
 			toast({
 				title: `✅ Hold cancelled — ${hold.title}`,
 				className: 'bg-green-50 border-green-200 text-green-800',
 			})
 			onChanged()
 		} catch (err) {
-			deskBuzz()
 			toast({ title: '❌ ' + messageOf(err, 'Could not cancel the hold'), variant: 'destructive' })
 		} finally {
 			setBusyId(null)
@@ -379,7 +372,7 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
 			<div className="divide-y rounded-md border">
 				{holds.map(hold => (
 					<div key={hold.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-						<div className="min-w-0 flex-1">
+						<div className="min-w-[8rem] flex-1">
 							<OverflowText as="p" text={hold.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{hold.call_number && <span className="font-mono">{hold.call_number}</span>}
@@ -400,7 +393,7 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
 						<Button
 							size="sm"
 							variant="outline"
-							className="h-8 text-xs"
+							className="h-10 text-xs sm:h-8"
 							disabled={busyId === hold.id}
 							title="Take this member out of the queue"
 							onClick={() => drop(hold)}
@@ -444,7 +437,7 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 			<div className="divide-y rounded-md border">
 				{charges.map(charge => (
 					<div key={charge.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-						<div className="min-w-0 flex-1">
+						<div className="min-w-[8rem] flex-1">
 							<OverflowText as="p" text={charge.title} className="text-sm font-medium" />
 							<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{charge.accession_number && <span className="font-mono">{charge.accession_number}</span>}
@@ -465,10 +458,10 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 						</Badge>
 
 						<div className="flex items-center gap-2">
-							<Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setSettling({ charge, mode: 'waive' })}>
+							<Button size="sm" variant="outline" className="h-10 text-xs sm:h-8" onClick={() => setSettling({ charge, mode: 'waive' })}>
 								Waive
 							</Button>
-							<Button size="sm" className="h-8 text-xs" onClick={() => setSettling({ charge, mode: 'collect' })}>
+							<Button size="sm" className="h-10 text-xs sm:h-8" onClick={() => setSettling({ charge, mode: 'collect' })}>
 								<IndianRupee className="mr-1 h-3 w-3" />
 								Collect
 							</Button>
@@ -481,7 +474,6 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 				settling={settling}
 				onClose={() => setSettling(null)}
 				onSettled={(_saved, request) => {
-					deskBeep()
 					toast({
 						title: request.mode === 'collect'
 							? `✅ ${rupees(request.charge.net_payable)} collected`
@@ -516,7 +508,7 @@ function IssueTab({
 	memberHandoff: Handoff | null
 	itemHandoff: Handoff | null
 }) {
-	const { institutionId, active, confirmOnScan, onEvent, redirect, setKeys, lastUndone, resyncNonce } = shared
+	const { institutionId, active, onEvent, redirect, setKeys, lastUndone, resyncNonce } = shared
 	const { toast } = useToast()
 	// The desk lookup returns more than the stored row: the MyJKKN photo and
 	// what the member currently has out, so the librarian can decide at a glance.
@@ -577,12 +569,10 @@ function IssueTab({
 		}
 		if (found.refusal) {
 			setMemberError(`${itemTitle(found)}: ${found.refusal}`)
-			deskBuzz()
 			return true
 		}
 		setPendingItem(found)
 		setMemberInfo(`${itemTitle(found)} is ready to go out — scan the member card to issue it. Esc to put it back.`)
-		deskBeep()
 		return true
 	}, [institutionId, redirect])
 
@@ -616,13 +606,11 @@ function IssueTab({
 				setHeldCount(data.items_on_loan ?? 0)
 			} else {
 				takeMember(data)
-				deskBeep()
 			}
 		} catch (err) {
 			if (!quiet) {
 				const message = messageOf(err, 'Member not found')
 				setMemberError(message)
-				deskBuzz()
 				toast({ title: '❌ ' + message, description: `Scanned: ${barcode}`, variant: 'destructive' })
 			}
 		} finally {
@@ -691,7 +679,6 @@ function IssueTab({
 			setItem(null)
 			setItemScan(null)
 			setItemInfo(null)
-			deskBeep()
 			onEvent({
 				key: eventKey('issue', transactionId, issuedAt),
 				kind: 'issue',
@@ -710,7 +697,6 @@ function IssueTab({
 		} catch (err) {
 			const message = messageOf(err, 'Issue failed')
 			setItemError(message)
-			deskBuzz()
 			toast({ title: '❌ ' + message, variant: 'destructive' })
 		} finally {
 			setIssuing(false)
@@ -750,7 +736,6 @@ function IssueTab({
 					if (asMember.ok) {
 						reset()
 						takeMember(person)
-						deskBeep()
 						return
 					}
 				}
@@ -767,22 +752,18 @@ function IssueTab({
 					return
 				}
 				setItemError(data.refusal)
-				deskBuzz()
 				toast({ title: '❌ ' + data.refusal, description: `Scanned: ${barcode}`, variant: 'destructive' })
 				return
 			}
 			setItem(data)
-			if (confirmOnScan) await doIssue(data)
-			else deskBeep()
 		} catch (err) {
 			const message = messageOf(err, 'Item not found')
 			setItemError(message)
-			deskBuzz()
 			toast({ title: '❌ ' + message, description: `Scanned: ${barcode}`, variant: 'destructive' })
 		} finally {
 			setItemBusy(false)
 		}
-	}, [institutionId, toast, confirmOnScan, doIssue, redirect, reset, takeMember])
+	}, [institutionId, toast, redirect, reset, takeMember])
 
 	// A card arrives for a book already waiting: the book goes out now
 	useEffect(() => {
@@ -872,7 +853,7 @@ function IssueTab({
 			{/* Step 1: Member */}
 			<Card className={`transition-colors ${!member ? 'border-blue-400 shadow-sm' : 'border-emerald-300'}`}>
 				<CardHeader className="py-3 px-4">
-					<CardTitle className="text-sm flex items-center gap-2">
+					<CardTitle className="text-sm flex flex-wrap items-center gap-2">
 						<div className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold ${member ? 'bg-emerald-500 text-white' : 'bg-blue-100 text-blue-700'}`}>
 							{member ? '✓' : '1'}
 						</div>
@@ -889,15 +870,12 @@ function IssueTab({
 						<BarcodeScannerInput
 							onScan={code => { void lookupMember(code) }}
 							busy={memberBusy}
-							placeholder="Scan member card — or a book, the desk works out which…"
+							placeholder="Scan member card — or type roll number / MyJKKN ID and press Enter…"
+							cameraLabel="Point the camera at the QR on the member's card — or at a book's barcode"
 						/>
+						{/* No card in hand? The same box takes a typed roll number or MyJKKN
+						    ID and Enter — it goes through the same lookup as a scan. */}
 						<ScanFeedback busy={memberBusy} code={memberScan} error={memberError} info={memberInfo} />
-						{/* The learner who forgot their card: name or roll number instead */}
-						<DeskMemberSearch
-							institutionId={institutionId}
-							disabled={memberBusy}
-							onPick={number => { void lookupMember(number) }}
-						/>
 					</CardContent>
 				)}
 				{member && (
@@ -914,7 +892,7 @@ function IssueTab({
 							<div className="min-w-0">
 								<div className="flex items-center gap-2">
 									<span className="font-medium truncate">{member.display_name}</span>
-									<MemberCategoryBadge category={member.member_category} />
+									<MemberCategoryBadge category={member.member_category} className="shrink-0" />
 								</div>
 								<div className="text-xs text-muted-foreground">
 									{member.member_number}
@@ -953,7 +931,7 @@ function IssueTab({
 			{/* Step 2: Item — stays open book after book until the limit is reached */}
 			<Card className={`transition-colors ${!member ? 'opacity-60' : atLimit ? 'border-amber-300' : item ? 'border-emerald-300' : 'border-blue-400 shadow-sm'}`}>
 				<CardHeader className="py-3 px-4">
-					<CardTitle className="text-sm flex items-center gap-2">
+					<CardTitle className="text-sm flex flex-wrap items-center gap-2">
 						<div className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold ${item ? 'bg-emerald-500 text-white' : member && !atLimit ? 'bg-blue-100 text-blue-700' : 'bg-muted text-muted-foreground'}`}>
 							{item ? '✓' : '2'}
 						</div>
@@ -983,7 +961,8 @@ function IssueTab({
 						<BarcodeScannerInput
 							onScan={code => { void lookupItem(code) }}
 							busy={itemBusy || issuing}
-							placeholder={confirmOnScan ? 'Scan item barcode — it goes out on the scan…' : 'Scan item barcode…'}
+							placeholder="Scan item barcode…"
+							cameraLabel="Point the camera at the barcode on the book"
 						/>
 						<ScanFeedback busy={itemBusy || issuing} code={itemScan} error={itemError} info={itemInfo} />
 					</CardContent>
@@ -1030,7 +1009,7 @@ function IssueTab({
 							{issued.map((line, index) => (
 								<div key={line.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
 									<span className="w-5 shrink-0 text-xs text-muted-foreground">{index + 1}.</span>
-									<OverflowText text={line.title} className="min-w-0 flex-1 font-medium" />
+									<OverflowText text={line.title} className="min-w-[8rem] flex-1 font-medium" />
 									<span className="font-mono text-xs text-muted-foreground">{line.accession_number}</span>
 									<span className="text-xs text-muted-foreground">Due {asDate(line.due_date)}</span>
 								</div>
@@ -1041,7 +1020,7 @@ function IssueTab({
 			)}
 
 			{member && (
-				<Button variant="outline" className="h-10 w-full" onClick={reset} disabled={issuing}>
+				<Button variant="outline" className="h-auto min-h-[2.5rem] w-full flex-wrap whitespace-normal sm:h-10 sm:flex-nowrap sm:whitespace-nowrap" onClick={reset} disabled={issuing}>
 					<UserPlus className="h-4 w-4 mr-2" />
 					Done — next member
 					<span className="ml-2 text-xs font-normal text-muted-foreground">or just scan the next card</span>
@@ -1105,7 +1084,6 @@ function useLoanScan(shared: DeskShared) {
 		} catch (err) {
 			const message = messageOf(err, 'Lookup failed')
 			setError(message)
-			deskBuzz()
 			toast({ title: '❌ ' + message, description: `Scanned: ${barcode}`, variant: 'destructive' })
 			return null
 		} finally {
@@ -1150,9 +1128,9 @@ function DoneNowCard({
 						return (
 							<div key={line.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
 								<span className="w-5 shrink-0 text-xs text-muted-foreground">{index + 1}.</span>
-								<OverflowText text={line.title} className="min-w-0 flex-1 font-medium" />
+								<OverflowText text={line.title} className="min-w-[8rem] flex-1 font-medium" />
 								{line.accession_number && <span className="font-mono text-xs text-muted-foreground">{line.accession_number}</span>}
-								<span className="truncate text-xs text-muted-foreground">{line.member_name}</span>
+								<span className="min-w-[6rem] truncate text-xs text-muted-foreground">{line.member_name}</span>
 								{kind === 'return' ? (
 									line.late_days && line.late_days > 0 ? (
 										<span className={`text-xs ${owing ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
@@ -1183,7 +1161,7 @@ function ReturnTab({
 	loanHandoff: Handoff | null
 	events: DeskEvent[]
 }) {
-	const { institutionId, active, confirmOnScan, onEvent, setKeys } = shared
+	const { institutionId, active, onEvent, setKeys } = shared
 	const { toast } = useToast()
 	const { transaction, busy, scan, error, setError, info, lookup, clear } = useLoanScan(shared)
 	const [returning, setReturning] = useState(false)
@@ -1197,7 +1175,6 @@ function ReturnTab({
 			const result = await returnItem({ transaction_id: tx.id, institution_id: institutionId ?? '' })
 			const returnedAt = result.transaction?.returned_at ?? new Date().toISOString()
 			clear()
-			deskBeep()
 			onEvent({
 				key: eventKey('return', tx.id, returnedAt),
 				kind: 'return',
@@ -1217,7 +1194,6 @@ function ReturnTab({
 		} catch (err) {
 			const message = messageOf(err, 'Return failed')
 			setError(message)
-			deskBuzz()
 			toast({ title: '❌ ' + message, variant: 'destructive' })
 		} finally {
 			setReturning(false)
@@ -1225,11 +1201,8 @@ function ReturnTab({
 	}, [institutionId, toast, onEvent, clear, setError])
 
 	const scanBook = useCallback(async (barcode: string) => {
-		const found = await lookup(barcode)
-		if (!found) return
-		if (confirmOnScan) await doReturn(found)
-		else deskBeep()
-	}, [lookup, confirmOnScan, doReturn])
+		await lookup(barcode)
+	}, [lookup])
 
 	// A book on loan scanned into another tab lands here
 	useEffect(() => {
@@ -1259,7 +1232,8 @@ function ReturnTab({
 					<BarcodeScannerInput
 						onScan={code => { void scanBook(code) }}
 						busy={busy || returning}
-						placeholder={confirmOnScan ? 'Scan item barcode — it is returned on the scan…' : 'Scan item barcode to return…'}
+						placeholder="Scan item barcode to return…"
+						cameraLabel="Point the camera at the barcode on the book being returned"
 					/>
 					<ScanFeedback busy={busy || returning} code={scan} error={transaction ? null : error} info={info} />
 					<p className="mt-2 text-[11px] text-muted-foreground">
@@ -1271,7 +1245,7 @@ function ReturnTab({
 			{transaction && (
 				<Card className="border-amber-300">
 					<CardContent className="pt-4 pb-4 px-4 space-y-4">
-						<div className="grid grid-cols-2 gap-3 text-sm">
+						<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
 							<div>
 								<p className="text-xs text-muted-foreground">Member</p>
 								<p className="font-medium mt-0.5">{transaction.member?.display_name ?? transaction.member_id}</p>
@@ -1332,7 +1306,7 @@ function RenewTab({
 	shared: DeskShared
 	events: DeskEvent[]
 }) {
-	const { institutionId, active, confirmOnScan, onEvent, setKeys } = shared
+	const { institutionId, active, onEvent, setKeys } = shared
 	const { toast } = useToast()
 	const { transaction, busy, scan, error, setError, info, lookup, clear } = useLoanScan(shared)
 	const [renewing, setRenewing] = useState(false)
@@ -1345,7 +1319,6 @@ function RenewTab({
 			const result = await renewItem({ transaction_id: tx.id, institution_id: institutionId ?? '' })
 			const renewedAt = result.transaction?.last_renewed_at ?? new Date().toISOString()
 			clear()
-			deskBeep()
 			onEvent({
 				key: eventKey('renew', tx.id, renewedAt),
 				kind: 'renew',
@@ -1362,7 +1335,6 @@ function RenewTab({
 		} catch (err) {
 			const message = messageOf(err, 'Renewal failed')
 			setError(message)
-			deskBuzz()
 			toast({ title: '❌ ' + message, variant: 'destructive' })
 		} finally {
 			setRenewing(false)
@@ -1370,11 +1342,8 @@ function RenewTab({
 	}, [institutionId, toast, onEvent, clear, setError])
 
 	const scanBook = useCallback(async (barcode: string) => {
-		const found = await lookup(barcode)
-		if (!found) return
-		if (confirmOnScan) await doRenew(found)
-		else deskBeep()
-	}, [lookup, confirmOnScan, doRenew])
+		await lookup(barcode)
+	}, [lookup])
 
 	useEffect(() => {
 		if (!active) return
@@ -1397,7 +1366,8 @@ function RenewTab({
 					<BarcodeScannerInput
 						onScan={code => { void scanBook(code) }}
 						busy={busy || renewing}
-						placeholder={confirmOnScan ? 'Scan item barcode — it is renewed on the scan…' : 'Scan item barcode to renew…'}
+						placeholder="Scan item barcode to renew…"
+						cameraLabel="Point the camera at the barcode on the book being renewed"
 					/>
 					<ScanFeedback busy={busy || renewing} code={scan} error={transaction ? null : error} info={info} />
 					<p className="mt-2 text-[11px] text-muted-foreground">
@@ -1409,7 +1379,7 @@ function RenewTab({
 			{transaction && (
 				<Card className="border-blue-300">
 					<CardContent className="pt-4 pb-4 px-4 space-y-4">
-						<div className="grid grid-cols-2 gap-3 text-sm">
+						<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
 							<div>
 								<p className="text-xs text-muted-foreground">Member</p>
 								<p className="font-medium mt-0.5">{transaction.member?.display_name ?? transaction.member_id}</p>
@@ -1473,8 +1443,6 @@ export default function CirculationPage() {
 	const { toast } = useToast()
 
 	const [tab, setTab] = useState<TabName>('issue')
-	const [confirmOnScan, setConfirmOnScan] = useState(false)
-	const [muted, setMuted] = useState(false)
 
 	// The desk's own record of the day: what came from the server when the page
 	// opened, and everything done since, newest first.
@@ -1493,12 +1461,6 @@ export default function CirculationPage() {
 	const keysRef = useRef<Record<TabName, KeyHandlers | null>>({ issue: null, return: null, renew: null })
 	const tabRef = useRef<TabName>('issue')
 	tabRef.current = tab
-
-	// What this browser was last set to
-	useEffect(() => {
-		setConfirmOnScan(readConfirmOnScan())
-		setMuted(isDeskMuted())
-	}, [])
 
 	// The college roll into memory before the first card, and today's work
 	const loadEvents = useCallback(async () => {
@@ -1566,9 +1528,7 @@ export default function CirculationPage() {
 			setEvents(prev => prev.map(e => e.key === event.key ? undone : e))
 			setLastResult(prev => prev?.key === event.key ? undone : prev)
 			setLastUndone(undone)
-			deskBeep()
 		} catch (err) {
-			deskBuzz()
 			toast({ title: '❌ ' + messageOf(err, 'Could not take that back'), variant: 'destructive' })
 		} finally {
 			setUndoingKey(null)
@@ -1596,7 +1556,6 @@ export default function CirculationPage() {
 		setLastResult(prev => prev ? patch(prev) : prev)
 		setSettling(null)
 		setResyncNonce(n => n + 1)
-		deskBeep()
 		toast({
 			title: request.mode === 'collect'
 				? `✅ ${rupees(request.charge.net_payable)} collected`
@@ -1650,25 +1609,12 @@ export default function CirculationPage() {
 	const shared = (name: TabName): DeskShared => ({
 		institutionId,
 		active: tab === name,
-		confirmOnScan,
 		onEvent,
 		redirect,
 		setKeys,
 		lastUndone,
 		resyncNonce,
 	})
-
-	const toggleConfirmOnScan = (on: boolean) => {
-		setConfirmOnScan(on)
-		writeConfirmOnScan(on)
-	}
-
-	const toggleSound = () => {
-		const next = !muted
-		setMuted(next)
-		setDeskMuted(next)
-		if (!next) deskBeep()
-	}
 
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
@@ -1681,27 +1627,6 @@ export default function CirculationPage() {
 					<div className="min-w-0">
 						<h1 className="text-base font-semibold">Circulation Desk</h1>
 						<p className="text-xs text-muted-foreground">Issue, return, and renew library resources</p>
-					</div>
-
-					<div className="ml-auto flex items-center gap-3">
-						{/* Scan = done. Off by default; a switch, so a cautious desk can leave it off. */}
-						<label
-							className="flex cursor-pointer items-center gap-2 text-xs"
-							title="On: a scanned book is issued, returned or renewed at once, with Undo for two minutes. Off: the desk asks you to confirm each one."
-						>
-							<Switch checked={confirmOnScan} onCheckedChange={toggleConfirmOnScan} aria-label="Confirm on scan" />
-							<span className="font-medium">Confirm on scan</span>
-						</label>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="h-8 w-8 p-0"
-							onClick={toggleSound}
-							title={muted ? 'Sound is off — turn on the beep' : 'Sound is on — beep on success, buzz on refusal'}
-							aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
-						>
-							{muted ? <VolumeX className="h-4 w-4 text-muted-foreground" /> : <Volume2 className="h-4 w-4" />}
-						</Button>
 					</div>
 				</div>
 			</div>
