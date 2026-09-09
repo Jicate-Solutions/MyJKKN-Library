@@ -102,45 +102,45 @@ export default function OverduePage() {
 			<div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
 				<Card className="border-l-4 border-l-rose-500 hover:shadow-md transition-shadow">
 					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex items-center justify-between gap-2">
+							<div className="min-w-0">
 								<p className="text-2xl font-bold tracking-tight">{scorecardData.total}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Overdue</p>
 							</div>
-							<AlertTriangle className="h-5 w-5 text-rose-500/40" />
+							<AlertTriangle className="h-5 w-5 shrink-0 text-rose-500/40" />
 						</div>
 					</CardContent>
 				</Card>
 				<Card className="border-l-4 border-l-amber-500 hover:shadow-md transition-shadow">
 					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex items-center justify-between gap-2">
+							<div className="min-w-0">
 								<p className="text-2xl font-bold tracking-tight">{scorecardData.bucket1to7}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">1–7 Days</p>
 							</div>
-							<Clock className="h-5 w-5 text-amber-500/40" />
+							<Clock className="h-5 w-5 shrink-0 text-amber-500/40" />
 						</div>
 					</CardContent>
 				</Card>
 				<Card className="border-l-4 border-l-orange-500 hover:shadow-md transition-shadow">
 					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex items-center justify-between gap-2">
+							<div className="min-w-0">
 								<p className="text-2xl font-bold tracking-tight">{scorecardData.bucket8to30}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">8–30 Days</p>
 							</div>
-							<Timer className="h-5 w-5 text-orange-500/40" />
+							<Timer className="h-5 w-5 shrink-0 text-orange-500/40" />
 						</div>
 					</CardContent>
 				</Card>
 				<Card className="border-l-4 border-l-red-600 hover:shadow-md transition-shadow">
 					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
+						<div className="flex items-center justify-between gap-2">
+							<div className="min-w-0">
 								<p className="text-2xl font-bold tracking-tight">{scorecardData.bucket30plus}</p>
 								<p className="text-xs font-medium text-muted-foreground mt-0.5">30+ Days</p>
 							</div>
-							<AlarmClock className="h-5 w-5 text-red-600/40" />
+							<AlarmClock className="h-5 w-5 shrink-0 text-red-600/40" />
 						</div>
 					</CardContent>
 				</Card>
@@ -176,7 +176,7 @@ export default function OverduePage() {
 								/>
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
+										<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={fetchData}>
 											<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 										</Button>
 									</TooltipTrigger>
@@ -187,7 +187,7 @@ export default function OverduePage() {
 						{/* Row 2: Filters */}
 						<div className="flex items-center gap-2 flex-wrap mt-3">
 							<Select value={bucketFilter} onValueChange={v => { setBucketFilter(v); setCurrentPage(1) }}>
-								<SelectTrigger className="h-8 text-sm w-[140px]"><SelectValue placeholder="Overdue range" /></SelectTrigger>
+								<SelectTrigger className="h-11 sm:h-8 text-sm w-[140px]"><SelectValue placeholder="Overdue range" /></SelectTrigger>
 								<SelectContent>
 									<SelectItem value="all">All Ranges</SelectItem>
 									<SelectItem value="1-7">1–7 Days</SelectItem>
@@ -195,13 +195,13 @@ export default function OverduePage() {
 									<SelectItem value="30+">30+ Days</SelectItem>
 								</SelectContent>
 							</Select>
-							<div className="relative flex-1 max-w-sm">
+							<div className="relative grow basis-40 max-w-sm">
 								<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 								<Input
 									placeholder="Search member or title..."
 									value={search}
 									onChange={e => { setSearch(e.target.value); setCurrentPage(1) }}
-									className="pl-8 h-8 text-sm"
+									className="pl-8 h-11 sm:h-8 text-sm"
 								/>
 							</div>
 						</div>
@@ -302,9 +302,9 @@ export default function OverduePage() {
 								return (
 									<div key={t.id} className={`rounded-lg border p-4 space-y-2 ${cardBorderClass}`}>
 										<div className="flex items-start justify-between gap-2">
-											<div>
-												<p className="font-medium text-sm">{t.member?.display_name ?? t.member_id}</p>
-												<p className="text-xs text-muted-foreground">{t.member?.member_number}</p>
+											<div className="min-w-0">
+												<p className="font-medium text-sm truncate">{t.member?.display_name ?? t.member_id}</p>
+												<p className="text-xs text-muted-foreground truncate">{t.member?.member_number}</p>
 											</div>
 											<Badge variant="outline" className={`text-xs shrink-0 ${badgeClass}`}>
 												{days}d overdue
@@ -325,7 +325,7 @@ export default function OverduePage() {
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
 								<Select value={String(itemsPerPage)} onValueChange={v => { setItemsPerPage(Number(v)); setCurrentPage(1) }}>
-									<SelectTrigger className="h-7 w-[70px] text-xs"><SelectValue /></SelectTrigger>
+									<SelectTrigger className="h-11 sm:h-7 w-[70px] text-xs"><SelectValue /></SelectTrigger>
 									<SelectContent>
 										{pageSizeOptions.map(n => (
 											<SelectItem key={n} value={String(n)}>{n === filtered.length ? 'All' : n}</SelectItem>
@@ -337,10 +337,10 @@ export default function OverduePage() {
 								<span className="text-xs text-muted-foreground px-2 tabular-nums">
 									{filtered.length === 0 ? '0 of 0' : `${(currentPage - 1) * effectivePerPage + 1}–${Math.min(currentPage * effectivePerPage, filtered.length)} of ${filtered.length}`}
 								</span>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
+								<Button variant="outline" size="icon" className="h-11 w-11 sm:h-7 sm:w-7 p-0" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
 									<ChevronLeft className="h-4 w-4" />
 								</Button>
-								<Button variant="outline" size="icon" className="h-7 w-7 p-0" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
+								<Button variant="outline" size="icon" className="h-11 w-11 sm:h-7 sm:w-7 p-0" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
 									<ChevronRight className="h-4 w-4" />
 								</Button>
 							</div>

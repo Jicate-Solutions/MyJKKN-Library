@@ -121,7 +121,9 @@ export function SendRemindersButton({ institutionId, type, onSent, disabled }: S
 			<Button
 				variant="outline"
 				size="sm"
-				className="h-8 text-sm"
+				// 44px on a phone so it is a real tap target beside the refresh
+				// button, back to 32px from sm: up. Shared with Holds.
+				className="h-11 sm:h-8 text-sm"
 				onClick={handleOpen}
 				disabled={disabled || checking || !institutionId}
 			>
