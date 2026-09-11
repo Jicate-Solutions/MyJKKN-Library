@@ -164,13 +164,43 @@ export function CameraScanner({
 			}
 			const chosen = devices[cameraIndex.current] ?? devices[0]
 
-			const { BrowserMultiFormatReader } = await import('@zxing/browser')
-			const reader = new BrowserMultiFormatReader()
+			const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
+				import('@zxing/browser'),
+				import('@zxing/library'),
+			])
+
+			// Left to itself the reader tries every format it knows at the camera's
+			// default picture size, once every half second. That reads a QR — which
+			// is large and forgiving — and almost never a printed accession label,
+			// whose bars are a few pixels wide at that size. So: only the formats
+			// the library actually meets, the slower "try harder" pass that reads
+			// bars at an angle or under a lamp, a full-size picture with the focus
+			// kept moving, and a fresh attempt several times a second.
+			const hints = new Map()
+			hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+				BarcodeFormat.QR_CODE,
+				BarcodeFormat.CODE_128,
+				BarcodeFormat.CODE_39,
+				BarcodeFormat.EAN_13,
+				BarcodeFormat.EAN_8,
+				BarcodeFormat.ITF,
+				BarcodeFormat.CODABAR,
+			])
+			hints.set(DecodeHintType.TRY_HARDER, true)
+			const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 })
 
 			if (!videoRef.current) return
 
-			const controls = await reader.decodeFromVideoDevice(
-				chosen?.deviceId,
+			const controls = await reader.decodeFromConstraints(
+				{
+					video: {
+						...(chosen?.deviceId ? { deviceId: { exact: chosen.deviceId } } : { facingMode: { ideal: 'environment' } }),
+						width: { ideal: 1920 },
+						height: { ideal: 1080 },
+						// `focusMode` is real on Android Chrome but not in the DOM types yet
+						advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
+					},
+				},
 				videoRef.current,
 				(result, _error, ctrl) => {
 					// A frame with nothing readable in it is the normal case, several
