@@ -26,9 +26,14 @@
  *     other app that wants it, so it is stopped on close, on unmount, and when
  *     the tab is hidden.
  *
- * The reader itself is loaded only when the camera is first opened. It is
- * around a megabyte, and the great majority of scans are made with a real
- * scanner that costs nothing to support.
+ * The reading is done by the browser's own barcode reader where it has one
+ * (Chrome on Android, with Google's ML Kit behind it), which copes with the
+ * small, slightly soft label a hand-held phone gives; elsewhere ZXing is
+ * loaded, only when the camera is first opened. It is around a megabyte, and
+ * the great majority of scans are made with a real scanner that costs
+ * nothing to support. Where the camera can zoom, a slider lets the label be
+ * read from a hand's length away — where the phone can focus — rather than
+ * pressed up against the lens.
  *
  * `getUserMedia` needs a secure context: the live site over https, or
  * localhost. On plain http over a LAN address the browser hides the camera
@@ -41,12 +46,43 @@ import {
 	Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Camera, Loader2, Lightbulb, SwitchCamera, AlertTriangle } from 'lucide-react'
+import { Camera, Loader2, Lightbulb, SwitchCamera, AlertTriangle, ZoomIn } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /** Stops the camera and releases it. What every code path here ends with. */
 interface ReaderControls {
 	stop: () => void
+}
+
+/** The browser's own barcode reader, where it has one. Not in the DOM types yet. */
+interface NativeDetector {
+	detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>
+}
+
+/** The formats the library meets, in the names the browser's reader uses. */
+const NATIVE_FORMATS = ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'itf', 'codabar']
+
+/**
+ * The browser's built-in reader set to the library's formats, or null where
+ * the browser has none (desktop Firefox, Safari on most iPhones) — in which
+ * case ZXing does the reading.
+ */
+async function nativeDetector(): Promise<NativeDetector | null> {
+	try {
+		const Detector = (window as unknown as {
+			BarcodeDetector?: {
+				new (options: { formats: string[] }): NativeDetector
+				getSupportedFormats?: () => Promise<string[]>
+			}
+		}).BarcodeDetector
+		if (!Detector) return null
+		const supported = await Detector.getSupportedFormats?.() ?? NATIVE_FORMATS
+		const formats = NATIVE_FORMATS.filter(format => supported.includes(format))
+		if (formats.length === 0) return null
+		return new Detector({ formats })
+	} catch {
+		return null
+	}
 }
 
 interface CameraScannerProps {
@@ -73,6 +109,9 @@ export function CameraScanner({
 	const [cameraCount, setCameraCount] = useState(0)
 	const [torchOn, setTorchOn] = useState(false)
 	const [hasTorch, setHasTorch] = useState(false)
+	/** What the running camera can zoom between, or null where it cannot zoom at all. */
+	const [zoomRange, setZoomRange] = useState<{ min: number; max: number; step: number } | null>(null)
+	const [zoom, setZoom] = useState(1)
 
 	const videoRef = useRef<HTMLVideoElement>(null)
 	const controlsRef = useRef<ReaderControls | null>(null)
@@ -108,6 +147,7 @@ export function CameraScanner({
 
 		setTorchOn(false)
 		setHasTorch(false)
+		setZoomRange(null)
 	}, [])
 
 	// The camera never outlives the screen it was opened from
@@ -164,60 +204,111 @@ export function CameraScanner({
 			}
 			const chosen = devices[cameraIndex.current] ?? devices[0]
 
-			const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
-				import('@zxing/browser'),
-				import('@zxing/library'),
-			])
-
-			// Left to itself the reader tries every format it knows at the camera's
-			// default picture size, once every half second. That reads a QR — which
-			// is large and forgiving — and almost never a printed accession label,
-			// whose bars are a few pixels wide at that size. So: only the formats
-			// the library actually meets, the slower "try harder" pass that reads
-			// bars at an angle or under a lamp, a full-size picture with the focus
-			// kept moving, and a fresh attempt several times a second.
-			const hints = new Map()
-			hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-				BarcodeFormat.QR_CODE,
-				BarcodeFormat.CODE_128,
-				BarcodeFormat.CODE_39,
-				BarcodeFormat.EAN_13,
-				BarcodeFormat.EAN_8,
-				BarcodeFormat.ITF,
-				BarcodeFormat.CODABAR,
-			])
-			hints.set(DecodeHintType.TRY_HARDER, true)
-			const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 })
-
 			if (!videoRef.current) return
+			const video = videoRef.current
 
-			const controls = await reader.decodeFromConstraints(
-				{
-					video: {
-						...(chosen?.deviceId ? { deviceId: { exact: chosen.deviceId } } : { facingMode: { ideal: 'environment' } }),
-						width: { ideal: 1920 },
-						height: { ideal: 1080 },
-						// `focusMode` is real on Android Chrome but not in the DOM types yet
-						advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
-					},
+			// A full-size picture with the focus kept moving. The accession label
+			// on a book is small, and at the camera's default size its bars are a
+			// few pixels wide — nothing can read that.
+			const constraints: MediaStreamConstraints = {
+				video: {
+					...(chosen?.deviceId ? { deviceId: { exact: chosen.deviceId } } : { facingMode: { ideal: 'environment' } }),
+					width: { ideal: 1920 },
+					height: { ideal: 1080 },
+					// `focusMode` is real on Android Chrome but not in the DOM types yet
+					advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
 				},
-				videoRef.current,
-				(result, _error, ctrl) => {
-					// A frame with nothing readable in it is the normal case, several
-					// times a second, and arrives here as an error worth ignoring.
-					if (!result) return
-					const text = result.getText().trim()
-					if (!text) return
-					ctrl.stop()
-					finish(text)
-				}
-			)
-			controlsRef.current = controls
+			}
 
-			// The torch belongs to the reader's own track, now that it has one
-			const track = (videoRef.current.srcObject as MediaStream | null)?.getVideoTracks()[0]
-			const capabilities = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { torch?: boolean }
+			// The phone's own reader first. Chrome on Android carries one (Google's
+			// ML Kit behind it) that reads a small, slightly soft label a hand-held
+			// phone cannot focus on — the case ZXing loses. Where the browser has
+			// none, ZXing does the reading as before.
+			const native = await nativeDetector()
+			if (native) {
+				const stream = await navigator.mediaDevices.getUserMedia(constraints)
+				video.srcObject = stream
+				await video.play()
+
+				let stopped = false
+				const stop = () => {
+					stopped = true
+					for (const track of stream.getTracks()) track.stop()
+				}
+				controlsRef.current = { stop }
+
+				const look = async () => {
+					if (stopped || doneRef.current) return
+					try {
+						// Before the first frame has arrived the picture is 0×0, and
+						// the detector refuses it
+						if (video.readyState >= 2) {
+							const codes = await native.detect(video)
+							const hit = codes.find(code => code.rawValue?.trim())
+							if (hit) {
+								stop()
+								finish(hit.rawValue.trim())
+								return
+							}
+						}
+					} catch {
+						// A frame it could not read — the usual case, several times a second
+					}
+					if (!stopped) window.setTimeout(look, 150)
+				}
+				void look()
+			} else {
+				const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
+					import('@zxing/browser'),
+					import('@zxing/library'),
+				])
+
+				// Only the formats the library actually meets, the slower "try
+				// harder" pass that reads bars at an angle or under a lamp, and a
+				// fresh attempt several times a second rather than every half one.
+				const hints = new Map()
+				hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+					BarcodeFormat.QR_CODE,
+					BarcodeFormat.CODE_128,
+					BarcodeFormat.CODE_39,
+					BarcodeFormat.EAN_13,
+					BarcodeFormat.EAN_8,
+					BarcodeFormat.ITF,
+					BarcodeFormat.CODABAR,
+				])
+				hints.set(DecodeHintType.TRY_HARDER, true)
+				const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 })
+
+				const controls = await reader.decodeFromConstraints(
+					constraints,
+					video,
+					(result, _error, ctrl) => {
+						// A frame with nothing readable in it is the normal case, several
+						// times a second, and arrives here as an error worth ignoring.
+						if (!result) return
+						const text = result.getText().trim()
+						if (!text) return
+						ctrl.stop()
+						finish(text)
+					}
+				)
+				controlsRef.current = controls
+			}
+
+			// The torch and the zoom belong to the running track, now that there is one
+			const track = (video.srcObject as MediaStream | null)?.getVideoTracks()[0]
+			const capabilities = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & {
+				torch?: boolean
+				zoom?: { min: number; max: number; step?: number }
+			}
 			setHasTorch(capabilities.torch === true)
+			// Zoom is what lets a label be read from a hand's length away, where
+			// the phone can focus, instead of pressed up against the lens
+			if (capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min) {
+				const current = (track?.getSettings?.() as MediaTrackSettings & { zoom?: number } | undefined)?.zoom
+				setZoomRange({ min: capabilities.zoom.min, max: capabilities.zoom.max, step: capabilities.zoom.step || 0.1 })
+				setZoom(current ?? capabilities.zoom.min)
+			}
 		} catch (err) {
 			const name = err instanceof Error ? err.name : ''
 			if (name === 'NotAllowedError' || name === 'SecurityError') {
@@ -247,6 +338,18 @@ export function CameraScanner({
 		if (devicesRef.current.length < 2) return
 		cameraIndex.current = (cameraIndex.current + 1) % devicesRef.current.length
 		setRestartNonce(n => n + 1)
+	}
+
+	const changeZoom = async (value: number) => {
+		setZoom(value)
+		const track = (videoRef.current?.srcObject as MediaStream | null)?.getVideoTracks()[0]
+		if (!track) return
+		try {
+			// `zoom` is real on Android Chrome but is not in the DOM types yet
+			await track.applyConstraints({ advanced: [{ zoom: value }] } as unknown as MediaTrackConstraints)
+		} catch {
+			setZoomRange(null)
+		}
 	}
 
 	const toggleTorch = async () => {
@@ -327,6 +430,24 @@ export function CameraScanner({
 								</div>
 							)}
 						</div>
+					)}
+
+					{zoomRange && !problem && (
+						<label className="flex items-center gap-2 text-xs text-muted-foreground">
+							<ZoomIn className="h-4 w-4 shrink-0" />
+							<span className="shrink-0">Zoom</span>
+							<input
+								type="range"
+								min={zoomRange.min}
+								max={zoomRange.max}
+								step={zoomRange.step}
+								value={zoom}
+								onChange={e => { void changeZoom(Number(e.target.value)) }}
+								className="h-2 min-w-0 flex-1 accent-brand-green"
+								aria-label="Zoom"
+							/>
+							<span className="w-9 shrink-0 text-right tabular-nums">{zoom.toFixed(1)}×</span>
+						</label>
 					)}
 
 					<div className="flex items-center gap-2">
