@@ -232,6 +232,9 @@ export const InstitutionSelector = memo(function InstitutionSelector({
 				)}
 				align={isCompact ? "end" : "start"}
 				sideOffset={8}
+				// Half the 1.5rem the width leaves free, so a phone shows the same gap on
+				// both sides instead of the list sitting on the left edge
+				collisionPadding={12}
 			>
 				<Command className="bg-white dark:bg-slate-900">
 					{/* Compact header */}
