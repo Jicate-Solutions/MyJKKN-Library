@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- JKKN Library: an open book seen from the front - three fanned pages a
+       side, the inner ones leaning outward from the gutter, in the brand
+       greens. Drawn for the installed app icon. The book alone, no words:
+       at 48px a word is a smudge. -->
+  <g stroke-linejoin="round" stroke-width="4">
+    <path d="M244 236 Q240 150 206 128 L206 384 L244 398 Z" fill="#0b6d41" stroke="#0b6d41"/>
+    <path d="M194 150 Q176 152 156 168 L156 366 L194 380 Z" fill="#2a9966" stroke="#2a9966"/>
+    <path d="M144 194 Q126 196 106 212 L106 348 L144 362 Z" fill="#4db688" stroke="#4db688"/>
+    <path d="M268 236 Q272 150 306 128 L306 384 L268 398 Z" fill="#0b6d41" stroke="#0b6d41"/>
+    <path d="M318 150 Q336 152 356 168 L356 366 L318 380 Z" fill="#2a9966" stroke="#2a9966"/>
+    <path d="M368 194 Q386 196 406 212 L406 348 L368 362 Z" fill="#4db688" stroke="#4db688"/>
+  </g>
+  <!-- the gutter, where the two halves meet -->
+  <path d="M244 398 L256 412 L268 398 L268 236 Q256 226 244 236 Z" fill="#074829"/>
+</svg>

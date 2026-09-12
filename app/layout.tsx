@@ -1,10 +1,11 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter, Space_Grotesk } from 'next/font/google'
 import '@/styles/globals.css'
 import { AuthProvider } from '@/lib/auth/auth-context'
 import { ThemeProvider } from '@/components/common/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
 import { BugReporterWrapper } from '@/components/bug-reporter/bug-reporter-wrapper'
+import { PwaRegister } from '@/components/common/pwa-register'
 
 const inter = Inter({
 	subsets: ['latin'],
@@ -24,7 +25,20 @@ export const metadata: Metadata = {
 	title: 'JKKN | Learning Commons',
 	icons: {
 		icon: '/jkkn_1.svg',
+		// The installed app's icon on an iPhone; Android and desktop read the manifest
+		apple: '/icons/apple-touch-icon.png',
 	},
+	// What makes the site installable: the name, the book icon and the colours
+	manifest: '/manifest.webmanifest',
+	appleWebApp: {
+		capable: true,
+		title: 'JKKN Library',
+		statusBarStyle: 'default',
+	},
+}
+
+export const viewport: Viewport = {
+	themeColor: '#0b6d41',
 }
 
 export default function RootLayout({
@@ -53,6 +67,7 @@ export default function RootLayout({
 					</AuthProvider>
 				</ThemeProvider>
 				<Toaster />
+				<PwaRegister />
 			</body>
 		</html>
 	)

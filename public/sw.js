@@ -1,143 +1,63 @@
-// Service Worker for COE Portal - Fixed Version
-const CACHE_NAME = 'coe-portal-v3';
-const urlsToCache = [
-  '/'
-  // Avoid precaching app HTML routes to reduce stale navigations
-];
+/**
+ * Service worker for the installed JKKN Library app.
+ *
+ * Deliberately small. Members, books and loans live on the server, so the
+ * app cannot work without the network; what this does is make the install
+ * possible, keep the built assets and icons close, and show a plain page
+ * instead of the browser's error when the connection is gone.
+ *
+ *   - Built assets (/_next/static) and icons: cache first. Their names carry
+ *     a hash, so a cached copy is never stale.
+ *   - Pages: network first, never cached. Every page is data, and a stale
+ *     page at a desk is worse than no page. Offline, /offline.html.
+ *   - APIs and everything else: straight to the network, untouched.
+ *
+ * Bump the version to drop every old cache on the next visit.
+ */
+const VERSION = 'jkkn-library-v1'
+const OFFLINE_PAGE = '/offline.html'
 
-// Install event - cache initial resources
 self.addEventListener('install', event => {
-  console.log('Service Worker installing...');
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-      .catch(error => {
-        console.error('Cache addAll failed:', error);
-      })
-  );
-  self.skipWaiting();
-});
+	event.waitUntil(
+		caches.open(VERSION)
+			.then(cache => cache.addAll([OFFLINE_PAGE, '/icons/icon-192.png']))
+			.then(() => self.skipWaiting())
+	)
+})
 
-// Fetch event - serve from cache or network
-self.addEventListener('fetch', event => {
-  const request = event.request;
-  const url = new URL(request.url);
-
-  // IMPORTANT: Only handle GET requests - skip all others immediately
-  if (request.method !== 'GET') {
-    console.log('Skipping non-GET request:', request.method, request.url);
-    return; // Let the browser handle it normally
-  }
-
-  // Skip cross-origin requests
-  if (url.origin !== location.origin) {
-    return;
-  }
-
-  // Skip API routes, Next.js internals, and dev tools
-  if (url.pathname.startsWith('/api/') ||
-      url.pathname.startsWith('/_next/') ||
-      url.pathname.includes('__next') ||
-      url.pathname.startsWith('/_vercel') ||
-      url.pathname.includes('hot-reload') ||
-      url.pathname.includes('webpack') ||
-      url.search.includes('_rsc=')) {
-    return;
-  }
-
-  // Bypass caching for auth-related navigations to avoid stale pages
-  const authPaths = ['/login', '/verify-email', '/auth/callback', '/contact-admin'];
-  if (authPaths.some(p => url.pathname.startsWith(p))) {
-    return; // Always let the browser fetch fresh for these routes
-  }
-
-  // Skip HTML navigations to always fetch fresh app pages
-  const acceptHeader = request.headers.get('accept') || '';
-  if (request.mode === 'navigate' || acceptHeader.includes('text/html')) {
-    return; // Let the browser/network handle navigations
-  }
-
-  // Handle cacheable requests (non-HTML)
-  event.respondWith(
-    caches.match(request)
-      .then(cachedResponse => {
-        // Return cached version if available
-        if (cachedResponse) {
-          console.log('Serving from cache:', request.url);
-          return cachedResponse;
-        }
-
-        // Fetch from network
-        console.log('Fetching from network:', request.url);
-        return fetch(request)
-          .then(response => {
-            // Only cache successful responses
-            if (!response || response.status !== 200 || response.type !== 'basic') {
-              return response;
-            }
-
-            // Only cache GET responses (double-check)
-            if (request.method === 'GET') {
-              const responseToCache = response.clone();
-
-              caches.open(CACHE_NAME)
-                .then(cache => {
-                  try {
-                    cache.put(request, responseToCache);
-                  } catch (error) {
-                    console.warn('Failed to cache response:', error.message);
-                  }
-                })
-                .catch(error => {
-                  console.warn('Cache open failed:', error);
-                });
-            }
-
-            return response;
-          })
-          .catch(error => {
-            console.error('Fetch failed:', error);
-            // Could return a custom offline page here
-            throw error;
-          });
-      })
-  );
-});
-
-// Activate event - clean up old caches
 self.addEventListener('activate', event => {
-  console.log('Service Worker activating...');
-  const cacheWhitelist = [CACHE_NAME];
+	event.waitUntil(
+		caches.keys()
+			.then(keys => Promise.all(keys.filter(key => key !== VERSION).map(key => caches.delete(key))))
+			.then(() => self.clients.claim())
+	)
+})
 
-  event.waitUntil(
-    caches.keys()
-      .then(cacheNames => {
-        return Promise.all(
-          cacheNames.map(cacheName => {
-            if (cacheWhitelist.indexOf(cacheName) === -1) {
-              console.log('Deleting old cache:', cacheName);
-              return caches.delete(cacheName);
-            }
-          })
-        );
-      })
-      .then(() => {
-        console.log('Service Worker activated');
-        return self.clients.claim();
-      })
-  );
-});
+self.addEventListener('fetch', event => {
+	const { request } = event
+	if (request.method !== 'GET') return
 
-// Handle service worker errors
-self.addEventListener('error', event => {
-  console.error('Service Worker error:', event.error);
-});
+	const url = new URL(request.url)
+	if (url.origin !== self.location.origin) return
 
-// Handle unhandled promise rejections
-self.addEventListener('unhandledrejection', event => {
-  console.error('Service Worker unhandled rejection:', event.reason);
-  event.preventDefault();
-});
+	// Built assets and icons: cache first
+	if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icons/')) {
+		event.respondWith(
+			caches.match(request).then(hit => hit || fetch(request).then(response => {
+				if (response.ok) {
+					const copy = response.clone()
+					caches.open(VERSION).then(cache => cache.put(request, copy))
+				}
+				return response
+			}))
+		)
+		return
+	}
+
+	// Pages: the network, and the offline page when there is none
+	if (request.mode === 'navigate') {
+		event.respondWith(
+			fetch(request).catch(() => caches.match(OFFLINE_PAGE))
+		)
+	}
+})
