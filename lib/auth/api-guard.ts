@@ -21,7 +21,9 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { getCaller, resolveInstitutionScope, type Caller } from './server-access'
+import { rankAtLeast } from './library-roles'
 import { recordImpersonatedAction } from './impersonation-log'
+import { isLibrarianWrite, LIBRARIAN_ONLY_MESSAGE } from './librarian-only'
 
 export type GuardResult =
 	| { ok: true; caller: Caller; institutionId: string | null }
@@ -34,6 +36,18 @@ export type GuardRowResult<T> =
 
 function deny(error: string, status: number): { ok: false; response: NextResponse } {
 	return { ok: false, response: NextResponse.json({ error }, { status }) }
+}
+
+/**
+ * The changes only a librarian may make, refused here for everyone below —
+ * one place, so a route added later is covered without remembering to.
+ * Which changes those are is written in `librarian-only.ts`, beside the
+ * hook the screens use to hide the same buttons.
+ */
+function belowLibrarian(caller: Caller, request: Request): { ok: false; response: NextResponse } | null {
+	if (!isLibrarianWrite(request.method, new URL(request.url).pathname)) return null
+	if (caller.isSuperAdmin || rankAtLeast(caller.role, 'librarian')) return null
+	return deny(LIBRARIAN_ONLY_MESSAGE, 403)
 }
 
 /**
@@ -73,6 +87,9 @@ export async function guardCollection(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
+	const refused = belowLibrarian(caller, request)
+	if (refused) return refused
+
 
 	const scope = resolveInstitutionScope(caller, requestedInstitutionId)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
@@ -91,6 +108,9 @@ export async function guardWrite(
 ): Promise<GuardResult> {
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
+
+	const refused = belowLibrarian(caller, request)
+	if (refused) return refused
 
 
 	const scope = resolveInstitutionScope(caller, bodyInstitutionId ?? null)
@@ -118,6 +138,9 @@ export async function guardRecord(
 ): Promise<GuardResult> {
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
+
+	const refused = belowLibrarian(caller, request)
+	if (refused) return refused
 
 
 	// Spans every institution: a super admin, or a library admin overseeing all
@@ -167,6 +190,9 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 ): Promise<GuardRowResult<T>> {
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
+
+	const refused = belowLibrarian(caller, request)
+	if (refused) return refused
 
 
 	const supabase = getSupabaseServer()

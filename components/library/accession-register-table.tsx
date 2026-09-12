@@ -16,6 +16,7 @@
  */
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useRouter } from 'next/navigation'
 import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
@@ -148,6 +149,7 @@ const stamp = (): string => new Date().toISOString().slice(0, 10)
 export function AccessionRegisterTable({
 	rows, loading, refreshing, onRefresh, onEdit, onDelete, onNewTitle, headerActions,
 }: Props) {
+	const canWrite = useLibrarianWrite()
 	const router = useRouter()
 	/** What is being typed. Nothing is searched until Enter or the button. */
 	const [draft, setDraft] = useState<SearchTerms>(NO_TERMS)
@@ -675,6 +677,7 @@ export function AccessionRegisterTable({
 												    stays for keyboards, touch, and View Detail. None of them
 												    let the click fall through to the row. */}
 												<TableCell onClick={e => e.stopPropagation()}>
+													{canWrite && (
 													<div className="flex items-center justify-end gap-0.5">
 														<Tooltip>
 															<TooltipTrigger asChild>
@@ -733,6 +736,7 @@ export function AccessionRegisterTable({
 															</DropdownMenuContent>
 														</DropdownMenu>
 													</div>
+													)}
 												</TableCell>
 											</TableRow>
 										))}
@@ -784,6 +788,8 @@ export function AccessionRegisterTable({
 														</Link>
 													</DropdownMenuItem>
 												)}
+												{canWrite && (
+													<>
 												<DropdownMenuItem onClick={() => r.catalogue_record_id && onEdit(r.catalogue_record_id)}>
 													<Edit className="h-4 w-4 mr-2" />Edit book details
 												</DropdownMenuItem>
@@ -795,6 +801,8 @@ export function AccessionRegisterTable({
 													<Trash2 className="h-4 w-4 mr-2" />
 													Delete this book
 												</DropdownMenuItem>
+													</>
+												)}
 											</DropdownMenuContent>
 										</DropdownMenu>
 									</div>

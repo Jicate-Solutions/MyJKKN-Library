@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useToast } from '@/hooks/common/use-toast'
@@ -57,6 +58,7 @@ function readableDate(value: string | null): string {
 }
 
 export default function DepartmentLibraryPage() {
+	const canWrite = useLibrarianWrite()
 	const params = useParams()
 	const locationId = String(params?.id ?? '')
 	const { toast } = useToast()
@@ -392,7 +394,7 @@ export default function DepartmentLibraryPage() {
 										className="h-8 pl-8 text-sm"
 									/>
 								</div>
-								{picked.size > 0 && (
+								{picked.size > 0 && canWrite && (
 									<Button
 										variant="outline" size="sm" className="h-8 text-xs"
 										onClick={() => setConfirmReturn(true)}
@@ -690,6 +692,7 @@ export default function DepartmentLibraryPage() {
 									className="min-h-[60px] text-sm"
 								/>
 								<div className="flex flex-wrap items-center gap-2">
+									{canWrite && (
 									<Button
 										onClick={send}
 										disabled={nothingPicked || sending}
@@ -701,6 +704,7 @@ export default function DepartmentLibraryPage() {
 											? 'Sending...'
 											: `Send ${toSend.size} to ${departmentName ?? 'this department'}`}
 									</Button>
+									)}
 									<Button
 										variant="ghost" size="sm"
 										onClick={() => setToSend(new Set())}

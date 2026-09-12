@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -55,6 +56,7 @@ const defaultForm: FormData = {
 }
 
 export default function IntercampusPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, appendToUrl, institutionId, getInstitutionIdForCreate } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -244,11 +246,13 @@ export default function IntercampusPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} request{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
+								{canWrite && (
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">New Request</span>
 									<span className="sm:hidden">New</span>
 								</Button>
+								)}
 							</div>
 						</div>
 						<div className="flex items-center gap-2 flex-wrap mt-3">
@@ -343,6 +347,7 @@ export default function IntercampusPage() {
 													</Badge>
 												</TableCell>
 												<TableCell>
+													{canWrite && (
 													<DropdownMenu>
 														<DropdownMenuTrigger asChild>
 															<Button variant="ghost" className="h-7 w-7 p-0">
@@ -355,6 +360,7 @@ export default function IntercampusPage() {
 															</DropdownMenuItem>
 														</DropdownMenuContent>
 													</DropdownMenu>
+													)}
 												</TableCell>
 											</TableRow>
 										))}
@@ -382,6 +388,7 @@ export default function IntercampusPage() {
 											<OverflowText as="p" text={r.title} className="font-medium text-sm max-w-[200px]" />
 											<p className="text-xs text-muted-foreground">{r.member?.display_name ?? r.member_id}</p>
 										</div>
+										{canWrite && (
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
 												<Button variant="ghost" className="h-7 w-7 p-0">
@@ -394,6 +401,7 @@ export default function IntercampusPage() {
 												</DropdownMenuItem>
 											</DropdownMenuContent>
 										</DropdownMenu>
+										)}
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
 										<Badge variant="outline" className={`text-xs ${statusColors[r.request_status] ?? ''}`}>

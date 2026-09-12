@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useParams } from 'next/navigation'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
@@ -58,6 +59,7 @@ const defaultItemForm: ItemFormData = {
 }
 
 export default function CatalogueDetailPage() {
+	const canWrite = useLibrarianWrite()
 	const { id } = useParams<{ id: string }>()
 	const { institutionId, getInstitutionIdForCreate } = useInstitutionFilter()
 	const { toast } = useToast()
@@ -355,7 +357,7 @@ export default function CatalogueDetailPage() {
 									</TooltipTrigger>
 									<TooltipContent>Refresh</TooltipContent>
 								</Tooltip>
-								{!copiesAreReadOnly && (
+								{!copiesAreReadOnly && canWrite && (
 									<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 										<PlusCircle className="h-4 w-4 mr-1.5" />
 										<span className="hidden sm:inline">Add Item</span>
@@ -410,6 +412,7 @@ export default function CatalogueDetailPage() {
 												<TableCell className="text-sm capitalize">{item.condition ?? '—'}</TableCell>
 												<TableCell><ResourceStatusBadge status={item.status} /></TableCell>
 												<TableCell>
+													{canWrite && (
 													<DropdownMenu>
 														<DropdownMenuTrigger asChild>
 															<Button variant="ghost" className="h-7 w-7 p-0">
@@ -426,6 +429,7 @@ export default function CatalogueDetailPage() {
 															</DropdownMenuItem>
 														</DropdownMenuContent>
 													</DropdownMenu>
+													)}
 												</TableCell>
 											</TableRow>
 										))}
@@ -453,6 +457,7 @@ export default function CatalogueDetailPage() {
 											<p className="font-medium text-sm font-mono">{item.accession_number}</p>
 											<p className="text-xs text-muted-foreground">Copy #{item.copy_number}</p>
 										</div>
+										{canWrite && (
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
 												<Button variant="ghost" className="h-7 w-7 p-0">
@@ -469,6 +474,7 @@ export default function CatalogueDetailPage() {
 												</DropdownMenuItem>
 											</DropdownMenuContent>
 										</DropdownMenu>
+										)}
 									</div>
 									<div className="flex items-center gap-2 flex-wrap">
 										<ResourceStatusBadge status={item.status} />

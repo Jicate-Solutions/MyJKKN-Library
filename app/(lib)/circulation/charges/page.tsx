@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,7 @@ const STATUS_COLORS: Record<LibChargePaymentStatus, string> = {
 type ActionMode = 'collect' | 'waive' | null
 
 export default function ChargesPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, institutionId, shouldFilter } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -297,7 +299,7 @@ export default function ChargesPage() {
 													</Badge>
 												</TableCell>
 												<TableCell>
-													{c.payment_status === 'unpaid' && (
+													{c.payment_status === 'unpaid' && canWrite && (
 														<DropdownMenu>
 															<DropdownMenuTrigger asChild>
 																<Button variant="ghost" className="h-7 w-7 p-0">
@@ -342,7 +344,7 @@ export default function ChargesPage() {
 											<p className="font-medium text-sm">{c.member?.display_name ?? c.member_id}</p>
 											<p className="text-xs text-muted-foreground">{c.member?.member_number}</p>
 										</div>
-										{c.payment_status === 'unpaid' && (
+										{c.payment_status === 'unpaid' && canWrite && (
 											<DropdownMenu>
 												<DropdownMenuTrigger asChild>
 													<Button variant="ghost" className="h-7 w-7 p-0">

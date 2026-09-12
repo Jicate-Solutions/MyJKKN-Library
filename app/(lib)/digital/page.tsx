@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -66,6 +67,7 @@ const defaultForm: FormData = {
 }
 
 export default function DigitalResourcesPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, appendToUrl, institutionId, getInstitutionIdForCreate, shouldFilter } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -278,11 +280,13 @@ export default function DigitalResourcesPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} resource{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
+								{canWrite && (
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Resource</span>
 									<span className="sm:hidden">Add</span>
 								</Button>
+								)}
 							</div>
 						</div>
 						<div className="flex items-center gap-2 flex-wrap mt-3">
@@ -351,6 +355,8 @@ export default function DigitalResourcesPage() {
 															<ExternalLink className="h-4 w-4 mr-2" />Open Resource
 														</a>
 													</DropdownMenuItem>
+													{canWrite && (
+														<>
 													<DropdownMenuItem onClick={() => handleEdit(r)}>
 														<Edit className="h-4 w-4 mr-2" />Edit
 													</DropdownMenuItem>
@@ -358,6 +364,8 @@ export default function DigitalResourcesPage() {
 													<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(r)}>
 														<Trash2 className="h-4 w-4 mr-2" />Delete
 													</DropdownMenuItem>
+														</>
+													)}
 												</DropdownMenuContent>
 											</DropdownMenu>
 										</div>

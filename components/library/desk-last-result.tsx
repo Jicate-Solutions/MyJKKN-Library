@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { Button } from '@/components/ui/button'
 import { CheckCircle, IndianRupee, Loader2, RotateCcw, Undo2 } from 'lucide-react'
 import { canUndo, describeEvent, describeUndo, rupees, type DeskEvent, type MemberCharge } from '@/lib/library/desk'
@@ -32,6 +33,7 @@ export function DeskLastResult({
 	onUndo: (event: DeskEvent) => void
 	onSettle: (charge: MemberCharge, mode: SettleMode) => void
 }) {
+	const canWrite = useLibrarianWrite()
 	// Re-read the clock every few seconds while an undo is on offer, so the
 	// button goes away when the window closes rather than at the next action.
 	const [, tick] = useState(0)
@@ -85,7 +87,7 @@ export function DeskLastResult({
 			</span>
 
 			<span className="flex min-w-0 flex-wrap items-center gap-2">
-				{owing && (
+				{owing && canWrite && (
 					<>
 						<Button size="sm" variant="outline" className="h-9 text-xs sm:h-7" onClick={() => onSettle(owing, 'waive')}>
 							Waive

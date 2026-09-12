@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,7 @@ const defaultForm: FormData = {
 }
 
 export default function BudgetPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, appendToUrl, institutionId, getInstitutionIdForCreate, mustSelectInstitution, shouldFilter } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -253,11 +255,13 @@ export default function BudgetPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} head{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
+								{canWrite && (
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Budget Head</span>
 									<span className="sm:hidden">Add</span>
 								</Button>
+								)}
 							</div>
 						</div>
 						<div className="flex items-center gap-2 flex-wrap mt-3">
@@ -350,6 +354,7 @@ export default function BudgetPage() {
 														<TableCell className="text-xs text-muted-foreground">{b.institution_id?.slice(0, 8) ?? '—'}</TableCell>
 													)}
 													<TableCell>
+														{canWrite && (
 														<DropdownMenu>
 															<DropdownMenuTrigger asChild>
 																<Button variant="ghost" className="h-7 w-7 p-0">
@@ -366,6 +371,7 @@ export default function BudgetPage() {
 																</DropdownMenuItem>
 															</DropdownMenuContent>
 														</DropdownMenu>
+														)}
 													</TableCell>
 												</TableRow>
 											)
@@ -398,6 +404,7 @@ export default function BudgetPage() {
 												<p className="font-medium text-sm">{b.budget_head_name}</p>
 												<p className="text-xs text-muted-foreground font-mono">{b.budget_head_code} · {b.fiscal_year}</p>
 											</div>
+											{canWrite && (
 											<DropdownMenu>
 												<DropdownMenuTrigger asChild>
 													<Button variant="ghost" className="h-7 w-7 p-0">
@@ -414,6 +421,7 @@ export default function BudgetPage() {
 													</DropdownMenuItem>
 												</DropdownMenuContent>
 											</DropdownMenu>
+											)}
 										</div>
 										<div className="flex items-center gap-2">
 											<Progress value={utilPct} className="flex-1 h-2" />

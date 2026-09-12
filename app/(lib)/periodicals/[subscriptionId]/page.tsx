@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useParams } from 'next/navigation'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -109,6 +110,7 @@ function coverDateLabel(value?: string | null): string {
 }
 
 export default function SubscriptionDetailPage() {
+	const canWrite = useLibrarianWrite()
 	const { subscriptionId } = useParams<{ subscriptionId: string }>()
 	const { toast } = useToast()
 
@@ -527,6 +529,8 @@ export default function SubscriptionDetailPage() {
 															<DropdownMenuItem onClick={() => setViewIssue(issue)}>
 																<Eye className="h-4 w-4 mr-2" />View
 															</DropdownMenuItem>
+															{canWrite && (
+																<>
 															<DropdownMenuItem onClick={() => startEdit(issue)}>
 																<Edit className="h-4 w-4 mr-2" />Edit
 															</DropdownMenuItem>
@@ -534,6 +538,8 @@ export default function SubscriptionDetailPage() {
 															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
 																<Trash2 className="h-4 w-4 mr-2" />Delete
 															</DropdownMenuItem>
+																</>
+															)}
 														</DropdownMenuContent>
 													</DropdownMenu>
 												</TableCell>
@@ -580,6 +586,8 @@ export default function SubscriptionDetailPage() {
 													<DropdownMenuItem onClick={() => setViewIssue(issue)}>
 														<Eye className="h-4 w-4 mr-2" />View
 													</DropdownMenuItem>
+													{canWrite && (
+														<>
 													<DropdownMenuItem onClick={() => startEdit(issue)}>
 														<Edit className="h-4 w-4 mr-2" />Edit
 													</DropdownMenuItem>
@@ -587,6 +595,8 @@ export default function SubscriptionDetailPage() {
 													<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
 														<Trash2 className="h-4 w-4 mr-2" />Delete
 													</DropdownMenuItem>
+														</>
+													)}
 												</DropdownMenuContent>
 											</DropdownMenu>
 										</div>
@@ -795,9 +805,11 @@ export default function SubscriptionDetailPage() {
 
 					<DialogFooter className="gap-2 sm:gap-2">
 						<Button variant="outline" onClick={() => setViewIssue(null)}>Close</Button>
+						{canWrite && (
 						<Button onClick={() => { const issue = viewIssue; setViewIssue(null); if (issue) startEdit(issue) }}>
 							<Edit className="h-4 w-4 mr-1.5" />Edit
 						</Button>
+						)}
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

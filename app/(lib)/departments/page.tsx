@@ -14,6 +14,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import Link from 'next/link'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
@@ -41,6 +42,7 @@ const SUCCESS_TOAST =
 	'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300'
 
 export default function DepartmentsPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, institutionId } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -301,9 +303,9 @@ export default function DepartmentsPage() {
 															</p>
 														)}
 													</div>
-												) : (
+												) : canWrite ? (
 													<span className="text-xs text-muted-foreground">—</span>
-												)}
+												) : null}
 											</TableCell>
 
 											<TableCell>
@@ -342,12 +344,14 @@ export default function DepartmentsPage() {
 												<div className="flex items-center justify-end gap-1">
 													{department.library ? (
 														<>
+															{canWrite && (
 															<Button
 																variant="ghost" size="sm" className="h-7 text-xs"
 																onClick={() => openPanel(department)}
 															>
 																Edit
 															</Button>
+															)}
 															<Button asChild variant="outline" size="sm" className="h-7 text-xs">
 																<Link href={`/departments/${department.library.id}`}>
 																	Open <ChevronRight className="ml-0.5 h-3 w-3" />

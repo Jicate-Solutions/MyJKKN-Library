@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useInstitution } from '@/context/institution-context'
 import { useToast } from '@/hooks/common/use-toast'
@@ -120,6 +121,7 @@ const defaultForm: FormData = {
 }
 
 export default function RegistryPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, appendToUrl, getInstitutionIdForCreate, institutionId, mustSelectInstitution, shouldFilter } = useInstitutionFilter()
 	const { currentInstitutionCode } = useInstitution()
 	const { toast } = useToast()
@@ -574,7 +576,7 @@ export default function RegistryPage() {
 					onDelete={row => setDeleteCopy(row)}
 					refreshing={refreshing}
 					onNewTitle={openNewTitle}
-					headerActions={
+					headerActions={canWrite ? (
 						<>
 							<CatalogueBulkUpload
 								institutionId={getInstitutionIdForCreate() ?? institutionId}
@@ -594,7 +596,7 @@ export default function RegistryPage() {
 								<span className="sm:hidden">Add</span>
 							</Button>
 						</>
-					}
+					) : null}
 				/>
 			) : (
 			<>
@@ -657,11 +659,13 @@ export default function RegistryPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} title{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
+								{canWrite && (
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Title</span>
 									<span className="sm:hidden">Add</span>
 								</Button>
+								)}
 							</div>
 						</div>
 						{/* Row 2: Filters */}
@@ -761,6 +765,8 @@ export default function RegistryPage() {
 																	<ExternalLink className="h-4 w-4 mr-2" />View Detail
 																</Link>
 															</DropdownMenuItem>
+															{canWrite && (
+																<>
 															<DropdownMenuItem onClick={() => handleEdit(r)}>
 																<Edit className="h-4 w-4 mr-2" />Edit
 															</DropdownMenuItem>
@@ -768,6 +774,8 @@ export default function RegistryPage() {
 															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(r)}>
 																<Trash2 className="h-4 w-4 mr-2" />Delete
 															</DropdownMenuItem>
+																</>
+															)}
 														</DropdownMenuContent>
 													</DropdownMenu>
 												</TableCell>

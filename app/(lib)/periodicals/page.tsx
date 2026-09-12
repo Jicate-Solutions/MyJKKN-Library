@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -162,6 +163,7 @@ const defaultForm: FormData = {
 }
 
 export default function PeriodicalSubscriptionsPage() {
+	const canWrite = useLibrarianWrite()
 	const { isReady, appendToUrl, institutionId, getInstitutionIdForCreate, mustSelectInstitution, shouldFilter } = useInstitutionFilter()
 	const { toast } = useToast()
 
@@ -580,11 +582,13 @@ export default function PeriodicalSubscriptionsPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} subscription{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
+								{canWrite && (
 								<Button className="h-8 text-sm px-4" onClick={() => { resetForm(); loadTitles(); setSheetOpen(true) }}>
 									<PlusCircle className="h-4 w-4 mr-1.5" />
 									<span className="hidden sm:inline">Add Subscription</span>
 									<span className="sm:hidden">Add</span>
 								</Button>
+								)}
 							</div>
 						</div>
 						<div className="flex items-center gap-2 flex-wrap mt-3">
@@ -706,6 +710,8 @@ export default function PeriodicalSubscriptionsPage() {
 															</Button>
 														</DropdownMenuTrigger>
 														<DropdownMenuContent align="end">
+															{canWrite && (
+																<>
 															<DropdownMenuItem onClick={() => handleEdit(s)}>
 																<Edit className="h-4 w-4 mr-2" />Edit
 															</DropdownMenuItem>
@@ -713,6 +719,8 @@ export default function PeriodicalSubscriptionsPage() {
 															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(s)}>
 																<Trash2 className="h-4 w-4 mr-2" />Delete
 															</DropdownMenuItem>
+																</>
+															)}
 														</DropdownMenuContent>
 													</DropdownMenu>
 												</TableCell>
@@ -758,6 +766,8 @@ export default function PeriodicalSubscriptionsPage() {
 												<DropdownMenuItem asChild>
 													<Link href={`/periodicals/${s.id}`}><ExternalLink className="h-4 w-4 mr-2" />View Detail</Link>
 												</DropdownMenuItem>
+												{canWrite && (
+													<>
 												<DropdownMenuItem onClick={() => handleEdit(s)}>
 													<Edit className="h-4 w-4 mr-2" />Edit
 												</DropdownMenuItem>
@@ -765,6 +775,8 @@ export default function PeriodicalSubscriptionsPage() {
 												<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(s)}>
 													<Trash2 className="h-4 w-4 mr-2" />Delete
 												</DropdownMenuItem>
+													</>
+												)}
 											</DropdownMenuContent>
 										</DropdownMenu>
 									</div>

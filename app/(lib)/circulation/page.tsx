@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -418,6 +419,7 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
  * fine is met.
  */
 function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; onChanged: () => void }) {
+	const canWrite = useLibrarianWrite()
 	const { toast } = useToast()
 	const [settling, setSettling] = useState<SettleRequest | null>(null)
 
@@ -457,6 +459,7 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 							{charge.payment_status === 'partial' ? ` of ${rupees(charge.total_charge)}` : ''}
 						</Badge>
 
+						{canWrite && (
 						<div className="flex items-center gap-2">
 							<Button size="sm" variant="outline" className="h-10 text-xs sm:h-8" onClick={() => setSettling({ charge, mode: 'waive' })}>
 								Waive
@@ -466,6 +469,7 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 								Collect
 							</Button>
 						</div>
+						)}
 					</div>
 				))}
 			</div>
