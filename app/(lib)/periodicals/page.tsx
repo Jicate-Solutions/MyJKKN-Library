@@ -54,8 +54,12 @@ const GRATIS_BADGE = 'text-blue-700 border-blue-300 dark:text-blue-300 dark:bord
 // year, or every four months — both real on the shelf, and neither had a
 // frequency to say so. semi_monthly followed on 4 Sep 2026 (migration
 // 20260904) for the journals that come twice a month — 24 a year, which
-// fortnightly's 26 cannot say.
-const FREQUENCIES = ['weekly', 'fortnightly', 'semi_monthly', 'monthly', 'eight_yearly', 'bimonthly', 'quarterly', 'three_yearly', 'half_yearly', 'annual'] as const
+// fortnightly's 26 cannot say. ten_yearly followed on 15 Sep 2026 (migration
+// 20260915) for the journals that bring ten issues a year. five_yearly
+// followed on 16 Sep 2026 (migration 20260916) for the journals that bring
+// five: bimonthly's 6 and quarterly's 4 sit either side of it, and neither
+// is the same thing.
+const FREQUENCIES = ['weekly', 'fortnightly', 'semi_monthly', 'monthly', 'ten_yearly', 'eight_yearly', 'bimonthly', 'five_yearly', 'quarterly', 'three_yearly', 'half_yearly', 'annual'] as const
 
 /**
  * The same words, as a librarian says them.
@@ -69,14 +73,16 @@ const FREQUENCY_LABELS: Record<string, string> = {
 	daily: 'Daily',
 	weekly: 'Weekly',
 	fortnightly: 'Fortnightly',
-	semi_monthly: 'Twice a month (24 a year)',
+	semi_monthly: 'Twice a month',
 	monthly: 'Monthly',
+	ten_yearly: 'Ten a year',
 	eight_yearly: 'Eight a year',
-	bimonthly: 'Bi-monthly',
-	quarterly: 'Quarterly',
-	three_yearly: 'Three a year (every 4 months)',
-	half_yearly: 'Semi-annual',
-	annual: 'Annual',
+	bimonthly: 'Every 2 months',
+	five_yearly: 'Five a year',
+	quarterly: 'Every 3 months',
+	three_yearly: 'Every 4 months',
+	half_yearly: 'Every 6 months',
+	annual: 'Once a year',
 	irregular: 'Irregular',
 }
 
@@ -99,8 +105,10 @@ const ISSUES_PER_YEAR: Record<string, number> = {
 	fortnightly: 26,
 	semi_monthly: 24,
 	monthly: 12,
+	ten_yearly: 10,
 	eight_yearly: 8,
 	bimonthly: 6,
+	five_yearly: 5,
 	quarterly: 4,
 	three_yearly: 3,
 	half_yearly: 2,
@@ -110,6 +118,20 @@ const ISSUES_PER_YEAR: Record<string, number> = {
 /** What the read-only Expected Issues box shows for the chosen frequency. */
 const expectedIssuesFor = (frequency: string): number | null =>
 	ISSUES_PER_YEAR[frequency] ?? null
+
+/**
+ * The same label with the year's issue count beside it, for the Frequency list.
+ *
+ * The word alone does not say how many issues a year brings, and that is the
+ * number the choice is really being made on: Expected Issues is worked out from
+ * it, so "Monthly (12)" shows the answer before the choice rather than after.
+ * Daily and irregular have no fixed count and are not offered, so no option in
+ * the list is ever left without its number.
+ */
+const frequencyOptionLabel = (frequency: string): string => {
+	const issues = ISSUES_PER_YEAR[frequency]
+	return issues ? `${frequencyLabel(frequency)} (${issues})` : frequencyLabel(frequency)
+}
 
 /**
  * The years a subscription can be filed under — one plain year, chosen, never typed.
@@ -915,7 +937,7 @@ export default function PeriodicalSubscriptionsPage() {
 									<Select value={form.frequency} onValueChange={v => setForm(f => ({ ...f, frequency: v }))}>
 										<SelectTrigger className={errors.frequency ? 'border-red-500' : ''}><SelectValue /></SelectTrigger>
 										<SelectContent>
-											{FREQUENCIES.map(freq => <SelectItem key={freq} value={freq}>{frequencyLabel(freq)}</SelectItem>)}
+											{FREQUENCIES.map(freq => <SelectItem key={freq} value={freq}>{frequencyOptionLabel(freq)}</SelectItem>)}
 										</SelectContent>
 									</Select>
 									{errors.frequency && <p className="text-xs text-red-500">{errors.frequency}</p>}

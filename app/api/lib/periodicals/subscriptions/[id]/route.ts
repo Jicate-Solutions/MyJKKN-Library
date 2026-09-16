@@ -67,7 +67,7 @@ export async function PUT(
 			// create route for the same case.
 			if (error.code === '23514') {
 				return NextResponse.json(
-					{ error: 'The database does not allow that frequency yet — run the pending database update (20260904_lib_subscription_frequency_semi_monthly) and try again' },
+					{ error: 'The database does not allow that frequency yet — run the pending database update (20260916_lib_subscription_frequency_five_yearly) and try again' },
 					{ status: 400 }
 				)
 			}
