@@ -21,6 +21,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { getInstitutionSettings, chargeableLateDays } from '@/lib/library/institution-settings'
+import { collegeHolidays } from '@/lib/library/college-calendar'
 import { personByMyjkknId, myjkknConfigured } from '@/lib/library/myjkkn-directory'
 
 const GONE = {
@@ -106,6 +107,8 @@ export async function GET(
 
 		const borrower = (borrowerRow as any) ?? null
 		const today = new Date().toISOString().split('T')[0]
+		// Late days leave out this college's own holidays, as a fine does
+		const holidays = await collegeHolidays(institutionId)
 
 		// Supabase types a nested one-to-one join as an array, so the joined rows
 		// are read back through unknown rather than fighting the generated shape.
@@ -114,7 +117,7 @@ export async function GET(
 				accession_number?: string
 				catalogue?: { title?: string } | null
 			} | null
-			const lateDays = chargeableLateDays(loan.due_date, today, settings)
+			const lateDays = chargeableLateDays(loan.due_date, today, settings, holidays)
 			return {
 				id: loan.id,
 				title: item?.catalogue?.title ?? 'Unknown title',

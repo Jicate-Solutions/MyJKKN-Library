@@ -3,6 +3,7 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { collegeHolidays, nextOpenDay } from '@/lib/library/college-calendar'
 import { loanFineStatus, fineUnpaidMessage } from '@/lib/library/late-fine'
 
 export async function POST(request: Request) {
@@ -113,12 +114,8 @@ export async function POST(request: Request) {
 		// new due date from today, so the days it was late would otherwise never
 		// be charged at all — a learner two days late who renewed instead of
 		// returning paid nothing. Same rules and same amount as a late return.
-		const fineStatus = await loanFineStatus(
-			supabase,
-			transaction,
-			institution_id,
-			await getInstitutionSettings(institution_id)
-		)
+		const settings = await getInstitutionSettings(institution_id)
+		const fineStatus = await loanFineStatus(supabase, transaction, institution_id, settings)
 		if (fineStatus.due > 0) {
 			return NextResponse.json(
 				{
@@ -137,9 +134,14 @@ export async function POST(request: Request) {
 			? new Date(baseDateStr)
 			: new Date()
 
+		// On a day this college's library is open — see the issue route
 		const newDueDate = new Date(baseDate)
 		newDueDate.setDate(baseDate.getDate() + renewalPeriodDays)
-		const newDueDateStr = newDueDate.toISOString().split('T')[0]
+		const newDueDateStr = nextOpenDay(
+			newDueDate.toISOString().split('T')[0],
+			await collegeHolidays(institution_id),
+			settings
+		)
 
 		const { data: updated, error: updateError } = await supabase
 			.from('lib_lending_transactions')

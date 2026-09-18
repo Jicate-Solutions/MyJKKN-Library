@@ -131,14 +131,25 @@ async function readInstitutionSettings(institutionId: string): Promise<Instituti
 	}
 }
 
+/** YYYY-MM-DD for a date already set to local midnight. */
+const localDateKey = (day: Date) =>
+	`${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+
 /**
  * Whole days a book is late, after the grace period, optionally skipping
- * Sundays. Never negative.
+ * Sundays, and never counting a day this college was closed for a holiday.
+ * Never negative.
+ *
+ * `holidays` is the college's own calendar (`collegeHolidays()` in
+ * college-calendar.ts), so Pharmacy's leave is not counted against a
+ * Pharmacy learner and Dental's working Saturday still is against a Dental
+ * one. Left out, only Sundays and the grace period are taken off, as before.
  */
 export function chargeableLateDays(
 	dueDate: string | Date,
 	returnedOn: string | Date,
-	settings: InstitutionSettings
+	settings: InstitutionSettings,
+	holidays?: ReadonlySet<string>
 ): number {
 	const due = new Date(dueDate)
 	const back = new Date(returnedOn)
@@ -149,17 +160,21 @@ export function chargeableLateDays(
 	const rawDays = Math.floor((back.getTime() - due.getTime()) / MS_PER_DAY)
 	if (rawDays <= settings.fine_grace_days) return 0
 
-	if (!settings.fine_working_days_only) return rawDays - settings.fine_grace_days
+	const skipsHolidays = !!holidays && holidays.size > 0
+	if (!settings.fine_working_days_only && !skipsHolidays) return rawDays - settings.fine_grace_days
 
-	// Walk the calendar and skip Sundays. The librarian can still adjust the
-	// amount by hand afterwards for college holidays we cannot know about.
+	// Walk the calendar past the grace period and count only the days the
+	// library was open: not a Sunday where this college counts working days
+	// only, and not one of its holidays.
 	let chargeable = 0
 	const cursor = new Date(due)
 	cursor.setDate(cursor.getDate() + settings.fine_grace_days)
 
 	while (cursor < back) {
 		cursor.setDate(cursor.getDate() + 1)
-		if (cursor.getDay() !== 0) chargeable++
+		if (settings.fine_working_days_only && cursor.getDay() === 0) continue
+		if (skipsHolidays && holidays.has(localDateKey(cursor))) continue
+		chargeable++
 	}
 
 	return chargeable

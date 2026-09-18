@@ -22,6 +22,7 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { getInstitutionSettings, chargeableLateDays } from '@/lib/library/institution-settings'
 import { chargePerDayFrom, fineFor, outstandingFine, settledChargesFor } from '@/lib/library/late-fine'
+import { collegeHolidays } from '@/lib/library/college-calendar'
 import { personByCardNumber, myjkknConfigured } from '@/lib/library/myjkkn-directory'
 
 export async function GET(request: Request) {
@@ -201,6 +202,9 @@ export async function GET(request: Request) {
 		})
 
 		const today = new Date().toISOString().split('T')[0]
+		// This college's own holidays are not counted as late days — the same
+		// calendar the return and renew routes use, so the card and the desk agree.
+		const holidays = await collegeHolidays(institutionId)
 		// The same rate the return and renew routes charge, so the fine shown on
 		// the card is the fine the server asks to be cleared.
 		const chargePerDay = chargePerDayFrom(category?.late_charge_per_day)
@@ -209,7 +213,7 @@ export async function GET(request: Request) {
 		// Which late books have had their fine cleared already. One read for all
 		// of them, and none at all when nothing is late.
 		const lateLoanIds = openLoans
-			.filter((loan: any) => chargeableLateDays(loan.due_date, today, settings) > 0)
+			.filter((loan: any) => chargeableLateDays(loan.due_date, today, settings, holidays) > 0)
 			.map((loan: any) => loan.id as string)
 		const settledCharges = await settledChargesFor(supabase, lateLoanIds)
 
@@ -223,7 +227,7 @@ export async function GET(request: Request) {
 				catalogue: { title?: string; subtitle?: string; call_number?: string } | null
 			} | null
 
-			const lateDays = chargeableLateDays(loan.due_date, today, settings)
+			const lateDays = chargeableLateDays(loan.due_date, today, settings, holidays)
 			const fine = fineFor(lateDays, chargePerDay, settings)
 			const due = outstandingFine(fine, settledCharges, loan)
 

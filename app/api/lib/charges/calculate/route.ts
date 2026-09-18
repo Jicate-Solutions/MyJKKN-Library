@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
+import { collegeHolidays } from '@/lib/library/college-calendar'
 
 export async function POST(request: Request) {
 	try {
@@ -42,8 +43,11 @@ export async function POST(request: Request) {
 		const effectiveReturnDate = return_date ?? new Date().toISOString().split('T')[0]
 
 		// Same rules the return desk uses, so the preview and the charge agree
-		const settings = await getInstitutionSettings(institution_id)
-		const overdueDays = chargeableLateDays(transaction.due_date, effectiveReturnDate, settings)
+		const [settings, holidays] = await Promise.all([
+			getInstitutionSettings(institution_id),
+			collegeHolidays(institution_id),
+		])
+		const overdueDays = chargeableLateDays(transaction.due_date, effectiveReturnDate, settings, holidays)
 
 		// Get charge rate from member category
 		const memberCategory = transaction.member?.member_category

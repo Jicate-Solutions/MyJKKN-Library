@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { collegeHolidays, nextOpenDay } from '@/lib/library/college-calendar'
 import { logActivity } from '@/lib/library/activity-log'
 import { personByMyjkknId, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
 import { ensureBorrower, findBorrower, borrowerById } from '@/lib/library/borrower'
@@ -174,11 +175,17 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Could not identify who is borrowing' }, { status: 400 })
 		}
 
-		// 5. Due date
+		// 5. Due date — on a day this college's library is open. Due on one of
+		// its holidays (or a Sunday, where it counts working days only), the
+		// book could not come back that day, so it is due on the next open day.
 		const today = new Date()
 		const dueDate = new Date(today)
 		dueDate.setDate(today.getDate() + loanPeriodDays)
-		const dueDateStr = dueDate.toISOString().split('T')[0]
+		const dueDateStr = nextOpenDay(
+			dueDate.toISOString().split('T')[0],
+			await collegeHolidays(institution_id),
+			settings
+		)
 
 		// 6. The loan itself
 		const { data: transaction, error: txError } = await supabase

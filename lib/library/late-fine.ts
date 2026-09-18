@@ -18,6 +18,7 @@
 
 import type { getSupabaseServer } from '@/lib/supabase-server'
 import { chargeableLateDays, capFine, type InstitutionSettings } from '@/lib/library/institution-settings'
+import { collegeHolidays } from '@/lib/library/college-calendar'
 
 type Supabase = ReturnType<typeof getSupabaseServer>
 
@@ -57,8 +58,9 @@ export function fineFor(overdueDays: number, chargePerDay: number, settings: Ins
 /**
  * The fine on one open loan, as of today, by this college's own rules.
  *
- * The rate comes from the borrower's category in this college. Only asked for
- * when the book is actually late, so an on-time return costs no extra read.
+ * The rate comes from the borrower's category in this college, and a day the
+ * college was closed on its own calendar is not counted. Only asked for when
+ * the book is actually late, so an on-time return costs no extra read.
  */
 export async function lateFineForLoan(
 	supabase: Supabase,
@@ -67,7 +69,7 @@ export async function lateFineForLoan(
 	settings: InstitutionSettings,
 	today: string = new Date().toISOString().split('T')[0]
 ): Promise<LateFine> {
-	const overdueDays = chargeableLateDays(loan.due_date, today, settings)
+	const overdueDays = chargeableLateDays(loan.due_date, today, settings, await collegeHolidays(institutionId))
 	if (overdueDays <= 0) return fineFor(0, DEFAULT_CHARGE_PER_DAY, settings)
 
 	const { data: borrower } = await supabase
