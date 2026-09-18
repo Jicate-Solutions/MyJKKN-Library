@@ -15,12 +15,11 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Textarea } from '@/components/ui/textarea'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import {
 	ArrowLeft, RefreshCw, BookMarked, CheckCircle, Inbox, ChevronLeft, ChevronRight,
-	MoreHorizontal, Eye, Edit, Trash2,
+	MoreHorizontal, Eye, Edit,
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibPeriodicalSubscription, LibPeriodicalIssue, LibIssueReceiptStatus } from '@/types/lib'
@@ -125,8 +124,6 @@ export default function SubscriptionDetailPage() {
 	const [editingIssue, setEditingIssue] = useState<LibPeriodicalIssue | null>(null)
 	/** Shown read-only, for a librarian who only wants to look. */
 	const [viewIssue, setViewIssue] = useState<LibPeriodicalIssue | null>(null)
-	const [deleteTarget, setDeleteTarget] = useState<LibPeriodicalIssue | null>(null)
-	const [deleting, setDeleting] = useState(false)
 	const [currentPage, setCurrentPage] = useState(1)
 	// A monthly subscription lays out twelve issues, and the librarian wants to
 	// see the year at once — at ten a page, December and November sat on page two.
@@ -166,11 +163,39 @@ export default function SubscriptionDetailPage() {
 		return opts
 	}, [issues.length])
 
+	/**
+	 * The register, always read in issue order: 1, 2, 3.
+	 *
+	 * The rows arrive newest-dated first, which puts whatever came last at the
+	 * top and leaves the ones still expected below it in the order they were
+	 * laid out. So marking issue 2 received moved it above issue 3, and an issue
+	 * recorded late sat under issues numbered after it - the register is a
+	 * numbered run, and a librarian checking what is missing reads down it.
+	 * Status changes what a row says, never where it sits.
+	 *
+	 * Sorted on the number inside issue_number rather than the text, because the
+	 * column is text: "10" sorts before "2" as words. Anything with no number in
+	 * it at all - a supplement, an undated special - keeps to the end, in its own
+	 * alphabetical order, rather than being read as zero and jumping to the top.
+	 */
+	const sortedIssues = useMemo(() => {
+		const issueNumber = (issue: LibPeriodicalIssue): number => {
+			const digits = (issue.issue_number ?? '').match(/\d+/)
+			return digits ? Number(digits[0]) : Number.POSITIVE_INFINITY
+		}
+		return [...issues].sort((a, b) => {
+			const left = issueNumber(a)
+			const right = issueNumber(b)
+			if (left !== right) return left < right ? -1 : 1
+			return (a.issue_number ?? '').localeCompare(b.issue_number ?? '')
+		})
+	}, [issues])
+
 	const effectivePerPage = itemsPerPage > issues.length ? issues.length : itemsPerPage
 	const totalPages = Math.max(1, Math.ceil(issues.length / effectivePerPage))
 	const paginated = effectivePerPage > 0
-		? issues.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
-		: issues
+		? sortedIssues.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
+		: sortedIssues
 
 	/**
 	 * A blank Record Issue sheet, already carrying what this subscription says.
@@ -261,30 +286,6 @@ export default function SubscriptionDetailPage() {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Save failed'), variant: 'destructive' })
 		} finally {
 			setSaving(false)
-		}
-	}
-
-	const handleDelete = async () => {
-		if (!deleteTarget) return
-		try {
-			setDeleting(true)
-			const res = await fetch(
-				`/api/lib/periodicals/subscriptions/${subscriptionId}/issues/${deleteTarget.id}`,
-				{ method: 'DELETE' }
-			)
-			if (!res.ok) {
-				const err = await res.json().catch(() => ({}))
-				throw new Error(err.error || 'Delete failed')
-			}
-			setIssues(prev => prev.filter(i => i.id !== deleteTarget.id))
-			// A deleted issue that had been counted gives its place back
-			if (deleteTarget.receipt_status === 'received') loadData()
-			toast({ title: '✅ Issue deleted', className: 'bg-green-50 border-green-200 text-green-800' })
-		} catch (err) {
-			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Delete failed'), variant: 'destructive' })
-		} finally {
-			setDeleting(false)
-			setDeleteTarget(null)
 		}
 	}
 
@@ -530,15 +531,9 @@ export default function SubscriptionDetailPage() {
 																<Eye className="h-4 w-4 mr-2" />View
 															</DropdownMenuItem>
 															{canWrite && (
-																<>
-															<DropdownMenuItem onClick={() => startEdit(issue)}>
-																<Edit className="h-4 w-4 mr-2" />Edit
-															</DropdownMenuItem>
-															<DropdownMenuSeparator />
-															<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
-																<Trash2 className="h-4 w-4 mr-2" />Delete
-															</DropdownMenuItem>
-																</>
+																<DropdownMenuItem onClick={() => startEdit(issue)}>
+																	<Edit className="h-4 w-4 mr-2" />Edit
+																</DropdownMenuItem>
 															)}
 														</DropdownMenuContent>
 													</DropdownMenu>
@@ -587,15 +582,9 @@ export default function SubscriptionDetailPage() {
 														<Eye className="h-4 w-4 mr-2" />View
 													</DropdownMenuItem>
 													{canWrite && (
-														<>
-													<DropdownMenuItem onClick={() => startEdit(issue)}>
-														<Edit className="h-4 w-4 mr-2" />Edit
-													</DropdownMenuItem>
-													<DropdownMenuSeparator />
-													<DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setDeleteTarget(issue)}>
-														<Trash2 className="h-4 w-4 mr-2" />Delete
-													</DropdownMenuItem>
-														</>
+														<DropdownMenuItem onClick={() => startEdit(issue)}>
+															<Edit className="h-4 w-4 mr-2" />Edit
+														</DropdownMenuItem>
 													)}
 												</DropdownMenuContent>
 											</DropdownMenu>
@@ -813,26 +802,6 @@ export default function SubscriptionDetailPage() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-
-			{/* Delete confirmation */}
-			<AlertDialog open={!!deleteTarget} onOpenChange={o => { if (!o) setDeleteTarget(null) }}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>Delete Issue</AlertDialogTitle>
-						<AlertDialogDescription>
-							Delete the issue recorded on <strong>{dateLabel(deleteTarget?.received_date)}</strong>
-							{deleteTarget?.issue_number ? <> (No. {deleteTarget.issue_number})</> : null}? This cannot be undone.
-							{deleteTarget?.receipt_status === 'received' && ' The Received count will go down by one.'}
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-						<AlertDialogAction onClick={handleDelete} disabled={deleting} className="bg-red-600 hover:bg-red-700">
-							{deleting ? 'Deleting...' : 'Delete'}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 		</div>
 	)
 }
