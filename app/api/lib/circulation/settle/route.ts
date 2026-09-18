@@ -56,7 +56,13 @@ export async function POST(request: Request) {
 		const institutionId = guard.institutionId
 		const mode: Mode | null = body.mode === 'paid' || body.mode === 'waive' ? body.mode : null
 		const reason = String(body.waiver_reason ?? '').trim()
-		const who = guard.caller.fullName || guard.caller.email || null
+		// Who cleared it. collected_by and waiver_approved_by are uuid columns, so
+		// it is the signed-in staff member's id - their MyJKKN staff id, or their
+		// sign-in id - and never their name: a name there made Postgres refuse
+		// the row (22P02), and every Paid and Waive answered 'Could not settle
+		// the fine'. An id that is not a uuid is left out rather than refused.
+		const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+		const who = UUID.test(guard.caller.userId ?? '') ? guard.caller.userId : null
 		const today = new Date().toISOString().split('T')[0]
 
 		if (!institutionId) {
