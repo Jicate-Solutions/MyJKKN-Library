@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
-import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
-import { setDelinquent } from '@/lib/library/borrower'
+import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { loanFineStatus, fineUnpaidMessage } from '@/lib/library/late-fine'
 
 export async function POST(request: Request) {
 	try {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
 		if (!guard.ok) return guard.response
 		body.institution_id = guard.institutionId
 
-		const { institution_id, item_id, transaction_id, returned_by, return_condition, waive_charge } = body
+		const { institution_id, item_id, transaction_id, returned_by, return_condition } = body
 
 		if (!institution_id) {
 			return NextResponse.json({ error: 'institution_id is required' }, { status: 400 })
@@ -65,67 +65,31 @@ export async function POST(request: Request) {
 		const now = new Date()
 		const today = now.toISOString().split('T')[0]
 
-		// 2. Calculate chargeable days using this campus's own rules — grace
-		// period and whether Sundays count both vary by institution.
-		const overdueDays = chargeableLateDays(transaction.due_date, today, settings)
+		// 2 and 3. The fine, by this campus's own rules — grace period, Sundays,
+		// the per-day rate and the cap all vary by institution — and it has to
+		// be cleared already.
+		//
+		// A late return used to go through and leave an unpaid charge behind, to
+		// be chased afterwards; now the fine is marked Paid or Waived at the desk
+		// first (POST /api/lib/circulation/settle) and the book comes back after.
+		// No charge is written here any more: the one that settled the fine is
+		// the charge, and it is what the desk shows as collected or waived.
+		const fineStatus = await loanFineStatus(supabase, transaction, institution_id, settings, today)
+		const overdueDays = fineStatus.fine.overdue_days
 
-		let chargeRecord = null
-
-		// 3. Create late charge if overdue and not waiving upfront
-		if (overdueDays > 0) {
-			// Get charge rate from the borrower's category
-			const { data: member } = await supabase
-				.from('lib_borrowers')
-				.select('member_category')
-				.eq('id', transaction.member_id)
-				.single()
-
-			const { data: categoryConfig } = await supabase
-				.from('lib_member_categories')
-				.select('late_charge_per_day')
-				.eq('institution_id', institution_id)
-				.eq('category_code', member?.member_category ?? '')
-				.maybeSingle()
-
-			const chargePerDay = categoryConfig?.late_charge_per_day ?? 1.0
-			// A librarian can override the amount by hand — college holidays we
-			// have no calendar for are exactly why that is needed.
-			const computed = capFine(overdueDays * chargePerDay, settings)
-			const totalCharge = body.override_charge !== undefined
-				? Math.max(0, Number(body.override_charge))
-				: computed
-			const waiverAmount = waive_charge ? totalCharge : 0
-			const netPayable = totalCharge - waiverAmount
-
-			const { data: charge, error: chargeError } = await supabase
-				.from('lib_late_charges')
-				.insert({
-					institution_id,
-					transaction_id: transaction.id,
-					member_id: transaction.member_id,
-					overdue_days: overdueDays,
-					charge_per_day: chargePerDay,
-					total_charge: totalCharge,
-					waiver_amount: waiverAmount,
-					net_payable: netPayable,
-					payment_status: waive_charge ? 'waived' : 'unpaid',
-					waiver_reason: waive_charge ? (body.waiver_reason ?? 'Waived at return') : null,
-					waiver_approved_by: waive_charge ? (returned_by ?? null) : null,
-				})
-				.select()
-				.single()
-
-			if (chargeError) {
-				console.error('Error creating late charge:', chargeError)
-			} else {
-				chargeRecord = charge
-
-				// Mark the borrower as owing if there is a net payable amount
-				if (netPayable > 0) {
-					await setDelinquent(supabase, transaction.member_id, true)
-				}
-			}
+		if (fineStatus.due > 0) {
+			return NextResponse.json(
+				{
+					error: fineUnpaidMessage(fineStatus, 'returned'),
+					reason: 'fine_unpaid',
+					fine: fineStatus.fine,
+					due: fineStatus.due,
+				},
+				{ status: 400 }
+			)
 		}
+
+		const chargeRecord = fineStatus.lastSettled
 
 		// 4 and 5. Mark the loan returned and the copy available.
 		//

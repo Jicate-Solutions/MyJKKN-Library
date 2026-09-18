@@ -11,21 +11,22 @@
  *   * An issue is deleted, not returned. The copy goes back to available (or
  *     back on hold, if this issue had fulfilled one), and no loan remains.
  *   * A return is reopened. The loan is active again, the copy is on loan
- *     again, the charge the return raised is removed, and a hold the return
- *     passed the copy to goes back to waiting.
+ *     again, and a hold the return passed the copy to goes back to waiting.
+ *     A late book's fine was cleared at the desk before it could come back,
+ *     and that stays as it is: the money was taken or let off, and the
+ *     reopened loan is still covered by it.
  *   * A renewal is rolled back to the due date it had before.
  *
  * Only within a short window of the action itself, only on a loan that has
  * not moved on since, and only within the caller's own college. An issue that
- * already has a return against it, a return whose copy has since gone out
- * again, or a charge somebody has already paid, is refused with the reason.
+ * already has a return against it, or a return whose copy has since gone out
+ * again, is refused with the reason.
  */
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
-import { setDelinquent } from '@/lib/library/borrower'
 
 /**
  * A little longer than the two minutes the desk offers, so a click at the end
@@ -144,31 +145,23 @@ export async function POST(request: Request) {
 				return NextResponse.json({ error: 'Too late to take this return back — issue the book again instead' }, { status: 400 })
 			}
 
-			// Since the return: has the copy gone out again, and did the return
-			// raise a charge that somebody has already paid? Both are asked
-			// together — neither depends on the other.
-			const [{ data: laterLoan }, { data: charges }] = await Promise.all([
-				supabase
-					.from('lib_lending_transactions')
-					.select('id')
-					.eq('item_id', transaction.item_id)
-					.in('transaction_status', ['active', 'overdue'])
-					.gt('issued_at', transaction.returned_at)
-					.limit(1)
-					.maybeSingle(),
-				supabase
-					.from('lib_late_charges')
-					.select('id, payment_status, net_payable')
-					.eq('transaction_id', transaction.id)
-					.gte('created_at', isoBefore(transaction.returned_at, SAME_ACTION_SLACK_MS)),
-			])
+			// Since the return: has the copy gone out again?
+			//
+			// A return no longer raises a charge — a late book's fine is cleared
+			// at the desk before the return will go through — so there is no
+			// charge here to take back. The one that cleared the fine was made
+			// on purpose, stays, and still covers the loan once it is reopened.
+			const { data: laterLoan } = await supabase
+				.from('lib_lending_transactions')
+				.select('id')
+				.eq('item_id', transaction.item_id)
+				.in('transaction_status', ['active', 'overdue'])
+				.gt('issued_at', transaction.returned_at)
+				.limit(1)
+				.maybeSingle()
 
 			if (laterLoan) {
 				return NextResponse.json({ error: 'This copy has already been issued again — the return stands' }, { status: 400 })
-			}
-			const paid = (charges ?? []).find(c => c.payment_status === 'paid' || c.payment_status === 'partial')
-			if (paid) {
-				return NextResponse.json({ error: 'Money has already been collected on this return — settle it from Late Charges instead' }, { status: 400 })
 			}
 
 			const overdue = transaction.due_date < now.slice(0, 10)
@@ -191,8 +184,6 @@ export async function POST(request: Request) {
 				return NextResponse.json({ error: 'Could not take the return back' }, { status: 500 })
 			}
 
-			const chargeIds = (charges ?? []).map(c => c.id)
-
 			await Promise.all([
 				supabase
 					.from('lib_items')
@@ -205,20 +196,7 @@ export async function POST(request: Request) {
 					.eq('item_id', transaction.item_id)
 					.eq('hold_status', 'available')
 					.gte('notified_at', isoBefore(transaction.returned_at, SAME_ACTION_SLACK_MS)),
-				chargeIds.length > 0
-					? supabase.from('lib_late_charges').delete().in('id', chargeIds)
-					: Promise.resolve(),
 			])
-
-			// With the charge gone, the member may owe nothing any more
-			if (chargeIds.length > 0) {
-				const { count } = await supabase
-					.from('lib_late_charges')
-					.select('*', { count: 'exact', head: true })
-					.eq('member_id', transaction.member_id)
-					.in('payment_status', ['unpaid', 'partial'])
-				if ((count ?? 0) === 0) await setDelinquent(supabase, transaction.member_id, false)
-			}
 
 			await logActivity(request, {
 				action: 'update',
@@ -227,7 +205,7 @@ export async function POST(request: Request) {
 				institution_id: institutionId,
 				old_values: transaction,
 				new_values: reopened,
-				metadata: { undo: 'return', transaction_id: transaction.id, charges_removed: chargeIds.length },
+				metadata: { undo: 'return', transaction_id: transaction.id },
 			})
 
 			return NextResponse.json({ success: true, action, transaction: reopened })

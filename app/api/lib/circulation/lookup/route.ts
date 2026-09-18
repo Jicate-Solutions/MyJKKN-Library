@@ -9,7 +9,8 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
-import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
+import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { loanFineStatus } from '@/lib/library/late-fine'
 
 export async function GET(request: Request) {
 	try {
@@ -63,19 +64,12 @@ export async function GET(request: Request) {
 			)
 		}
 
+		// The fine by the same rule the return and renew routes insist on, and
+		// whether it has been cleared already — a late book can only go back or
+		// be renewed once it has, so the desk has to know before it offers the
+		// button.
 		const today = new Date().toISOString().split('T')[0]
-		const lateDays = chargeableLateDays(loan.due_date, today, settings)
-
-		let chargePerDay = 0
-		if (lateDays > 0) {
-			const { data: category } = await supabase
-				.from('lib_member_categories')
-				.select('late_charge_per_day')
-				.eq('institution_id', item.institution_id)
-				.eq('category_code', loan.member?.member_category ?? '')
-				.maybeSingle()
-			chargePerDay = category?.late_charge_per_day ?? 0
-		}
+		const { fine, due } = await loanFineStatus(supabase, loan, item.institution_id, settings, today)
 
 		return NextResponse.json({
 			...loan,
@@ -84,10 +78,12 @@ export async function GET(request: Request) {
 				accession_number: item.accession_number,
 				title: (item.catalogue as { title?: string } | null)?.title ?? null,
 			},
-			is_overdue: lateDays > 0,
-			overdue_days: lateDays,
-			charge_per_day: chargePerDay,
-			estimated_charge: capFine(lateDays * chargePerDay, settings),
+			is_overdue: fine.overdue_days > 0,
+			overdue_days: fine.overdue_days,
+			charge_per_day: fine.charge_per_day,
+			estimated_charge: fine.amount,
+			fine_due: due,
+			fine_settled: due <= 0,
 		})
 	} catch (error) {
 		console.error('Unexpected error looking up loan:', error)

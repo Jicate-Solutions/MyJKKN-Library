@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
+import { getInstitutionSettings } from '@/lib/library/institution-settings'
+import { loanFineStatus, fineUnpaidMessage } from '@/lib/library/late-fine'
 
 export async function POST(request: Request) {
 	try {
@@ -103,6 +105,28 @@ export async function POST(request: Request) {
 		if ((holdCount ?? 0) > 0) {
 			return NextResponse.json(
 				{ error: 'Cannot renew — other members are waiting for this resource' },
+				{ status: 400 }
+			)
+		}
+
+		// A book already late has its fine cleared first. The renewal counts the
+		// new due date from today, so the days it was late would otherwise never
+		// be charged at all — a learner two days late who renewed instead of
+		// returning paid nothing. Same rules and same amount as a late return.
+		const fineStatus = await loanFineStatus(
+			supabase,
+			transaction,
+			institution_id,
+			await getInstitutionSettings(institution_id)
+		)
+		if (fineStatus.due > 0) {
+			return NextResponse.json(
+				{
+					error: fineUnpaidMessage(fineStatus, 'renewed'),
+					reason: 'fine_unpaid',
+					fine: fineStatus.fine,
+					due: fineStatus.due,
+				},
 				{ status: 400 }
 			)
 		}

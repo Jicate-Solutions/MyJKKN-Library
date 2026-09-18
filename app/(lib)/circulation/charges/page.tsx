@@ -16,11 +16,16 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Badge } from '@/components/ui/badge'
 import { OverflowText } from '@/components/library/overflow-text'
 import {
+	AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+	AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
 	IndianRupee, AlertCircle, CheckCircle2, MinusCircle,
-	MoreHorizontal, CreditCard, Undo2, Search, RefreshCw,
-	ChevronLeft, ChevronRight,
+	MoreHorizontal, Undo2, Search, RefreshCw,
+	ChevronLeft, ChevronRight, Loader2,
 } from 'lucide-react'
-import { fetchCharges, collectPayment, waiveCharge } from '@/services/library/lib-late-charges-service'
+import { fetchCharges, waiveCharge } from '@/services/library/lib-late-charges-service'
+import { settleFine } from '@/services/library/lib-circulation-service'
 import type { LibLateCharge, LibChargePaymentStatus } from '@/types/lib'
 
 const STATUS_COLORS: Record<LibChargePaymentStatus, string> = {
@@ -30,7 +35,7 @@ const STATUS_COLORS: Record<LibChargePaymentStatus, string> = {
 	partial: 'bg-amber-50 text-amber-700 border-amber-200',
 }
 
-type ActionMode = 'collect' | 'waive' | null
+type ActionMode = 'waive' | null
 
 export default function ChargesPage() {
 	const canWrite = useLibrarianWrite()
@@ -47,7 +52,9 @@ export default function ChargesPage() {
 	const [sheetOpen, setSheetOpen] = useState(false)
 	const [actionMode, setActionMode] = useState<ActionMode>(null)
 	const [selectedCharge, setSelectedCharge] = useState<LibLateCharge | null>(null)
-	const [paymentReference, setPaymentReference] = useState('')
+	/** The charge waiting on "Mark as paid?" — Yes records it paid in full. */
+	const [payingCharge, setPayingCharge] = useState<LibLateCharge | null>(null)
+	const [paying, setPaying] = useState(false)
 	const [waiverReason, setWaiverReason] = useState('')
 	const [waiverAmount, setWaiverAmount] = useState('')
 	const [processing, setProcessing] = useState(false)
@@ -98,11 +105,39 @@ export default function ChargesPage() {
 		? filtered.slice((currentPage - 1) * effectivePerPage, currentPage * effectivePerPage)
 		: filtered
 
-	const openCollect = (c: LibLateCharge) => {
-		setSelectedCharge(c)
-		setActionMode('collect')
-		setPaymentReference('')
-		setSheetOpen(true)
+	/**
+	 * Paid, confirmed with one Yes — the same step the desk uses.
+	 *
+	 * Collect Payment used to open a sheet that asked for a receipt number
+	 * before it would record anything. Paid now means the whole amount is in
+	 * hand; it goes through the desk's settle route, so a fine is cleared the
+	 * same way wherever it is cleared.
+	 *
+	 * The reply is the bare charge row, without the member and title this list
+	 * joins on, so it is laid over the row already here rather than replacing
+	 * it — replacing it blanked the member's name until the next refresh.
+	 */
+	const confirmPaid = async () => {
+		if (!payingCharge) return
+		try {
+			setPaying(true)
+			const saved = await settleFine({
+				institution_id: payingCharge.institution_id ?? institutionId ?? '',
+				mode: 'paid',
+				charge_id: payingCharge.id,
+			})
+			setCharges(prev => prev.map(c => c.id === saved.id ? { ...c, ...saved, member: c.member, transaction: c.transaction } : c))
+			toast({
+				title: `✅ ₹${payingCharge.net_payable.toFixed(2)} paid`,
+				description: payingCharge.member?.display_name ?? undefined,
+				className: 'bg-green-50 border-green-200 text-green-800',
+			})
+			setPayingCharge(null)
+		} catch (err) {
+			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Could not mark it paid'), variant: 'destructive' })
+		} finally {
+			setPaying(false)
+		}
 	}
 
 	const openWaive = (c: LibLateCharge) => {
@@ -123,24 +158,18 @@ export default function ChargesPage() {
 		if (!selectedCharge) return
 		try {
 			setProcessing(true)
-			if (actionMode === 'collect') {
-				const updated = await collectPayment(selectedCharge.id, { payment_reference: paymentReference })
-				setCharges(prev => prev.map(c => c.id === updated.id ? updated : c))
-				toast({ title: '✅ Payment collected', className: 'bg-green-50 border-green-200 text-green-800' })
-			} else {
-				const amount = Number(waiverAmount)
-				if (isNaN(amount) || amount <= 0) {
-					toast({ title: '❌ Enter a valid waiver amount', variant: 'destructive' })
-					return
-				}
-				if (!waiverReason.trim()) {
-					toast({ title: '❌ Waiver reason is required', variant: 'destructive' })
-					return
-				}
-				const updated = await waiveCharge(selectedCharge.id, { waiver_amount: amount, waiver_reason: waiverReason })
-				setCharges(prev => prev.map(c => c.id === updated.id ? updated : c))
-				toast({ title: '✅ Charge waived', className: 'bg-green-50 border-green-200 text-green-800' })
+			const amount = Number(waiverAmount)
+			if (isNaN(amount) || amount <= 0) {
+				toast({ title: '❌ Enter a valid waiver amount', variant: 'destructive' })
+				return
 			}
+			if (!waiverReason.trim()) {
+				toast({ title: '❌ Waiver reason is required', variant: 'destructive' })
+				return
+			}
+			const updated = await waiveCharge(selectedCharge.id, { waiver_amount: amount, waiver_reason: waiverReason })
+			setCharges(prev => prev.map(c => c.id === updated.id ? updated : c))
+			toast({ title: '✅ Charge waived', className: 'bg-green-50 border-green-200 text-green-800' })
 			closeSheet()
 		} catch (err) {
 			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Action failed'), variant: 'destructive' })
@@ -307,8 +336,8 @@ export default function ChargesPage() {
 																</Button>
 															</DropdownMenuTrigger>
 															<DropdownMenuContent align="end">
-																<DropdownMenuItem onClick={() => openCollect(c)}>
-																	<CreditCard className="h-4 w-4 mr-2 text-emerald-600" />Collect Payment
+																<DropdownMenuItem onClick={() => setPayingCharge(c)}>
+																	<CheckCircle2 className="h-4 w-4 mr-2 text-emerald-600" />Paid
 																</DropdownMenuItem>
 																<DropdownMenuSeparator />
 																<DropdownMenuItem onClick={() => openWaive(c)}>
@@ -352,8 +381,8 @@ export default function ChargesPage() {
 													</Button>
 												</DropdownMenuTrigger>
 												<DropdownMenuContent align="end">
-													<DropdownMenuItem onClick={() => openCollect(c)}>
-														<CreditCard className="h-4 w-4 mr-2 text-emerald-600" />Collect Payment
+													<DropdownMenuItem onClick={() => setPayingCharge(c)}>
+														<CheckCircle2 className="h-4 w-4 mr-2 text-emerald-600" />Paid
 													</DropdownMenuItem>
 													<DropdownMenuSeparator />
 													<DropdownMenuItem onClick={() => openWaive(c)}>
@@ -411,13 +440,9 @@ export default function ChargesPage() {
 			<Sheet open={sheetOpen} onOpenChange={o => { if (!o) closeSheet(); else setSheetOpen(o) }}>
 				<SheetContent className="sm:max-w-[480px] overflow-y-auto">
 					<SheetHeader className="pb-4 border-b">
-						<SheetTitle className="text-lg font-semibold">
-							{actionMode === 'collect' ? 'Collect Payment' : 'Waive Charge'}
-						</SheetTitle>
+						<SheetTitle className="text-lg font-semibold">Waive Charge</SheetTitle>
 						<p className="text-sm text-muted-foreground">
-							{actionMode === 'collect'
-								? 'Record payment for the outstanding late charge'
-								: 'Apply a waiver to reduce the outstanding charge'}
+							Apply a waiver to reduce the outstanding charge
 						</p>
 					</SheetHeader>
 					{selectedCharge && (
@@ -448,18 +473,9 @@ export default function ChargesPage() {
 							{/* Action Fields */}
 							<div className="space-y-4 pt-2 border-t">
 								<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-									{actionMode === 'collect' ? 'Payment Details' : 'Waiver Details'}
+									Waiver Details
 								</h3>
-								{actionMode === 'collect' ? (
-									<div className="space-y-2">
-										<Label className="text-sm font-semibold">Payment Reference</Label>
-										<Input
-											value={paymentReference}
-											onChange={e => setPaymentReference(e.target.value)}
-											placeholder="Receipt no. / UPI ref / Cash..."
-										/>
-									</div>
-								) : (
+								{actionMode === 'waive' && (
 									<div className="space-y-4">
 										<div className="space-y-2">
 											<Label className="text-sm font-semibold">Waiver Amount (₹) <span className="text-red-500">*</span></Label>
@@ -488,13 +504,39 @@ export default function ChargesPage() {
 							<div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t">
 								<Button variant="outline" className="h-10 px-6 w-full sm:w-auto" onClick={closeSheet}>Cancel</Button>
 								<Button className="h-10 px-6 w-full sm:w-auto" onClick={handleAction} disabled={processing}>
-									{processing ? 'Processing...' : (actionMode === 'collect' ? 'Collect Payment' : 'Apply Waiver')}
+									{processing ? 'Processing...' : 'Apply Waiver'}
 								</Button>
 							</div>
 						</div>
 					)}
 				</SheetContent>
 			</Sheet>
+
+			{/* Paid — Yes / No */}
+			<AlertDialog open={!!payingCharge} onOpenChange={o => { if (!o && !paying) setPayingCharge(null) }}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Mark this charge as paid?</AlertDialogTitle>
+						<AlertDialogDescription>
+							{payingCharge?.member?.display_name ?? 'This member'}
+							{payingCharge?.transaction?.item?.catalogue_record?.title
+								? ` — ${payingCharge.transaction.item.catalogue_record.title}`
+								: ''}
+							. Yes records <span className="font-semibold">₹{payingCharge?.net_payable.toFixed(2)}</span> as paid in full.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={paying}>No</AlertDialogCancel>
+						{/* A plain button, not AlertDialogAction: the action closes the
+						    box on click, before the save has answered. */}
+						<Button onClick={() => { void confirmPaid() }} disabled={paying}>
+							{paying
+								? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</>
+								: 'Yes'}
+						</Button>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</div>
 	)
 }

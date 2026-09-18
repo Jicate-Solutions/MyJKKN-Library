@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -15,10 +14,12 @@ import { MemberCategoryBadge } from '@/components/library/member-category-badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { DeskLastResult } from '@/components/library/desk-last-result'
 import { DeskTodayStrip } from '@/components/library/desk-today-strip'
-import { SettleChargeDialog, type SettleMode, type SettleRequest } from '@/components/library/settle-charge-dialog'
+import {
+	SettleChargeDialog, FineButtons, fineAsCharge, type SettleMode, type SettleRequest,
+} from '@/components/library/settle-charge-dialog'
 import {
 	CheckCircle, RefreshCw, RotateCcw, BookOpen, AlertTriangle, ArrowRightLeft, Loader2, UserPlus,
-	Bookmark, IndianRupee, X, Info,
+	Bookmark, X, Info,
 } from 'lucide-react'
 import {
 	issueItem, returnItem, renewItem, cancelHold, undoDeskAction, fetchRecentDeskEvents,
@@ -86,6 +87,38 @@ const loanLateCharge = (tx: LibLendingTransaction) => {
 	const withEstimate = tx as LibLendingTransaction & { estimated_charge?: number }
 	return withEstimate.estimated_charge ?? tx.late_charge_amount ?? 0
 }
+
+/**
+ * A late book whose fine has not been cleared yet.
+ *
+ * Such a book cannot be returned or renewed — the server refuses both until
+ * the fine is marked Paid or Waived — so the desk holds the button back and
+ * offers the two that clear it instead.
+ */
+const loanFineOutstanding = (tx: LibLendingTransaction) =>
+	loanFineDue(tx) > 0 && !(tx as LibLendingTransaction & { fine_settled?: boolean }).fine_settled
+
+/** What is still to pay on a scanned loan — less than the fine when part was cleared already. */
+const loanFineDue = (tx: LibLendingTransaction) =>
+	(tx as LibLendingTransaction & { fine_due?: number }).fine_due ?? loanLateCharge(tx)
+
+/** A scanned loan's fine, in the shape the settle dialog shows. */
+const loanFine = (tx: LibLendingTransaction) => fineAsCharge({
+	amount: loanFineDue(tx),
+	overdue_days: tx.overdue_days ?? 0,
+	title: loanItemTitle(tx),
+	accession_number: loanAccession(tx),
+	due_date: tx.due_date,
+})
+
+/** What the desk says once a fine is cleared. */
+const settledToast = (request: SettleRequest) => ({
+	title: request.mode === 'paid'
+		? `✅ ${rupees(request.charge.net_payable)} paid`
+		: `✅ ${rupees(request.charge.net_payable)} waived`,
+	description: request.charge.title,
+	className: 'bg-green-50 border-green-200 text-green-800',
+})
 
 /** A charge as the return route stores it, in the shape the desk settles. */
 function chargeFromRow(
@@ -199,6 +232,7 @@ function MemberLoansPanel({
 }) {
 	const { toast } = useToast()
 	const [busyId, setBusyId] = useState<string | null>(null)
+	const [settling, setSettling] = useState<SettleRequest | null>(null)
 
 	const act = async (loan: MemberLoan, action: 'return' | 'renew') => {
 		try {
@@ -271,7 +305,12 @@ function MemberLoansPanel({
 			</div>
 
 			<div className="divide-y rounded-md border">
-				{loans.map(loan => (
+				{loans.map(loan => {
+					// A late book's fine is cleared before it can go back or be
+					// renewed, so the two buttons wait and Waive / Paid come first.
+					const fineDue = loan.fine_due ?? loan.estimated_charge
+					const fineOwing = fineDue > 0 && !loan.fine_settled
+					return (
 					<div key={loan.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
 						<div className="min-w-[8rem] flex-1">
 							<OverflowText as="p" text={loan.title} className="text-sm font-medium" />
@@ -288,11 +327,35 @@ function MemberLoansPanel({
 						</div>
 
 						{loan.is_overdue && (
-							<Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-xs text-destructive">
+							<Badge
+								variant="outline"
+								className={fineOwing || loan.estimated_charge <= 0
+									? 'border-destructive/30 bg-destructive/10 text-xs text-destructive'
+									: 'border-emerald-300 bg-emerald-50 text-xs text-emerald-700'}
+							>
 								<AlertTriangle className="mr-1 h-3 w-3" />
 								{loan.overdue_days} day{loan.overdue_days === 1 ? '' : 's'} late
-								{loan.estimated_charge > 0 ? ` · ₹${loan.estimated_charge}` : ''}
+								{loan.estimated_charge > 0
+									? ` · ${fineOwing ? `${rupees(fineDue)} to clear` : `${rupees(loan.estimated_charge)} cleared`}`
+									: ''}
 							</Badge>
+						)}
+
+						{fineOwing && (
+							<FineButtons
+								disabled={busyId === loan.id}
+								onChoose={mode => setSettling({
+									mode,
+									transaction_id: loan.id,
+									charge: fineAsCharge({
+										amount: fineDue,
+										overdue_days: loan.overdue_days,
+										title: loan.title,
+										accession_number: loan.accession_number,
+										due_date: loan.due_date,
+									}),
+								})}
+							/>
 						)}
 
 						<div className="flex items-center gap-2">
@@ -300,8 +363,8 @@ function MemberLoansPanel({
 								size="sm"
 								variant="outline"
 								className="h-10 text-xs sm:h-8"
-								disabled={busyId === loan.id || !loan.can_renew}
-								title={loan.can_renew ? 'Extend the due date' : 'Renewal limit reached'}
+								disabled={busyId === loan.id || !loan.can_renew || fineOwing}
+								title={fineOwing ? 'Clear the fine first — Waive or Paid' : loan.can_renew ? 'Extend the due date' : 'Renewal limit reached'}
 								onClick={() => act(loan, 'renew')}
 							>
 								{busyId === loan.id
@@ -312,7 +375,8 @@ function MemberLoansPanel({
 							<Button
 								size="sm"
 								className="h-10 text-xs sm:h-8"
-								disabled={busyId === loan.id}
+								disabled={busyId === loan.id || fineOwing}
+								title={fineOwing ? 'Clear the fine first — Waive or Paid' : undefined}
 								onClick={() => act(loan, 'return')}
 							>
 								{busyId === loan.id
@@ -322,8 +386,20 @@ function MemberLoansPanel({
 							</Button>
 						</div>
 					</div>
-				))}
+					)
+				})}
 			</div>
+
+			<SettleChargeDialog
+				settling={settling}
+				institutionId={institutionId}
+				onClose={() => setSettling(null)}
+				onSettled={(_saved, request) => {
+					toast(settledToast(request))
+					setSettling(null)
+					onChanged()
+				}}
+			/>
 		</div>
 	)
 }
@@ -416,10 +492,18 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
  *
  * The dialog that records the payment or the waiver is the one the result
  * line uses after a late return — one form, one set of rules, wherever the
- * fine is met.
+ * fine is met. Waive and Paid are the desk's, so the assistant librarian who
+ * runs it can clear a fine as well as the librarian.
  */
-function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; onChanged: () => void }) {
-	const canWrite = useLibrarianWrite()
+function MemberChargesPanel({
+	charges,
+	institutionId,
+	onChanged,
+}: {
+	charges: MemberCharge[]
+	institutionId: string | null
+	onChanged: () => void
+}) {
 	const { toast } = useToast()
 	const [settling, setSettling] = useState<SettleRequest | null>(null)
 
@@ -459,32 +543,17 @@ function MemberChargesPanel({ charges, onChanged }: { charges: MemberCharge[]; o
 							{charge.payment_status === 'partial' ? ` of ${rupees(charge.total_charge)}` : ''}
 						</Badge>
 
-						{canWrite && (
-						<div className="flex items-center gap-2">
-							<Button size="sm" variant="outline" className="h-10 text-xs sm:h-8" onClick={() => setSettling({ charge, mode: 'waive' })}>
-								Waive
-							</Button>
-							<Button size="sm" className="h-10 text-xs sm:h-8" onClick={() => setSettling({ charge, mode: 'collect' })}>
-								<IndianRupee className="mr-1 h-3 w-3" />
-								Collect
-							</Button>
-						</div>
-						)}
+						<FineButtons onChoose={mode => setSettling({ charge, mode })} />
 					</div>
 				))}
 			</div>
 
 			<SettleChargeDialog
 				settling={settling}
+				institutionId={institutionId}
 				onClose={() => setSettling(null)}
 				onSettled={(_saved, request) => {
-					toast({
-						title: request.mode === 'collect'
-							? `✅ ${rupees(request.charge.net_payable)} collected`
-							: '✅ Charge waived',
-						description: request.charge.title,
-						className: 'bg-green-50 border-green-200 text-green-800',
-					})
+					toast(settledToast(request))
 					setSettling(null)
 					onChanged()
 				}}
@@ -925,6 +994,7 @@ function IssueTab({
 							/>
 							<MemberChargesPanel
 								charges={member.charges ?? []}
+								institutionId={institutionId}
 								onChanged={refreshMember}
 							/>
 						</div>
@@ -1102,7 +1172,85 @@ function useLoanScan(shared: DeskShared) {
 		setInfo(null)
 	}, [])
 
-	return { transaction, busy, scan, error, setError, info, lookup, clear }
+	/** The fine on the book in front of the desk has just been cleared. */
+	const markFineSettled = useCallback(() => {
+		setTransaction(tx => tx ? ({ ...tx, fine_settled: true, fine_due: 0 } as LibLendingTransaction) : tx)
+		setError(null)
+	}, [])
+
+	return { transaction, busy, scan, error, setError, info, lookup, clear, markFineSettled }
+}
+
+/**
+ * The fine on the book scanned at Return or Renew, and the way to clear it.
+ *
+ * Until it is cleared the book cannot go back or be renewed — the server
+ * refuses both — so this sits above the confirm button and says so. Once it
+ * is cleared it says that instead, and the button is free.
+ */
+function LoanFineBox({
+	transaction,
+	action,
+	institutionId,
+	onSettled,
+}: {
+	transaction: LibLendingTransaction
+	action: 'returned' | 'renewed'
+	institutionId: string | null
+	onSettled: () => void
+}) {
+	const { toast } = useToast()
+	const [settling, setSettling] = useState<SettleRequest | null>(null)
+	const days = transaction.overdue_days ?? 0
+	const amount = loanLateCharge(transaction)
+
+	if (days <= 0) return null
+
+	const late = `${days} day${days === 1 ? '' : 's'} overdue`
+
+	// Late, but inside what this college charges nothing for
+	if (amount <= 0) {
+		return (
+			<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+				<AlertTriangle className="h-4 w-4 shrink-0" />
+				<span>{late} — no fine to pay</span>
+			</div>
+		)
+	}
+
+	if (!loanFineOutstanding(transaction)) {
+		return (
+			<div className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+				<CheckCircle className="h-4 w-4 shrink-0" />
+				<span>{late} — fine of {rupees(amount)} cleared. The book can be {action} now.</span>
+			</div>
+		)
+	}
+
+	return (
+		<>
+			<div className="flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+				<AlertTriangle className="h-4 w-4 shrink-0" />
+				<span className="min-w-[10rem] flex-1">
+					{late} — fine <span className="font-semibold">{rupees(loanFineDue(transaction))}</span>
+					{loanFineDue(transaction) < amount ? ` still to clear, of ${rupees(amount)}` : ''}.
+					{' '}Mark it Paid or Waived before the book can be {action}.
+				</span>
+				<FineButtons onChoose={mode => setSettling({ mode, transaction_id: transaction.id, charge: loanFine(transaction) })} />
+			</div>
+
+			<SettleChargeDialog
+				settling={settling}
+				institutionId={institutionId}
+				onClose={() => setSettling(null)}
+				onSettled={(_saved, request) => {
+					toast(settledToast(request))
+					setSettling(null)
+					onSettled()
+				}}
+			/>
+		</>
+	)
 }
 
 /** The lines this sitting's returns or renewals make — read off the desk's own record. */
@@ -1167,8 +1315,9 @@ function ReturnTab({
 }) {
 	const { institutionId, active, onEvent, setKeys } = shared
 	const { toast } = useToast()
-	const { transaction, busy, scan, error, setError, info, lookup, clear } = useLoanScan(shared)
+	const { transaction, busy, scan, error, setError, info, lookup, clear, markFineSettled } = useLoanScan(shared)
 	const [returning, setReturning] = useState(false)
+	const fineOwing = !!transaction && loanFineOutstanding(transaction)
 
 	const doReturn = useCallback(async (tx: LibLendingTransaction) => {
 		const title = loanItemTitle(tx)
@@ -1218,7 +1367,7 @@ function ReturnTab({
 	useEffect(() => {
 		if (!active) return
 		setKeys('return', {
-			confirm: transaction && !returning ? () => { void doReturn(transaction) } : undefined,
+			confirm: transaction && !returning && !fineOwing ? () => { void doReturn(transaction) } : undefined,
 			cancel: transaction ? clear : undefined,
 		})
 	})
@@ -1269,24 +1418,23 @@ function ReturnTab({
 								</p>
 							</div>
 						</div>
-						{/* `days && days > 0 && …` printed a bare 0 on every book that was
-						    not late: the first term short-circuits to the number itself,
-						    and React draws a 0 where it draws nothing for false. */}
-						{(transaction.overdue_days ?? 0) > 0 && (
-							<div className="flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-red-700 text-sm">
-								<AlertTriangle className="h-4 w-4 shrink-0" />
-								<span>
-									{transaction.overdue_days} day{transaction.overdue_days === 1 ? '' : 's'} overdue
-									{' — '}Charge: ₹{loanLateCharge(transaction).toFixed(2)} — collect or waive it on the line above once returned
-								</span>
-							</div>
-						)}
+						<LoanFineBox
+							transaction={transaction}
+							action="returned"
+							institutionId={institutionId}
+							onSettled={markFineSettled}
+						/>
 						{error && <ScanFeedback busy={false} code={null} error={error} />}
 						<div className="flex flex-col-reverse sm:flex-row gap-3">
 							<Button variant="outline" className="h-10 px-6 w-full sm:w-auto" onClick={clear} disabled={returning}>
 								Cancel <kbd className="ml-2 hidden rounded border px-1 text-[10px] font-normal text-muted-foreground sm:inline">Esc</kbd>
 							</Button>
-							<Button className="h-10 px-6 w-full sm:w-auto flex-1" onClick={() => { void doReturn(transaction) }} disabled={returning}>
+							<Button
+								className="h-10 px-6 w-full sm:w-auto flex-1"
+								onClick={() => { void doReturn(transaction) }}
+								disabled={returning || fineOwing}
+								title={fineOwing ? 'Clear the fine first — Waive or Paid' : undefined}
+							>
 								{returning ? (
 									<><RefreshCw className="h-4 w-4 mr-2 animate-spin" />Returning...</>
 								) : (
@@ -1312,8 +1460,9 @@ function RenewTab({
 }) {
 	const { institutionId, active, onEvent, setKeys } = shared
 	const { toast } = useToast()
-	const { transaction, busy, scan, error, setError, info, lookup, clear } = useLoanScan(shared)
+	const { transaction, busy, scan, error, setError, info, lookup, clear, markFineSettled } = useLoanScan(shared)
 	const [renewing, setRenewing] = useState(false)
+	const fineOwing = !!transaction && loanFineOutstanding(transaction)
 
 	const doRenew = useCallback(async (tx: LibLendingTransaction) => {
 		const title = loanItemTitle(tx)
@@ -1352,7 +1501,7 @@ function RenewTab({
 	useEffect(() => {
 		if (!active) return
 		setKeys('renew', {
-			confirm: transaction && !renewing ? () => { void doRenew(transaction) } : undefined,
+			confirm: transaction && !renewing && !fineOwing ? () => { void doRenew(transaction) } : undefined,
 			cancel: transaction ? clear : undefined,
 		})
 	})
@@ -1401,20 +1550,23 @@ function RenewTab({
 								<p className="font-medium mt-0.5">{transaction.renewal_count}</p>
 							</div>
 						</div>
-						{(transaction.overdue_days ?? 0) > 0 && (
-							<div className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-amber-800 text-sm">
-								<AlertTriangle className="h-4 w-4 shrink-0" />
-								<span>
-									Already {transaction.overdue_days} day{transaction.overdue_days === 1 ? '' : 's'} overdue — renewing counts from today, and the late days stand.
-								</span>
-							</div>
-						)}
+						<LoanFineBox
+							transaction={transaction}
+							action="renewed"
+							institutionId={institutionId}
+							onSettled={markFineSettled}
+						/>
 						{error && <ScanFeedback busy={false} code={null} error={error} />}
 						<div className="flex flex-col-reverse sm:flex-row gap-3">
 							<Button variant="outline" className="h-10 px-6 w-full sm:w-auto" onClick={clear} disabled={renewing}>
 								Cancel <kbd className="ml-2 hidden rounded border px-1 text-[10px] font-normal text-muted-foreground sm:inline">Esc</kbd>
 							</Button>
-							<Button className="h-10 px-6 w-full sm:w-auto flex-1" onClick={() => { void doRenew(transaction) }} disabled={renewing}>
+							<Button
+								className="h-10 px-6 w-full sm:w-auto flex-1"
+								onClick={() => { void doRenew(transaction) }}
+								disabled={renewing || fineOwing}
+								title={fineOwing ? 'Clear the fine first — Waive or Paid' : undefined}
+							>
 								{renewing ? (
 									<><RefreshCw className="h-4 w-4 mr-2 animate-spin" />Renewing...</>
 								) : (
@@ -1560,13 +1712,7 @@ export default function CirculationPage() {
 		setLastResult(prev => prev ? patch(prev) : prev)
 		setSettling(null)
 		setResyncNonce(n => n + 1)
-		toast({
-			title: request.mode === 'collect'
-				? `✅ ${rupees(request.charge.net_payable)} collected`
-				: '✅ Charge waived',
-			description: request.charge.title,
-			className: 'bg-green-50 border-green-200 text-green-800',
-		})
+		toast(settledToast(request))
 	}, [toast])
 
 	// The keyboard at the desk: Alt+1/2/3 and F1/F2/F3 switch tabs; Enter
@@ -1697,6 +1843,7 @@ export default function CirculationPage() {
 
 			<SettleChargeDialog
 				settling={settling}
+				institutionId={institutionId}
 				onClose={() => setSettling(null)}
 				onSettled={onSettled}
 			/>

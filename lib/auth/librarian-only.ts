@@ -7,9 +7,12 @@
  * nobody taps something the server is going to turn down.
  *
  * The assistant runs the day at the counter and the door: issuing, returning
- * and renewing, gate entry, holds, the OPAC, and every list read-only. The
+ * and renewing — with the late fine cleared Paid or Waived first, which
+ * goes through /api/lib/circulation/settle for exactly that reason — gate
+ * entry, holds, the OPAC, and every list read-only. The
  * librarian alone changes what the library owns and owes: the catalogue and
- * its bulk uploads, fines collected or let off, purchases, retirement,
+ * its bulk uploads, fines on the charges page (part-payments, part-waivers),
+ * purchases, retirement,
  * conservation, inter-campus loans, periodicals and digital resources,
  * reminders sent, and the department libraries.
  *

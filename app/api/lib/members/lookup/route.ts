@@ -20,7 +20,8 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection } from '@/lib/auth/api-guard'
-import { getInstitutionSettings, chargeableLateDays, capFine } from '@/lib/library/institution-settings'
+import { getInstitutionSettings, chargeableLateDays } from '@/lib/library/institution-settings'
+import { chargePerDayFrom, fineFor, outstandingFine, settledChargesFor } from '@/lib/library/late-fine'
 import { personByCardNumber, myjkknConfigured } from '@/lib/library/myjkkn-directory'
 
 export async function GET(request: Request) {
@@ -200,8 +201,17 @@ export async function GET(request: Request) {
 		})
 
 		const today = new Date().toISOString().split('T')[0]
-		const chargePerDay = category?.late_charge_per_day ?? 0
+		// The same rate the return and renew routes charge, so the fine shown on
+		// the card is the fine the server asks to be cleared.
+		const chargePerDay = chargePerDayFrom(category?.late_charge_per_day)
 		const renewalLimit = category?.renewal_limit ?? 0
+
+		// Which late books have had their fine cleared already. One read for all
+		// of them, and none at all when nothing is late.
+		const lateLoanIds = openLoans
+			.filter((loan: any) => chargeableLateDays(loan.due_date, today, settings) > 0)
+			.map((loan: any) => loan.id as string)
+		const settledCharges = await settledChargesFor(supabase, lateLoanIds)
 
 		const loans = openLoans.map((loan: any) => {
 			// Supabase types a nested one-to-one join as an array, so read it back
@@ -214,6 +224,8 @@ export async function GET(request: Request) {
 			} | null
 
 			const lateDays = chargeableLateDays(loan.due_date, today, settings)
+			const fine = fineFor(lateDays, chargePerDay, settings)
+			const due = outstandingFine(fine, settledCharges, loan)
 
 			return {
 				id: loan.id,
@@ -228,7 +240,9 @@ export async function GET(request: Request) {
 				can_renew: (loan.renewal_count ?? 0) < renewalLimit,
 				is_overdue: lateDays > 0,
 				overdue_days: lateDays,
-				estimated_charge: capFine(lateDays * chargePerDay, settings),
+				estimated_charge: fine.amount,
+				fine_due: due,
+				fine_settled: due <= 0,
 			}
 		})
 

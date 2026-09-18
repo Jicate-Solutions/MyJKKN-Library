@@ -24,6 +24,14 @@ export interface MemberLoan {
 	is_overdue: boolean
 	overdue_days: number
 	estimated_charge: number
+	/**
+	 * True once a late book's fine has been marked Paid or Waived. It cannot be
+	 * returned or renewed before that. Absent on a loan just issued, which is
+	 * not late and owes nothing.
+	 */
+	fine_settled?: boolean
+	/** What is still to be paid or waived — less than the fine when part was cleared already. */
+	fine_due?: number
 }
 
 /** A title this member is waiting for, still live. */
@@ -191,7 +199,7 @@ export function describeEvent(event: DeskEvent): string {
 export function describeUndo(event: DeskEvent): string {
 	switch (event.kind) {
 		case 'issue': return 'Take the issue back — the book goes back on the shelf as if never lent'
-		case 'return': return 'Take the return back — the book goes back to the member, and any charge it raised is removed'
+		case 'return': return 'Take the return back — the book goes back to the member; a fine already cleared stays cleared'
 		case 'renew': return 'Take the renewal back — the old due date returns'
 	}
 }

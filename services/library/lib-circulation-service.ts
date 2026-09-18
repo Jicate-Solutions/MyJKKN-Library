@@ -87,6 +87,32 @@ export async function renewItem(payload: LibRenewPayload): Promise<DeskRenewResu
 }
 
 /**
+ * Clears a late fine at the desk — Paid in full, or Waived with a reason.
+ *
+ * Name the loan for a book still out (the server works the fine out), or the
+ * charge for one already on record. A late book can be returned or renewed
+ * only once this has answered.
+ */
+export async function settleFine(payload: {
+	institution_id: string
+	mode: 'paid' | 'waive'
+	transaction_id?: string
+	charge_id?: string
+	waiver_reason?: string
+}): Promise<LibLateCharge> {
+	const res = await fetch('/api/lib/circulation/settle', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(payload),
+	})
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}))
+		throw new Error(err.error || 'Could not clear the fine')
+	}
+	return res.json()
+}
+
+/**
  * Takes back an issue, a return or a renewal made moments ago at the desk.
  *
  * A renewal needs the due date it replaced, which the renew reply carries as

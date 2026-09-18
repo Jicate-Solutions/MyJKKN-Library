@@ -1,11 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { Button } from '@/components/ui/button'
-import { CheckCircle, IndianRupee, Loader2, RotateCcw, Undo2 } from 'lucide-react'
-import { canUndo, describeEvent, describeUndo, rupees, type DeskEvent, type MemberCharge } from '@/lib/library/desk'
-import type { SettleMode } from '@/components/library/settle-charge-dialog'
+import { CheckCircle, Loader2, RotateCcw, Undo2 } from 'lucide-react'
+import { canUndo, describeEvent, describeUndo, type DeskEvent, type MemberCharge } from '@/lib/library/desk'
+import { FineButtons, type SettleMode } from '@/components/library/settle-charge-dialog'
 
 const KIND_WORD: Record<DeskEvent['kind'], string> = {
 	issue: 'Issued',
@@ -19,8 +18,9 @@ const KIND_WORD: Record<DeskEvent['kind'], string> = {
  * A toast is gone in four seconds, and at a counter the librarian is looking
  * at the learner when it fires. This line stays until the next action
  * replaces it, and it carries the two things that action might still need:
- * Undo, while the window is open, and Collect or Waive when a late return
- * has raised a charge.
+ * Undo, while the window is open, and Waive or Paid on a charge still owing
+ * from a return made before fines had to be cleared first. Both are the
+ * desk's, so the assistant librarian sees them too.
  */
 export function DeskLastResult({
 	event,
@@ -33,7 +33,6 @@ export function DeskLastResult({
 	onUndo: (event: DeskEvent) => void
 	onSettle: (charge: MemberCharge, mode: SettleMode) => void
 }) {
-	const canWrite = useLibrarianWrite()
 	// Re-read the clock every few seconds while an undo is on offer, so the
 	// button goes away when the window closes rather than at the next action.
 	const [, tick] = useState(0)
@@ -80,24 +79,14 @@ export function DeskLastResult({
 						? event.kind === 'issue'
 							? `— back on the shelf, nothing lent to ${event.member_name}`
 							: event.kind === 'return'
-								? `— back with ${event.member_name}, the return and its charge removed`
+								? `— back with ${event.member_name}; a fine already cleared stays cleared`
 								: `— old due date restored for ${event.member_name}`
 						: `— ${describeEvent(event)}`}
 				</span>
 			</span>
 
 			<span className="flex min-w-0 flex-wrap items-center gap-2">
-				{owing && canWrite && (
-					<>
-						<Button size="sm" variant="outline" className="h-9 text-xs sm:h-7" onClick={() => onSettle(owing, 'waive')}>
-							Waive
-						</Button>
-						<Button size="sm" className="h-9 text-xs sm:h-7" onClick={() => onSettle(owing, 'collect')}>
-							<IndianRupee className="mr-1 h-3 w-3" />
-							Collect {rupees(owing.net_payable)}
-						</Button>
-					</>
-				)}
+				{owing && <FineButtons compact onChoose={mode => onSettle(owing, mode)} />}
 				{undoable && (
 					<Button
 						size="sm"
