@@ -1600,6 +1600,20 @@ export default function CirculationPage() {
 
 	const [tab, setTab] = useState<TabName>('issue')
 
+	// A tab named in the address — the dashboard's Return Resource opens
+	// /circulation?tab=return. Read once, then taken off the address so a
+	// refresh lands on Issue as usual. Anything else in the address (a member
+	// handed over as ?member=) is left for the Issue tab to read.
+	useEffect(() => {
+		const params = new URLSearchParams(window.location.search)
+		const asked = params.get('tab')
+		if (asked !== 'issue' && asked !== 'return' && asked !== 'renew') return
+		setTab(asked)
+		params.delete('tab')
+		const rest = params.toString()
+		window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
+	}, [])
+
 	// The desk's own record of the day: what came from the server when the page
 	// opened, and everything done since, newest first.
 	const [events, setEvents] = useState<DeskEvent[]>([])

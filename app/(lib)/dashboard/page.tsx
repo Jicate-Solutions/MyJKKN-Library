@@ -1,44 +1,106 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import type { ReactNode } from 'react'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
 	BookOpen, BookMarked, ArrowLeftRight, AlertTriangle,
-	Users, DollarSign, Plus, RotateCcw, Search, RefreshCw,
+	Users, IndianRupee, Plus, RotateCcw, Search, RefreshCw,
 } from 'lucide-react'
 import Link from 'next/link'
 import type { LibNaacCriterion4Report } from '@/types/lib'
 
+/** What `/api/lib/dashboard` answers: the figures that are about right now. */
+interface DashboardLive {
+	on_loan_now: number
+	overdue: number
+	pending_charges_amount: number
+	pending_charges_count: number
+}
+
+const rupees = (amount: number) =>
+	`₹${amount.toLocaleString('en-IN', { minimumFractionDigits: amount % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`
+
+/**
+ * One scorecard, and the page it stands for.
+ *
+ * Every card opens the list behind its number — the count of overdue books
+ * opens the overdue books — so the dashboard is a way in, not only a glance.
+ */
+function StatCard({
+	href,
+	value,
+	label,
+	detail,
+	icon,
+	accent,
+}: {
+	href: string
+	value: ReactNode
+	label: string
+	detail?: string
+	icon: ReactNode
+	accent: string
+}) {
+	return (
+		<Link href={href} className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+			<Card className={`h-full border-l-4 ${accent} cursor-pointer hover:shadow-md transition-shadow`}>
+				<CardContent className="p-4">
+					<div className="flex items-center justify-between gap-2">
+						<div className="min-w-0">
+							<p className="text-2xl font-bold tracking-tight">{value}</p>
+							<p className="text-xs font-medium text-muted-foreground mt-0.5">{label}</p>
+							{detail && <p className="text-[11px] text-muted-foreground/80 mt-0.5 truncate">{detail}</p>}
+						</div>
+						{icon}
+					</div>
+				</CardContent>
+			</Card>
+		</Link>
+	)
+}
+
 export default function LibDashboard() {
-	const { isReady, appendToUrl, institutionId, mustSelectInstitution } = useInstitutionFilter()
+	const { isReady, appendToUrl, mustSelectInstitution } = useInstitutionFilter()
 	const { toast } = useToast()
 	const [stats, setStats] = useState<LibNaacCriterion4Report | null>(null)
+	const [live, setLive] = useState<DashboardLive | null>(null)
 	const [loading, setLoading] = useState(true)
 
-	// No institution means "All Institutions", which the report now answers with
-	// every college's figures added together — so this no longer waits for one to
-	// be chosen. It used to, which is why the whole dashboard sat empty for a
-	// super admin who had not picked a campus.
+	// No institution means "All Institutions", which both reads answer with
+	// every college's figures added together — so this does not wait for one
+	// to be chosen. The NAAC report and the live figures do not depend on each
+	// other, so they are asked for together; either one failing leaves the
+	// other's cards filled in.
 	const fetchStats = useCallback(async () => {
 		if (!isReady) return
-		try {
-			setLoading(true)
-			const url = appendToUrl('/api/lib/reports/naac')
-			const res = await fetch(url)
-			if (!res.ok) throw new Error('Failed to load stats')
-			const data = await res.json()
-			setStats(data)
-		} catch {
-			toast({ title: 'Failed to load dashboard stats', variant: 'destructive' })
-		} finally {
-			setLoading(false)
+		setLoading(true)
+		const [naac, current] = await Promise.allSettled([
+			fetch(appendToUrl('/api/lib/reports/naac')).then(res => {
+				if (!res.ok) throw new Error('naac')
+				return res.json() as Promise<LibNaacCriterion4Report>
+			}),
+			fetch(appendToUrl('/api/lib/dashboard')).then(res => {
+				if (!res.ok) throw new Error('live')
+				return res.json() as Promise<DashboardLive>
+			}),
+		])
+		if (naac.status === 'fulfilled') setStats(naac.value)
+		if (current.status === 'fulfilled') setLive(current.value)
+		if (naac.status === 'rejected' || current.status === 'rejected') {
+			toast({ title: 'Some dashboard figures could not be loaded', variant: 'destructive' })
 		}
+		setLoading(false)
 	}, [isReady, appendToUrl, toast])
 
 	useEffect(() => { fetchStats() }, [fetchStats])
+
+	/** A number while it is being read, and a dash only for one that could not be. */
+	const show = (value: number | undefined, format: (n: number) => ReactNode = n => n.toLocaleString('en-IN')) =>
+		loading ? '—' : value === undefined ? '—' : format(value)
 
 	return (
 		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
@@ -65,93 +127,62 @@ export default function LibDashboard() {
 				</Card>
 			)}
 
-			{/* Scorecard Grid — 2 rows of 3 */}
+			{/* Scorecard Grid — 2 rows of 3, each one opening the list behind it */}
 			<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3 flex-shrink-0">
-				<Card className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : (stats?.total_titles ?? 0)}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Titles</p>
-							</div>
-							<BookOpen className="h-5 w-5 text-blue-500/40" />
-						</div>
-					</CardContent>
-				</Card>
-				<Card className="border-l-4 border-l-indigo-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : (stats?.total_volumes ?? 0)}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">Total Volumes</p>
-							</div>
-							<BookMarked className="h-5 w-5 text-indigo-500/40" />
-						</div>
-					</CardContent>
-				</Card>
-				<Card className="border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : (stats?.total_lending_transactions ?? 0)}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">On Loan Today</p>
-							</div>
-							<ArrowLeftRight className="h-5 w-5 text-emerald-500/40" />
-						</div>
-					</CardContent>
-				</Card>
-				<Card className="border-l-4 border-l-rose-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : '—'}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">Overdue Items</p>
-							</div>
-							<AlertTriangle className="h-5 w-5 text-rose-500/40" />
-						</div>
-					</CardContent>
-				</Card>
-				<Card className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : (stats?.active_members ?? 0)}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">Active Members</p>
-							</div>
-							<Users className="h-5 w-5 text-purple-500/40" />
-						</div>
-					</CardContent>
-				</Card>
-				<Card className="border-l-4 border-l-amber-500 hover:shadow-md transition-shadow">
-					<CardContent className="p-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-2xl font-bold tracking-tight">
-									{loading ? '—' : '—'}
-								</p>
-								<p className="text-xs font-medium text-muted-foreground mt-0.5">Pending Charges</p>
-							</div>
-							<DollarSign className="h-5 w-5 text-amber-500/40" />
-						</div>
-					</CardContent>
-				</Card>
+				<StatCard
+					href="/registry"
+					value={show(stats?.total_titles)}
+					label="Total Titles"
+					icon={<BookOpen className="h-5 w-5 shrink-0 text-blue-500/40" />}
+					accent="border-l-blue-500"
+				/>
+				<StatCard
+					href="/registry"
+					value={show(stats?.total_volumes)}
+					label="Total Volumes"
+					icon={<BookMarked className="h-5 w-5 shrink-0 text-indigo-500/40" />}
+					accent="border-l-indigo-500"
+				/>
+				<StatCard
+					href="/reports?tab=circulation&report=circ-open"
+					value={show(live?.on_loan_now)}
+					label="On Loan Now"
+					detail="Books out with members right now"
+					icon={<ArrowLeftRight className="h-5 w-5 shrink-0 text-emerald-500/40" />}
+					accent="border-l-emerald-500"
+				/>
+				<StatCard
+					href="/circulation/overdue"
+					value={show(live?.overdue)}
+					label="Overdue Items"
+					detail="Past their due date"
+					icon={<AlertTriangle className="h-5 w-5 shrink-0 text-rose-500/40" />}
+					accent="border-l-rose-500"
+				/>
+				<StatCard
+					href="/members"
+					value={show(stats?.active_members)}
+					label="Active Members"
+					icon={<Users className="h-5 w-5 shrink-0 text-purple-500/40" />}
+					accent="border-l-purple-500"
+				/>
+				<StatCard
+					href="/circulation/charges"
+					value={show(live?.pending_charges_amount, rupees)}
+					label="Pending Charges"
+					detail={live && !loading
+						? `${live.pending_charges_count} charge${live.pending_charges_count === 1 ? '' : 's'} unpaid`
+						: undefined}
+					icon={<IndianRupee className="h-5 w-5 shrink-0 text-amber-500/40" />}
+					accent="border-l-amber-500"
+				/>
 			</div>
 
 			{/* Quick Actions */}
 			<div className="flex-shrink-0">
 				<h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Quick Actions</h2>
 				<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-					<Link href="/circulation">
+					<Link href="/circulation?tab=issue">
 						<Card className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-blue-500 hover:border-l-blue-600">
 							<CardContent className="p-4 flex items-center gap-3">
 								<div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
@@ -165,7 +196,7 @@ export default function LibDashboard() {
 						</Card>
 					</Link>
 
-					<Link href="/circulation">
+					<Link href="/circulation?tab=return">
 						<Card className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-emerald-500 hover:border-l-emerald-600">
 							<CardContent className="p-4 flex items-center gap-3">
 								<div className="h-10 w-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
