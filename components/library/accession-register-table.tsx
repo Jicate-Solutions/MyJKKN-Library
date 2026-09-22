@@ -173,19 +173,29 @@ export function AccessionRegisterTable({
 		accessionBox.current?.focus()
 	}, [])
 
+	/**
+	 * The books of the type picked above — every book on All Types. The
+	 * scorecards and the chips count these, so choosing Journals shows how many
+	 * journals there are, how many are available, and so on.
+	 */
+	const typedRows = useMemo(
+		() => (typeFilter === 'all' ? rows : rows.filter(r => (r.book_type ?? '') === typeFilter)),
+		[rows, typeFilter]
+	)
+
 	const counts = useMemo(() => ({
-		books: rows.length,
-		titles: new Set(rows.map(r => r.catalogue_record_id).filter(Boolean)).size,
-		available: rows.filter(r => r.status === 'available').length,
-		referenceOnly: rows.filter(r => r.is_reference_only).length,
-	}), [rows])
+		books: typedRows.length,
+		titles: new Set(typedRows.map(r => r.catalogue_record_id).filter(Boolean)).size,
+		available: typedRows.filter(r => r.status === 'available').length,
+		referenceOnly: typedRows.filter(r => r.is_reference_only).length,
+	}), [typedRows])
 
 	/** How many books stand in each status, for the chips. */
 	const statusCounts = useMemo(() => {
 		const tally = new Map<LibItemStatus, number>()
-		for (const r of rows) tally.set(r.status, (tally.get(r.status) ?? 0) + 1)
+		for (const r of typedRows) tally.set(r.status, (tally.get(r.status) ?? 0) + 1)
 		return tally
-	}, [rows])
+	}, [typedRows])
 
 	/**
 	 * The chips on offer: Available and On loan always (a librarian asks for
@@ -195,7 +205,7 @@ export function AccessionRegisterTable({
 	 */
 	const quickFilters = useMemo(() => {
 		const chips: Array<{ key: QuickFilter; label: string; count: number }> = [
-			{ key: 'all', label: 'All', count: rows.length },
+			{ key: 'all', label: 'All', count: typedRows.length },
 			...LEADING_STATUSES.map(status => ({ key: status as QuickFilter, label: statusLabel(status), count: statusCounts.get(status) ?? 0 })),
 			{ key: 'reference', label: 'Reference only', count: counts.referenceOnly },
 		]
@@ -206,7 +216,7 @@ export function AccessionRegisterTable({
 			chips.push({ key: status, label: statusLabel(status), count: statusCounts.get(status) ?? 0 })
 		}
 		return chips
-	}, [rows.length, statusCounts, counts.referenceOnly])
+	}, [typedRows.length, statusCounts, counts.referenceOnly])
 
 	/**
 	 * Each book's three fields, prepared once when the register loads rather
