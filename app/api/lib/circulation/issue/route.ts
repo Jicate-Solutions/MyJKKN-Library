@@ -12,7 +12,7 @@
  * `member_id` is still accepted, for a borrower this library already holds.
  */
 
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
@@ -20,6 +20,7 @@ import { collegeHolidays, nextOpenDay } from '@/lib/library/college-calendar'
 import { logActivity } from '@/lib/library/activity-log'
 import { personByMyjkknId, type DirectoryPerson } from '@/lib/library/myjkkn-directory'
 import { ensureBorrower, findBorrower, borrowerById } from '@/lib/library/borrower'
+import { notifyLoan } from '@/lib/library/myjkkn-notify'
 
 export async function POST(request: Request) {
 	try {
@@ -266,6 +267,10 @@ export async function POST(request: Request) {
 		const catalogue = (item as { catalogue?: { title?: string; call_number?: string } | null }).catalogue ?? null
 		const renewalLimit = categoryConfig?.renewal_limit ?? 0
 		const fulfilledHoldId = (fulfilledHolds as { id: string }[] | null)?.[0]?.id ?? null
+
+		// The due date on their phone and in the MyJKKN bell — after the reply,
+		// so the desk never waits on it
+		after(() => notifyLoan('issued', transaction.id))
 
 		return NextResponse.json(
 			{

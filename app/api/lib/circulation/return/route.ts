@@ -1,9 +1,10 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
 import { loanFineStatus, fineUnpaidMessage } from '@/lib/library/late-fine'
+import { notifyLoan } from '@/lib/library/myjkkn-notify'
 
 export async function POST(request: Request) {
 	try {
@@ -189,6 +190,9 @@ export async function POST(request: Request) {
 				late_charge: chargeRecord?.charge_amount ?? 0,
 			},
 		})])
+
+		// MyJKKN bell and push, after the reply — see the issue route
+		after(() => notifyLoan('returned', transaction.id))
 
 		return NextResponse.json({
 			success: true,

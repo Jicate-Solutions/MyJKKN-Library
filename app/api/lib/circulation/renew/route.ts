@@ -1,10 +1,11 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { logActivity } from '@/lib/library/activity-log'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
 import { collegeHolidays, nextOpenDay } from '@/lib/library/college-calendar'
 import { loanFineStatus, fineUnpaidMessage } from '@/lib/library/late-fine'
+import { notifyLoan } from '@/lib/library/myjkkn-notify'
 
 export async function POST(request: Request) {
 	try {
@@ -174,6 +175,10 @@ export async function POST(request: Request) {
 				renewal_count: updated?.renewal_count,
 			},
 		})
+
+		// The new due date in the MyJKKN bell and push, after the reply — see
+		// the issue route
+		after(() => notifyLoan('renewed', transaction.id))
 
 		return NextResponse.json({
 			success: true,
