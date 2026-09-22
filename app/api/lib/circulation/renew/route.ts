@@ -129,11 +129,11 @@ export async function POST(request: Request) {
 			)
 		}
 
-		// Compute new due_date from current due_date or today, whichever is later
-		const baseDateStr = transaction.due_date
-		const baseDate = new Date(baseDateStr) > new Date()
-			? new Date(baseDateStr)
-			: new Date()
+		// The new due date counts from the day of the renewal, in every college.
+		// It used to count from the old due date when that was still ahead, so a
+		// book renewed on 3 Sep and due 7 Sep ran to 7 Sep + the period, not
+		// 3 Sep + the period.
+		const baseDate = new Date()
 
 		// On a day this college's library is open — see the issue route
 		const newDueDate = new Date(baseDate)
