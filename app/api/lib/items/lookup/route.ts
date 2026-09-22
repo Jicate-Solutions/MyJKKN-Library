@@ -52,6 +52,9 @@ export async function GET(request: Request) {
 
 		let refusal: string | null = null
 		if (!lendable) refusal = 'This copy is reference only and cannot be issued'
+		// A missing copy reads as simply not available at the desk; the reason
+		// is the librarian's business, on the Missing Books page
+		else if (item.status === 'missing') refusal = 'This copy is not available'
 		else if (item.status !== 'available') refusal = `This copy is ${item.status}`
 
 		return NextResponse.json({

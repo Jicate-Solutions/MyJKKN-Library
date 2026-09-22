@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
 	LayoutDashboard,
 	BookOpen,
+	BookX,
 	Users,
 	RefreshCw,
 	ShoppingCart,
@@ -97,6 +98,7 @@ export const navGroups: NavGroup[] = [
 		label: 'Knowledge Registry',
 		items: [
 			{ title: 'Catalogue', url: '/registry', icon: BookOpen },
+			{ title: 'Missing Books', url: '/registry/missing', icon: BookX },
 			{ title: 'Department Libraries', url: '/departments', icon: Building2 },
 			{ title: 'Members', url: '/members', icon: Users },
 		],

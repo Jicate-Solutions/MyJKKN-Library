@@ -127,7 +127,11 @@ export async function POST(request: Request) {
 		}
 		if (item.status !== 'available') {
 			return NextResponse.json(
-				{ error: `Item is not available for lending — current status: ${item.status}` },
+				{
+					error: item.status === 'missing'
+						? 'This copy is not available'
+						: `Item is not available for lending — current status: ${item.status}`,
+				},
 				{ status: 400 }
 			)
 		}
