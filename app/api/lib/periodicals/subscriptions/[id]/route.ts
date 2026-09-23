@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardCollection, guardWrite, guardRecord, guardRecordRow } from '@/lib/auth/api-guard'
+import { createExpectedIssues } from '@/lib/library/expected-issues'
 
 /** The subscription as the detail page draws it, joins and all. */
 const DETAIL_COLUMNS = `
@@ -74,7 +75,16 @@ export async function PUT(
 			return NextResponse.json({ error: 'Failed to update subscription' }, { status: 500 })
 		}
 
-		return NextResponse.json(data)
+		// The frequency may just have changed, and with it how many issues the
+		// year brings. Anything now missing is laid out; what is already there,
+		// received or not, is left exactly as it is.
+		const issues = await createExpectedIssues(supabase, data)
+
+		return NextResponse.json({
+			...data,
+			expected_issues_created: issues.created,
+			issues_warning: issues.reason,
+		})
 	} catch (error) {
 		console.error('Unexpected error updating subscription:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

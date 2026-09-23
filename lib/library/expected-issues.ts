@@ -41,7 +41,15 @@ export interface ExpectedIssuesResult {
 }
 
 /**
- * Lays out the issues a subscription is going to bring.
+ * Lays out the issues a subscription is going to bring, and tops them up.
+ *
+ * Called when a subscription is registered and again whenever it is edited,
+ * because the frequency is what settles the count: a journal saved as
+ * eight-yearly and corrected to ten-yearly wanted ten rows and had eight, and
+ * the two that were never written could not be claimed from the supplier.
+ * Only the numbers not already there are added, so an issue already marked
+ * received is never touched and running this twice writes nothing the second
+ * time.
  *
  * Never throws, and never undoes the subscription: a journal registered without
  * its twelve rows is a small inconvenience the librarian can fix by hand, while
@@ -67,13 +75,33 @@ export async function createExpectedIssues(
 		return { created: 0, reason: `${wanted} issues is more than one subscription can hold` }
 	}
 
-	const rows = Array.from({ length: wanted }, (_, index) => ({
+	// What this subscription already has. Nothing, the day it is registered —
+	// but a quarterly journal corrected to monthly already holds four rows, and
+	// those four are issues 1 to 4 of the twelve, not four to be written again.
+	const { data: existing, error: readError } = await supabase
+		.from('lib_periodical_issues')
+		.select('issue_number')
+		.eq('subscription_id', subscription.id)
+		.range(0, MOST_ISSUES * 2)
+
+	if (readError) {
+		console.error('Could not read the issues already laid out:', readError)
+		return { created: 0, reason: 'The subscription was saved, but its issues could not be laid out' }
+	}
+
+	const already = new Set((existing ?? []).map(row => String(row.issue_number)))
+	const missing = Array.from({ length: wanted }, (_, index) => String(index + 1))
+		.filter(number => !already.has(number))
+
+	if (missing.length === 0) return { created: 0, reason: null }
+
+	const rows = missing.map(number => ({
 		institution_id: subscription.institution_id,
 		subscription_id: subscription.id,
 		// The volume the librarian entered, carried onto every issue in it. Text,
 		// because "12" and "Vol 12" are both what somebody wrote on the shelf.
 		volume_number: subscription.start_volume || null,
-		issue_number: String(index + 1),
+		issue_number: number,
 		issue_date: null,
 		// Not yet arrived, so not yet received. This is what the pending
 		// migration makes possible — see the error handling below.

@@ -66,6 +66,7 @@ import {
 	AlertTriangle, X, Building2, UserCheck,
 } from 'lucide-react'
 import { istToday, istTimeNow, formatClockTime, durationBetween } from '@/lib/library/ist-clock'
+import { deskFetch, SCAN_TIMEOUT_MS } from '@/lib/library/desk-fetch'
 
 interface Visit {
 	id: string
@@ -583,10 +584,15 @@ export function GateEntry() {
 		try {
 			inFlight.current = true
 			setScanning(true)
-			const res = await fetch('/api/lib/visits/scan', {
+			// With a deadline: at a door, a request the network has quietly
+			// dropped must fail and free the box for the next card, not leave
+			// "Working…" on the screen while the queue waits. Never sent twice —
+			// the scan may have been recorded before the line went.
+			const res = await deskFetch('/api/lib/visits/scan', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ institution_id: institutionId, barcode: code }),
+				timeoutMs: SCAN_TIMEOUT_MS,
 			})
 			const data = await res.json()
 			if (!res.ok) {

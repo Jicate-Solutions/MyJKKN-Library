@@ -59,20 +59,15 @@ export async function GET(
 			)
 		}
 
-		const person = await personByMyjkknId(institutionId, kind, myjkknId)
-		if (!person) {
-			return NextResponse.json(
-				{ error: 'No such member — they may no longer be Active in MyJKKN' },
-				{ status: 404 }
-			)
-		}
-
 		const supabase = getSupabaseServer()
 
-		// Everything the library holds on them, read together. The borrower row
-		// exists only once they have taken a book, so a first-timer comes back with
-		// three empty lists — which is the truth, not a fault.
-		const [{ data: borrowerRow }, { data: visitRows }, settings] = await Promise.all([
+		// Everything the library holds on them, read together with the person
+		// themselves. Their MyJKKN id is in the address, so the library's own
+		// rows can be looked up without waiting to hear from MyJKKN first —
+		// which is the slowest of these by far. The college's closed days go in
+		// the same breath, rather than being fetched after all of it.
+		const [person, { data: borrowerRow }, { data: visitRows }, settings, holidays] = await Promise.all([
+			personByMyjkknId(institutionId, kind, myjkknId),
 			supabase
 				.from('lib_borrowers')
 				.select(`
@@ -88,7 +83,7 @@ export async function GET(
 					holds:lib_resource_holds(id, hold_status, catalogue:lib_catalogue_records(title))
 				`)
 				.eq('institution_id', institutionId)
-				.eq('myjkkn_id', person.myjkkn_id)
+				.eq('myjkkn_id', myjkknId)
 				.in('loans.transaction_status', ['active', 'overdue'])
 				.in('charges.payment_status', ['unpaid', 'partial'])
 				.in('holds.hold_status', ['pending', 'available'])
@@ -99,16 +94,23 @@ export async function GET(
 				.from('lib_member_visits')
 				.select('visit_date, entry_time, exit_time')
 				.eq('institution_id', institutionId)
-				.eq('myjkkn_id', person.myjkkn_id)
+				.eq('myjkkn_id', myjkknId)
 				.order('created_at', { ascending: false })
 				.limit(RECENT_VISITS),
 			getInstitutionSettings(institutionId),
+			// Late days leave out this college's own holidays, as a fine does
+			collegeHolidays(institutionId),
 		])
+
+		if (!person) {
+			return NextResponse.json(
+				{ error: 'No such member — they may no longer be Active in MyJKKN' },
+				{ status: 404 }
+			)
+		}
 
 		const borrower = (borrowerRow as any) ?? null
 		const today = new Date().toISOString().split('T')[0]
-		// Late days leave out this college's own holidays, as a fine does
-		const holidays = await collegeHolidays(institutionId)
 
 		// Supabase types a nested one-to-one join as an array, so the joined rows
 		// are read back through unknown rather than fighting the generated shape.

@@ -66,12 +66,14 @@ const MAX_PAGES = 200
 /**
  * Pages read at once.
  *
- * The roll is 25 pages of learners and 5 of staff. Read one after another that
+ * The roll is 28 pages of learners and 5 of staff. Read one after another that
  * is 7.4 seconds of a librarian standing at the counter; read four at a time it
- * is 2.6. Four is the same width that proved fastest against Supabase — wider
- * batches stopped paying and started being throttled.
+ * is 3.7, and eight at a time 1.9 — measured against the live endpoint on
+ * 23 Sep 2026, when a page answered in about 250ms. Eight is where the curve
+ * flattens: the pages are already in flight together, and asking for more of
+ * them at once only invites throttling.
  */
-const PARALLEL_PAGES = 4
+const PARALLEL_PAGES = 8
 
 /** A whole college is many calls; one person is one. They get different budgets. */
 const LIST_TIMEOUT_MS = 20_000
@@ -161,33 +163,102 @@ function countOf(payload: any): number | null {
 	return Number.isFinite(total) && total >= 0 ? total : null
 }
 
-/** One page, with the total the envelope reported alongside it. */
+/**
+ * How many times a page is asked for before its failure is accepted.
+ *
+ * A page that fails is not the same as a page that is empty, and until this
+ * existed the two were indistinguishable: one dropped request on a bad line
+ * left a hole in the roll, and a learner in that hole was told "no such member"
+ * for the next five minutes. One quick retry covers the dropped packet, the
+ * momentary 502 and the connection that never opened.
+ */
+const PAGE_ATTEMPTS = 3
+const RETRY_PAUSE_MS = 250
+
+/**
+ * How long one MyJKKN page is reused out of the host's shared cache.
+ *
+ * The caches in this file live in one running server's memory, and on Vercel
+ * every new instance starts with none: the first librarian to land on a cold
+ * one paid the whole walk of MyJKKN again, a few seconds with somebody at the
+ * counter. The platform's own fetch cache is shared by every instance, so a
+ * page another instance read moments ago is handed over instead of asked for
+ * again, and all seven colleges share the benefit — the learner endpoint
+ * ignores the institution it is given and returns the same pages to each.
+ *
+ * Thirty seconds, chosen with the library on 23 Sep 2026: long enough that a
+ * cold start almost never pays for the walk, short enough that somebody
+ * enrolled in MyJKKN a minute ago is already here. Each page is about half a
+ * megabyte, well inside what the cache will hold.
+ */
+const SHARED_PAGE_TTL_SECONDS = 30
+
+/**
+ * A deadline that does not cancel the request.
+ *
+ * The obvious way to stop waiting is an AbortController, but a fetch carrying
+ * a signal is not written to the shared cache — which is the whole point of
+ * the option above. So the wait is capped here instead: a page that takes too
+ * long is treated as unanswered, while the request itself is left to finish in
+ * its own time and fill the cache for whoever asks next.
+ */
+function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout>
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`MyJKKN did not answer within ${timeoutMs}ms`)), timeoutMs)
+	})
+	// Nothing is listening once the race is lost, and an ignored rejection must
+	// not bring the server down
+	work.catch(() => {})
+	return Promise.race([work, deadline]).finally(() => clearTimeout(timer)) as Promise<T>
+}
+
+/**
+ * One page, with the total the envelope reported alongside it.
+ *
+ * `ok` says whether MyJKKN actually answered. Callers that must not mistake a
+ * failure for an empty list read it; the rest carry on as before.
+ */
 async function myjkknPage(
 	path: string,
 	timeoutMs: number
-): Promise<{ rows: MyJKKNRow[]; total: number | null }> {
-	if (!MYJKKN_API_KEY) return { rows: [], total: null }
+): Promise<{ rows: MyJKKNRow[]; total: number | null; ok: boolean }> {
+	if (!MYJKKN_API_KEY) return { rows: [], total: null, ok: false }
 
-	const controller = new AbortController()
-	const timeout = setTimeout(() => controller.abort(), timeoutMs)
-	try {
-		const res = await fetch(`${MYJKKN_API_URL}${path}`, {
-			method: 'GET',
-			headers: {
-				Authorization: `Bearer ${MYJKKN_API_KEY}`,
-				Accept: 'application/json',
-			},
-			cache: 'no-store',
-			signal: controller.signal,
-		})
-		if (!res.ok) return { rows: [], total: null }
-		const payload = await res.json()
-		return { rows: rowsOf(payload), total: countOf(payload) }
-	} catch {
-		return { rows: [], total: null }
-	} finally {
-		clearTimeout(timeout)
+	for (let attempt = 1; attempt <= PAGE_ATTEMPTS; attempt++) {
+		try {
+			const res = await withDeadline(fetch(`${MYJKKN_API_URL}${path}`, {
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${MYJKKN_API_KEY}`,
+					Accept: 'application/json',
+				},
+				// Held for half a minute in the host's shared cache, so a server
+				// that has just started does not read the whole college again
+				next: { revalidate: SHARED_PAGE_TTL_SECONDS },
+			}), timeoutMs)
+			// 4xx is an answer — asking again would get the same one. Only a
+			// server-side or network failure is worth a second try.
+			if (!res.ok) {
+				if (res.status < 500 || attempt === PAGE_ATTEMPTS) {
+					console.warn(`[directory] MyJKKN answered ${res.status} for ${path}`)
+					return { rows: [], total: null, ok: false }
+				}
+			} else {
+				const payload = await res.json()
+				return { rows: rowsOf(payload), total: countOf(payload), ok: true }
+			}
+		} catch (error) {
+			if (attempt === PAGE_ATTEMPTS) {
+				console.warn(`[directory] MyJKKN did not answer for ${path}:`, (error as Error)?.message)
+				return { rows: [], total: null, ok: false }
+			}
+		}
+
+		await new Promise(resolve => setTimeout(resolve, RETRY_PAUSE_MS * attempt))
 	}
+
+	return { rows: [], total: null, ok: false }
 }
 
 /** One GET to MyJKKN. Never throws — an unreachable MyJKKN is an empty list. */
@@ -208,17 +279,22 @@ async function myjkknGet(path: string, timeoutMs: number): Promise<MyJKKNRow[]> 
  * short page says the list has ended. Pages requested past the end come back
  * empty, which costs a call and breaks nothing.
  */
-async function myjkknPages(path: string): Promise<MyJKKNRow[]> {
+async function myjkknPages(path: string): Promise<{ rows: MyJKKNRow[]; complete: boolean }> {
 	const join = path.includes('?') ? '&' : '?'
 	const page = (n: number) => myjkknPage(`${path}${join}limit=${PAGE_SIZE}&page=${n}`, LIST_TIMEOUT_MS)
 
 	const first = await page(1)
 	const rows = [...first.rows]
-	if (first.rows.length < PAGE_SIZE) return rows
+	// A first page that never answered is not an empty list — say so, so the
+	// roll built from it is not mistaken for the whole college
+	if (!first.ok) return { rows, complete: false }
+	if (first.rows.length < PAGE_SIZE) return { rows, complete: true }
 
 	const lastPage = first.total !== null
 		? Math.min(Math.ceil(first.total / PAGE_SIZE), MAX_PAGES)
 		: MAX_PAGES
+
+	let complete = true
 
 	for (let next = 2; next <= lastPage; next += PARALLEL_PAGES) {
 		const width = Math.min(PARALLEL_PAGES, lastPage - next + 1)
@@ -227,7 +303,8 @@ async function myjkknPages(path: string): Promise<MyJKKNRow[]> {
 		let ended = false
 		for (const result of batch) {
 			rows.push(...result.rows)
-			if (result.rows.length < PAGE_SIZE) ended = true
+			if (!result.ok) complete = false
+			if (result.ok && result.rows.length < PAGE_SIZE) ended = true
 		}
 
 		// Without a reported total, a short page is the only sign the list is
@@ -235,7 +312,7 @@ async function myjkknPages(path: string): Promise<MyJKKNRow[]> {
 		if (ended && first.total === null) break
 	}
 
-	return rows
+	return { rows, complete }
 }
 
 // ── Which MyJKKN institutions a college covers ──────────────────────────────
@@ -419,6 +496,14 @@ interface CachedDirectory {
 	freshUntil: number
 	/** Handed out with a rebuild started behind it until this one. */
 	usableUntil: number
+	/**
+	 * Whether MyJKKN answered for every page this roll was built from.
+	 *
+	 * False means somebody may be missing from it through no fault of their
+	 * own, so it may be used to answer "here they are" but never "there is no
+	 * such member" — see `personByCardNumber`.
+	 */
+	complete: boolean
 }
 
 /** Nothing, held briefly, so an unreachable MyJKKN is retried soon. */
@@ -427,7 +512,7 @@ function emptyDirectory(): CachedDirectory {
 	const until = now + EMPTY_TTL_MS
 	// Deliberately not servable while stale: an empty roll is not an answer
 	// worth repeating for half an hour, it is a reason to ask again shortly.
-	return { people: [], byNumber: new Map(), builtAt: now, freshUntil: until, usableUntil: until }
+	return { people: [], byNumber: new Map(), builtAt: now, freshUntil: until, usableUntil: until, complete: false }
 }
 
 const directoryCache = new Map<string, CachedDirectory>()
@@ -442,7 +527,10 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 		return emptyDirectory()
 	}
 
-	const programNames = await programNamesFor(institutionId, myjkknIds)
+	// The programme names and the roll itself have nothing to say to each
+	// other, so the names are started here and collected below — read one
+	// before the other, every build waited out both in turn.
+	const programNamesReading = programNamesFor(institutionId, myjkknIds)
 
 	const people: DirectoryPerson[] = []
 	const byNumber = new Map<string, DirectoryPerson>()
@@ -464,24 +552,31 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 	// nothing to do with each other — read one after another, the second waited
 	// out the whole of the first for no reason. Fetched together, the build costs
 	// the slowest roll rather than the sum of them.
-	const rolls = await Promise.all(myjkknIds.map(async myjkknId => {
-		const [learners, staff] = await Promise.all([
-			myjkknPages(`/api-management/learners/profiles?institution_id=${encodeURIComponent(myjkknId)}`),
-			myjkknPages(`/api-management/staff?institution_id=${encodeURIComponent(myjkknId)}`),
-		])
-		return { learners, staff }
-	}))
+	const [programNames, rolls] = await Promise.all([
+		programNamesReading,
+		Promise.all(myjkknIds.map(async myjkknId => {
+			const [learners, staff] = await Promise.all([
+				myjkknPages(`/api-management/learners/profiles?institution_id=${encodeURIComponent(myjkknId)}`),
+				myjkknPages(`/api-management/staff?institution_id=${encodeURIComponent(myjkknId)}`),
+			])
+			return { learners, staff }
+		})),
+	])
+
+	// One page MyJKKN did not answer for is one page of people this roll does
+	// not have, and it must not be allowed to say they do not exist.
+	const complete = rolls.every(roll => roll.learners.complete && roll.staff.complete)
 
 	// Recorded in the order the ids were given, not the order they came back in,
 	// so which person keeps a shared card number does not depend on the network.
 	for (const { learners, staff } of rolls) {
-		for (const row of learners) {
+		for (const row of learners.rows) {
 			if (!learnerIsActive(row) || !belongsHere(row, myjkknIds)) continue
 			const person = learnerToPerson(row, institutionId, programNames)
 			if (person) remember(person, learnerNumbers(row))
 		}
 
-		for (const row of staff) {
+		for (const row of staff.rows) {
 			if (!staffIsActive(row) || !staffIsTeaching(row) || !belongsHere(row, myjkknIds)) continue
 			const person = staffToPerson(row, institutionId)
 			if (person) remember(person, [person.member_number].filter(Boolean))
@@ -493,12 +588,17 @@ async function buildDirectory(institutionId: string): Promise<CachedDirectory> {
 	if (people.length === 0) return emptyDirectory()
 
 	const now = Date.now()
+	// A roll with a hole in it is worth keeping and using — the people in it are
+	// real — but only briefly, and it is asked again a minute later rather than
+	// standing for the full five.
+	const goodFor = complete ? DIRECTORY_TTL_MS : EMPTY_TTL_MS
 	return {
 		people,
 		byNumber,
 		builtAt: now,
-		freshUntil: now + DIRECTORY_TTL_MS,
-		usableUntil: now + DIRECTORY_TTL_MS + DIRECTORY_STALE_MS,
+		freshUntil: now + goodFor,
+		usableUntil: now + goodFor + (complete ? DIRECTORY_STALE_MS : 0),
+		complete,
 	}
 }
 
@@ -521,6 +621,12 @@ function rebuildDirectory(institutionId: string): Promise<CachedDirectory> {
 			return directoryCache.get(institutionId) ?? emptyDirectory()
 		})
 		.then(built => {
+			// A roll read through a bad line can be missing whole pages. Where a
+			// complete one is still in hand, that one stays: half a college is
+			// not an improvement on all of it.
+			const held = directoryCache.get(institutionId)
+			if (!built.complete && held?.complete && held.usableUntil > Date.now()) return held
+
 			directoryCache.set(institutionId, built)
 			return built
 		})
@@ -636,23 +742,26 @@ export async function collegeMemberCount(institutionId: string): Promise<number>
  *      only when the value is that exact shape, so no card scanned today pays
  *      for it — and then checked against this college like any other person.
  *   1. The roll, if it happens to be in hand already. No network at all, so a
- *      queue of scans costs nothing once the first one has been answered.
- *   2. Otherwise ask MyJKKN about this one person. Staff only — their endpoint
- *      honours a search and answers in one call, so a teacher hired this
- *      morning is not turned away this afternoon.
- *   3. Otherwise read the college's roll and look again. Learners always come
- *      this way, because MyJKKN's learner endpoint has no search to ask.
+ *      queue of scans costs nothing once the first one has been answered. A
+ *      roll MyJKKN answered for in full also settles the opposite: a number it
+ *      does not carry belongs to nobody here, and only the staff search — for
+ *      the teacher hired this morning — is still worth one call.
+ *   2. Otherwise ask MyJKKN about this one person and read the college's roll,
+ *      together. Staff are found by the search, which their endpoint honours;
+ *      learners can only be found in the roll, because the learner endpoint has
+ *      no search to ask. Neither answer depends on the other, so a learner no
+ *      longer waits out a staff call that could never have found them.
  *
- * Step three is what a librarian meets when they open the desk and type a roll
+ * Step two is what a librarian meets when they open the desk and type a roll
  * number without having opened anything else first, so it is not a rare path
- * and is not treated as one: the roll is read four pages at a time, about
- * three seconds for the whole college. It used to be read one page after
- * another, and the desk gave up before it finished.
+ * and is not treated as one: the roll is read eight pages at a time, about two
+ * seconds for the whole college. It used to be read one page after another,
+ * and the desk gave up before it finished.
  *
- * That third step insists on a genuinely fresh read. Everywhere else a roll
- * that has just gone stale is good enough to hand over while a new one is
- * built, but not here — a number missing from a ten-minute-old roll would turn
- * away a learner who enrolled this morning.
+ * That step insists on a genuinely fresh read. Everywhere else a roll that has
+ * just gone stale is good enough to hand over while a new one is built, but not
+ * here — a number missing from a ten-minute-old roll would turn away a learner
+ * who enrolled this morning.
  */
 export async function personByCardNumber(
 	institutionId: string,
@@ -678,17 +787,27 @@ export async function personByCardNumber(
 	if (inHand) {
 		const hit = inHand.byNumber.get(wanted)
 		if (hit) return hit
+
+		// A roll MyJKKN answered for in full has settled it: this college has
+		// nobody of that number, and there is no reason to ask twice. A roll
+		// with a hole in it has settled nothing, and falls through below —
+		// which is what used to tell a learner "not found" for five minutes
+		// because one page of the roll had been lost on a bad line.
+		if (inHand.complete) return await searchOnePerson(institutionId, cardNumber)
 	}
 
-	const searched = await searchOnePerson(institutionId, cardNumber)
-	if (searched) return searched
+	// Nothing usable in hand. The staff search and the college roll answer
+	// different halves of the question and neither needs the other's answer, so
+	// they go together: a learner used to wait out the staff call that could
+	// never have found them before the roll was even started.
+	const [searched, roll] = await Promise.all([
+		searchOnePerson(institutionId, cardNumber),
+		// A real read, not a stale copy handed over while one is built: turning
+		// somebody away is the answer that must never come from an old roll.
+		directoryFor(institutionId, true),
+	])
 
-	// Already looked through this roll above and it did not have them
-	if (inHand) return null
-
-	// A real read, not a stale copy handed over while one is built: turning
-	// somebody away is the answer that must never come from an old roll.
-	return (await directoryFor(institutionId, true)).byNumber.get(wanted) ?? null
+	return searched ?? roll.byNumber.get(wanted) ?? null
 }
 
 /**

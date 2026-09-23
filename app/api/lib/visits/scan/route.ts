@@ -146,9 +146,16 @@ export async function POST(request: Request) {
 			)
 		}
 
-		// Only this college's Active people. Someone from another campus, or
-		// someone MyJKKN no longer has as active, simply is not found.
-		const person = await personByCardNumber(institutionId, barcode)
+		// Who the card belongs to, and this college's gate rules. Two questions
+		// with nothing to say to each other, so they are asked together rather
+		// than the settings waiting out the card lookup at the door.
+		const [person, settings] = await Promise.all([
+			// Only this college's Active people. Someone from another campus, or
+			// someone MyJKKN no longer has as active, simply is not found.
+			personByCardNumber(institutionId, barcode),
+			getInstitutionSettings(institutionId),
+		])
+
 		if (!person) {
 			return NextResponse.json(
 				{ error: `No member found for "${barcode}"` },
@@ -164,7 +171,6 @@ export async function POST(request: Request) {
 		// unsure the first scan took, not one leaving. Read as an exit it made a
 		// one-minute visit and counted them twice in the footfall. The window is
 		// this college's own setting; 0 turns the check off and costs nothing.
-		const settings = await getInstitutionSettings(institutionId)
 		const rescanWindow = Number(settings.gate_rescan_seconds ?? 0)
 		if (rescanWindow > 0) {
 			const { data: open } = await supabase

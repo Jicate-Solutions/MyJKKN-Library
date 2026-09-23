@@ -30,6 +30,7 @@ import {
 	type DeskEvent, type DeskItem, type DeskMember, type MemberCharge, type MemberHold, type MemberLoan,
 } from '@/lib/library/desk'
 import type { LibLendingTransaction, LibItem, LibLateCharge } from '@/types/lib'
+import { deskFetch } from '@/lib/library/desk-fetch'
 
 // ─── What the tabs share ──────────────────────────────────────────────────────
 
@@ -631,7 +632,7 @@ function IssueTab({
 	 * True when the code was dealt with, false when it was nothing we know.
 	 */
 	const tryBookInstead = useCallback(async (code: string): Promise<boolean> => {
-		const res = await fetch(`/api/lib/items/lookup?barcode=${encodeURIComponent(code)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+		const res = await deskFetch(`/api/lib/items/lookup?barcode=${encodeURIComponent(code)}${institutionId ? `&institution_id=${institutionId}` : ''}`, { retries: 1 })
 		const data = await res.json().catch(() => ({}))
 		if (!res.ok) return false
 
@@ -665,7 +666,12 @@ function IssueTab({
 			setMemberInfo(null)
 		}
 		try {
-			const res = await fetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+			// A card lookup only reads, so a request the network drops is simply
+			// sent again rather than shown to the librarian as "not found"
+			const res = await deskFetch(
+				`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`,
+				{ retries: 1 }
+			)
 			const data = await res.json()
 			if (!res.ok) {
 				// Not a card. A book scanned into the card box is ordinary — the
@@ -798,13 +804,13 @@ function IssueTab({
 		setItemError(null)
 		setItemInfo(null)
 		try {
-			const res = await fetch(`/api/lib/items/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+			const res = await deskFetch(`/api/lib/items/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`, { retries: 1 })
 			const data = await res.json()
 			if (!res.ok) {
 				// Not a book. The next member's card, scanned before "Done" was
 				// pressed, is the usual reason — so that is what is tried.
 				if (res.status === 404 && data.reason === 'no_item') {
-					const asMember = await fetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+					const asMember = await deskFetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`, { retries: 1 })
 					const person = await asMember.json().catch(() => ({}))
 					if (asMember.ok) {
 						reset()
@@ -1131,13 +1137,13 @@ function useLoanScan(shared: DeskShared) {
 		setError(null)
 		setInfo(null)
 		try {
-			const res = await fetch(`/api/lib/circulation/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+			const res = await deskFetch(`/api/lib/circulation/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`, { retries: 1 })
 			const data = await res.json()
 			if (!res.ok) {
 				if (res.status === 404 && data.reason === 'no_item') {
 					// Not a book. A member card scanned here opens their card in
 					// Issue, where every book they hold can be returned or renewed.
-					const asMember = await fetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`)
+					const asMember = await deskFetch(`/api/lib/members/lookup?barcode=${encodeURIComponent(barcode)}${institutionId ? `&institution_id=${institutionId}` : ''}`, { retries: 1 })
 					if (asMember.ok) {
 						setInfo('That is a member card — opening their card in Issue.')
 						redirect(barcode, 'member')

@@ -100,7 +100,7 @@ function writeLockedCode(email: string | null | undefined, code: string | null) 
 }
 
 export function InstitutionProvider({ children }: { children: ReactNode }) {
-	const { user } = useAuth()
+	const { user, loading: authLoading } = useAuth()
 	const [isInitialized, setIsInitialized] = useState(false)
 	const [availableInstitutions, setAvailableInstitutions] = useState<Institution[]>([])
 	const [selectedInstitution, setSelectedInstitution] = useState<Institution | null>(null)
@@ -109,6 +109,14 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 	const [isLoading, setIsLoading] = useState(true)
 
 	useEffect(() => {
+		// Nothing is asked for while the session is still being worked out. This
+		// effect is keyed on the signed-in address, which is undefined on the
+		// first pass and their address a moment later — so every page load used
+		// to ask for the list twice, once as nobody and once as them, and the
+		// first answer was thrown away. The page cannot become ready until this
+		// finishes, so that wasted call sat in front of every screen.
+		if (authLoading) return
+
 		// Load institutions from API
 		const loadInstitutions = async () => {
 			try {
@@ -171,7 +179,7 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
 		loadInstitutions()
 		// Keyed on the signed-in user: the API answers per caller, so the list has
 		// to be re-read when someone else signs in.
-	}, [user?.email])
+	}, [user?.email, authLoading])
 
 	const currentInstitutionCode = selectedInstitution?.institution_code ?? currentInstitution?.institution_code ?? null
 	const currentInstitutionId = selectedInstitution?.id ?? currentInstitution?.id ?? null
