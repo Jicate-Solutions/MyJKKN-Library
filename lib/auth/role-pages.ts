@@ -106,6 +106,7 @@ export const PAGE_CATALOGUE: CatalogueGroup[] = [
 	{
 		label: 'Other',
 		pages: [
+			{ title: 'Departments List', url: '/departments-list' },
 			{ title: 'Retirement', url: '/retirement' },
 			{ title: 'Inter-Campus', url: '/intercampus' },
 			{ title: 'Conservation', url: '/conservation' },

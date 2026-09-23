@@ -15,6 +15,8 @@ import type {
 	TransferCandidate,
 	DepartmentTransfer,
 	InchargeCandidate,
+	DepartmentMasterRow,
+	DepartmentMasterList,
 } from '@/types/lib-departments'
 
 async function fail(res: Response, fallback: string): Promise<never> {
@@ -248,4 +250,78 @@ export async function searchIncharge(
 		email: row.email ?? null,
 		photo_url: row.photo_url ?? null,
 	}))
+}
+
+// ── The departments hub ─────────────────────────────────────────────────────
+//
+// MyJKKN's departments and the ones this library added, in one list. Every
+// department dropdown in the application reads it through these functions.
+
+/** Every department this college may file a book under. */
+export async function fetchDepartmentMaster(institutionId: string): Promise<DepartmentMasterList> {
+	const res = await fetch(`/api/lib/departments/master?institution_id=${encodeURIComponent(institutionId)}`)
+	if (!res.ok) await fail(res, 'Failed to load the departments list')
+
+	const body = await res.json()
+	return {
+		departments: Array.isArray(body?.departments) ? body.departments : [],
+		total: Number(body?.total ?? 0),
+		active: Number(body?.active ?? 0),
+		from_myjkkn: Number(body?.from_myjkkn ?? 0),
+		added_here: Number(body?.added_here ?? 0),
+		myjkkn_ok: body?.myjkkn_ok !== false,
+		table_missing: body?.table_missing === true,
+		migration: body?.migration ?? null,
+	}
+}
+
+/** The active department names, for a dropdown that only has to offer names. */
+export async function fetchDepartmentNames(institutionId: string): Promise<string[]> {
+	const res = await fetch(`/api/lib/departments/master?institution_id=${encodeURIComponent(institutionId)}&usage=false`)
+	if (!res.ok) await fail(res, 'Failed to load departments')
+
+	const body = await res.json()
+	const rows: DepartmentMasterRow[] = Array.isArray(body?.departments) ? body.departments : []
+	return rows.filter(d => d.is_active).map(d => d.department_name)
+}
+
+/** Adds a department of this library's own. */
+export async function addDepartment(payload: {
+	institution_id: string
+	department_name: string
+	department_code?: string
+	display_name?: string
+}): Promise<DepartmentMasterRow> {
+	const res = await fetch('/api/lib/departments/master', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(payload),
+	})
+	if (!res.ok) await fail(res, 'Failed to add the department')
+	return res.json()
+}
+
+/** Renames one of ours, or switches any department on or off. */
+export async function updateDepartment(payload: {
+	id?: string
+	institution_id?: string
+	myjkkn_department_id?: string
+	department_name?: string
+	department_code?: string
+	display_name?: string
+	is_active?: boolean
+}): Promise<DepartmentMasterRow> {
+	const res = await fetch('/api/lib/departments/master', {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(payload),
+	})
+	if (!res.ok) await fail(res, 'Failed to save the change')
+	return res.json()
+}
+
+/** Removes one of ours. Refused while books or a department library use it. */
+export async function removeDepartment(id: string): Promise<void> {
+	const res = await fetch(`/api/lib/departments/master?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+	if (!res.ok) await fail(res, 'Failed to remove the department')
 }

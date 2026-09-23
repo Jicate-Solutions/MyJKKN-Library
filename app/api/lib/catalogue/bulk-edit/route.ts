@@ -33,7 +33,6 @@ import { guardCollection, guardWrite } from '@/lib/auth/api-guard'
 import {
 	EDIT_ID_COLUMN,
 	editColumnsForBookType,
-	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isReferenceOnlyForced,
@@ -51,6 +50,7 @@ import {
 	wrongSheetMessage,
 	type CatalogueSheetKind,
 } from '@/lib/library/catalogue-options'
+import { activeDepartmentNames } from '@/lib/library/department-master'
 import { insertCatalogueRecord, updateCatalogueRecord } from '@/lib/library/catalogue-record-insert'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import { fetchAllRows } from '@/lib/library/fetch-all'
@@ -110,7 +110,7 @@ interface ItemOnShelf {
  * Checks one row against the rules its upload sheet used.
  * Returns the error message, or null when the row is good.
  */
-function validateRow(row: IncomingRow, institutionCode: string | null, sheetKind: CatalogueSheetKind | null): string | null {
+function validateRow(row: IncomingRow, departments: Set<string>, sheetKind: CatalogueSheetKind | null): string | null {
 	const bookType = text(row.book_type)
 
 	// Each sheet takes one kind of material and refuses the other, as the upload
@@ -167,8 +167,15 @@ function validateRow(row: IncomingRow, institutionCode: string | null, sheetKind
 		return `Journal/Magazine Type must be ${PERIODICAL_SCOPES.join(' or ')}`
 	}
 
+	// The college's own department list — the Departments List page, which is
+	// MyJKKN's departments plus the ones the library added. A college with no
+	// list at all accepts whatever is typed rather than rejecting every row.
 	const department = text(row.department)
-	if ((departmentRequiredFor(bookType) || department) && !isValidDepartment(institutionCode, department)) {
+	if (
+		(departmentRequiredFor(bookType) || department)
+		&& departments.size > 0
+		&& !departments.has(department.trim().toLowerCase())
+	) {
 		return `Department "${department}" is not in your college's list`
 	}
 
@@ -305,6 +312,11 @@ export async function PUT(request: Request) {
 
 		const institutionCode: string | null = institution?.institution_code ?? null
 
+		// The departments this college offers, read once for the whole sheet.
+		const departments = new Set(
+			(await activeDepartmentNames(institutionId, institutionCode)).map(name => name.toLowerCase())
+		)
+
 		const failures: RowFailure[] = []
 		const valid: Array<{ row: number; data: IncomingRow }> = []
 		const seenId = new Map<string, number>()
@@ -348,7 +360,7 @@ export async function PUT(request: Request) {
 				seenAccession.set(accession.toLowerCase(), rowNumber)
 			}
 
-			const problem = validateRow(row, institutionCode, sheetKind)
+			const problem = validateRow(row, departments, sheetKind)
 			if (problem) fail(problem)
 			else valid.push({ row: rowNumber, data: row })
 		})

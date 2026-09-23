@@ -117,3 +117,46 @@ export interface InchargeCandidate {
 	email: string | null
 	photo_url: string | null
 }
+
+/**
+ * One row of the Departments List — the hub every department dropdown reads.
+ *
+ * Two sources in one shape: `myjkkn` rows are read live from MyJKKN and only
+ * their `is_active` can be changed here; `local` rows are the library's own and
+ * can be edited or removed. `title_count` and `has_library` say what would be
+ * affected, so nothing is switched off blindly.
+ */
+export interface DepartmentMasterRow {
+	/** MyJKKN's department id, or our own row's id. Unique either way. */
+	key: string
+	source: 'myjkkn' | 'local'
+	myjkkn_department_id: string | null
+	local_id: string | null
+	department_code: string
+	department_name: string
+	display_name: string | null
+	degree_name: string | null
+	/** Whether the department is offered wherever a department is chosen. */
+	is_active: boolean
+	/** Null on our own departments; MyJKKN's own flag otherwise. */
+	is_active_in_myjkkn: boolean | null
+	sort_order: number
+	/** Titles already filed under this department in this college. */
+	title_count: number
+	/** True when a department library has been opened for it. */
+	has_library: boolean
+}
+
+/** What the Departments List page gets back in one load. */
+export interface DepartmentMasterList {
+	departments: DepartmentMasterRow[]
+	total: number
+	active: number
+	from_myjkkn: number
+	added_here: number
+	/** False when this server cannot reach MyJKKN, so only our own rows are here. */
+	myjkkn_ok: boolean
+	/** True while 20260923_lib_departments.sql has not been run. */
+	table_missing: boolean
+	migration: string | null
+}

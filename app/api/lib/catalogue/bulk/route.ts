@@ -16,7 +16,6 @@ import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardWrite } from '@/lib/auth/api-guard'
 import {
 	uploadColumnsForBookType,
-	isValidDepartment,
 	formatForBookType,
 	isReferenceOnlyFromLabel,
 	isbnRequiredFor,
@@ -33,6 +32,7 @@ import {
 	wrongSheetMessage,
 	type CatalogueSheetKind,
 } from '@/lib/library/catalogue-options'
+import { activeDepartmentNames } from '@/lib/library/department-master'
 import { nextPeriodicalAccession } from '@/lib/library/periodical-accession'
 import { insertCatalogueRecord } from '@/lib/library/catalogue-record-insert'
 import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
@@ -88,7 +88,7 @@ function validateRow(
 	row: IncomingRow,
 	seen: Map<string, number>,
 	rowNumber: number,
-	institutionCode: string | null,
+	departments: Set<string>,
 	sheetKind: CatalogueSheetKind | null
 ): string | null {
 	const bookType = text(row.book_type)
@@ -162,12 +162,17 @@ function validateRow(
 		return `Journal/Magazine Type must be ${PERIODICAL_SCOPES.join(' or ')}`
 	}
 
-	// Each college has its own department list; one that has not given us a list
-	// yet accepts whatever is typed rather than rejecting every row.
+	// Each college has its own department list — the Departments List page, which
+	// is MyJKKN's departments plus the ones the library added. A college with no
+	// list at all accepts whatever is typed rather than rejecting every row.
 	// A magazine or journal may leave it blank; anything filled in is still
 	// checked, so a misspelt department is caught either way.
 	const department = text(row.department)
-	if ((departmentRequiredFor(bookType) || department) && !isValidDepartment(institutionCode, department)) {
+	if (
+		(departmentRequiredFor(bookType) || department)
+		&& departments.size > 0
+		&& !departments.has(department.trim().toLowerCase())
+	) {
 		return `Department "${department}" is not in your college's list`
 	}
 
@@ -228,6 +233,12 @@ export async function POST(request: Request) {
 		// is new to the college is added rather than refused.
 		const suppliers = await supplierLookupFor(supabase, institutionId)
 
+		// The departments this college offers, read once for the whole batch:
+		// MyJKKN's plus the ones added on the Departments List page.
+		const departments = new Set(
+			(await activeDepartmentNames(institutionId, institutionCode)).map(name => name.toLowerCase())
+		)
+
 		const failures: RowFailure[] = []
 		const seen = new Map<string, number>()
 		const valid: Array<{ row: number; data: IncomingRow }> = []
@@ -247,7 +258,7 @@ export async function POST(request: Request) {
 		rows.forEach((row, index) => {
 			// +2: the header is row 1, so the first data row is row 2 in Excel
 			const rowNumber = index + 2 + rowOffset
-			const problem = validateRow(row, seen, rowNumber, institutionCode, sheetKind)
+			const problem = validateRow(row, seen, rowNumber, departments, sheetKind)
 			if (problem) {
 				failures.push({ row: rowNumber, accession_number: text(row.accession_number), error: problem })
 			} else {

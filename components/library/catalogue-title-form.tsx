@@ -9,14 +9,15 @@
  * librarian copying from the register reads straight down and types straight
  * down.
  *
- * The only per-college part is the department list — see `departmentsFor`.
+ * The only per-college part is the department list, which comes from the
+ * Departments List page — MyJKKN's departments plus the ones the library added
+ * (see `useDepartments`).
  */
 
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-	departmentsFor,
 	BOOK_TYPES,
 	LANGUAGES,
 	LENDABLE_OPTIONS,
@@ -35,6 +36,7 @@ import {
 	isPeriodicalType,
 	PERIODICAL_ACCESSION_PREFIX,
 } from '@/lib/library/catalogue-options'
+import { useDepartments } from '@/hooks/library/use-departments'
 
 export interface TitleFormFields {
 	accession_number: string
@@ -98,7 +100,7 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	form, setForm, errors, showCopySection, institutionCode,
 }: Props<T>) {
 	const set = (patch: Partial<TitleFormFields>) => setForm(f => ({ ...f, ...patch }))
-	const departments = departmentsFor(institutionCode)
+	const { departments } = useDepartments()
 	const departmentRequired = departmentRequiredFor(form.book_type)
 	const showSupplier = showCopySection && usesSupplier(form.book_type)
 	/** Author, Edition/Issue and Price belong to a book, not to a periodical. */

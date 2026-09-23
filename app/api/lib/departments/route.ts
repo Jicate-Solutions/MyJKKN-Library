@@ -7,11 +7,16 @@
  * PUT    /api/lib/departments                    in-charge, default rule, active
  * DELETE /api/lib/departments?id=…               close one that holds no books
  *
- * The department list is MyJKKN's, read live on every request. This database
- * holds only what the library put inside a department: the fact that it has a
- * library, who is in charge of it, and — through `lib_items.location_id` — the
- * books that sit there. So when Dental adds five more departments in MyJKKN,
- * they appear here on the next load with nothing changed on this side.
+ * The department list is the one the Departments List page keeps: MyJKKN's
+ * departments, read live on every request, plus the ones the library added
+ * itself because MyJKKN does not have them. This database holds only what the
+ * library put inside a department: the fact that it has a library, who is in
+ * charge of it, and — through `lib_items.location_id` — the books that sit
+ * there. So when Dental adds five more departments in MyJKKN, they appear here
+ * on the next load with nothing changed on this side.
+ *
+ * The in-charge is still a MyJKKN person on every department, whichever list
+ * the department itself came from.
  *
  * A department library is stored as a `lib_locations` row with
  * `location_kind = 'department'`. That is what makes the shelf report, the
@@ -26,10 +31,10 @@ import { hasAtLeast } from '@/lib/auth/server-access'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 import { logActivity } from '@/lib/library/activity-log'
 import {
-	collegeDepartments,
 	myjkknDepartmentsConfigured,
 	invalidateDepartments,
 } from '@/lib/library/myjkkn-departments'
+import { collegeDepartmentList } from '@/lib/library/department-master'
 import type { DepartmentRow, DepartmentLibrary } from '@/types/lib-departments'
 
 /** The columns a department library row is read with, everywhere in this file. */
@@ -131,8 +136,8 @@ export async function GET(request: Request) {
 
 		// MyJKKN's list and our own rows do not depend on each other, so they are
 		// read together rather than one waiting on the other.
-		const [departments, { data: libraries, error }] = await Promise.all([
-			collegeDepartments(guard.institutionId),
+		const [{ departments }, { data: libraries, error }] = await Promise.all([
+			collegeDepartmentList(guard.institutionId),
 			supabase
 				.from('lib_locations')
 				.select(LIBRARY_COLUMNS)
@@ -170,15 +175,26 @@ export async function GET(request: Request) {
 			if (row.myjkkn_department_id) byDepartment.set(row.myjkkn_department_id, withCounts)
 		}
 
-		const result: DepartmentRow[] = departments.map(department => ({
-			myjkkn_department_id: department.id,
-			department_code: department.department_code,
-			department_name: department.department_name,
-			display_name: department.display_name,
-			degree_name: department.degree_name,
-			is_active_in_myjkkn: department.is_active,
-			library: byDepartment.get(department.id) ?? null,
-		}))
+		// A department added here carries its own row id where a MyJKKN one carries
+		// MyJKKN's. Both are uuids and `lib_locations.myjkkn_department_id` holds
+		// either, so a department library works the same way on both.
+		//
+		// Departments switched off on the Departments List page are left out,
+		// unless a library has already been opened for one — that library holds
+		// books, and hiding it would hide them.
+		const result: DepartmentRow[] = departments
+			.filter(department => department.is_active || byDepartment.has(department.key))
+			.map(department => ({
+				myjkkn_department_id: department.key,
+				department_code: department.department_code,
+				department_name: department.department_name,
+				display_name: department.display_name,
+				degree_name: department.degree_name,
+				is_active_in_myjkkn: department.source === 'myjkkn'
+					? department.is_active_in_myjkkn !== false
+					: department.is_active,
+				library: byDepartment.get(department.key) ?? null,
+			}))
 
 		// A library whose department MyJKKN no longer returns still holds books,
 		// and dropping it here would hide them. It is listed at the end, marked as
@@ -226,11 +242,11 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Choose a department' }, { status: 400 })
 		}
 
-		// The name and code are taken from MyJKKN's own answer, never from the
+		// The name and code are taken from the college's own list, never from the
 		// request — otherwise a hand-edited body could open a library against a
 		// department belonging to another college.
-		const departments = await collegeDepartments(guard.institutionId!)
-		const department = departments.find(d => d.id === departmentId)
+		const { departments } = await collegeDepartmentList(guard.institutionId!)
+		const department = departments.find(d => d.key === departmentId)
 		if (!department) {
 			return NextResponse.json(
 				{ error: 'That department does not belong to this college' },
@@ -244,10 +260,10 @@ export async function POST(request: Request) {
 			.insert({
 				institution_id: guard.institutionId,
 				location_kind: 'department',
-				location_code: codeForDepartment(department.department_code),
+				location_code: codeForDepartment(department.department_code || department.department_name),
 				location_name: department.department_name,
 				section: department.department_name,
-				myjkkn_department_id: department.id,
+				myjkkn_department_id: department.key,
 				department_code: department.department_code,
 				department_name: department.department_name,
 				// Reference by default, which is how a department library is run.

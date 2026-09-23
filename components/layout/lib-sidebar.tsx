@@ -132,6 +132,7 @@ export const navGroups: NavGroup[] = [
 	{
 		label: 'Other',
 		items: [
+			{ title: 'Departments List', url: '/departments-list', icon: Layers },
 			{ title: 'Retirement', url: '/retirement', icon: Recycle },
 			{ title: 'Inter-Campus', url: '/intercampus', icon: ArrowLeftRight },
 			{ title: 'Conservation', url: '/conservation', icon: Wrench },

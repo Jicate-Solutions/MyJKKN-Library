@@ -30,7 +30,6 @@ import { BulkProgressDialog } from '@/components/library/bulk-progress-dialog'
 import {
 	editColumnsFor,
 	EDIT_ID_COLUMN,
-	departmentsFor,
 	templateColumnFor,
 	bookTypesForSheet,
 	CATALOGUE_SHEET_LABELS,
@@ -38,6 +37,7 @@ import {
 	type CatalogueSheetKind,
 	type TemplateColumn,
 } from '@/lib/library/catalogue-options'
+import { useDepartments } from '@/hooks/library/use-departments'
 
 /** Both sheets, so an upload can be matched against whichever one it came from. */
 const SHEET_KINDS: CatalogueSheetKind[] = ['books', 'periodicals']
@@ -92,7 +92,7 @@ function cellToText(value: unknown): string {
 }
 
 export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, disabled }: Props) {
-	const departments = departmentsFor(institutionCode)
+	const { departments } = useDepartments()
 	const { toast } = useToast()
 	const fileInput = useRef<HTMLInputElement>(null)
 	const [busy, setBusy] = useState(false)
