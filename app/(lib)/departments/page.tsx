@@ -38,6 +38,18 @@ import {
 	AlertTriangle, Plus,
 } from 'lucide-react'
 
+/**
+ * Which departments are being looked after, and which are still waiting.
+ *
+ * A department with somebody in charge of its library is settled; one with a
+ * library and nobody named is the next thing to fix; one with no library at all
+ * is not a job yet. The list is shown in that order, alphabetically inside each
+ * group, so the row that needs attention is never buried halfway down an
+ * alphabetical list.
+ */
+const inchargeRank = (department: DepartmentRow) =>
+	department.library?.incharge_name ? 0 : department.library ? 1 : 2
+
 const SUCCESS_TOAST =
 	'bg-brand-green-50 border-brand-green-200 text-brand-green-800 dark:bg-brand-green-900/30 dark:border-brand-green-700 dark:text-brand-green-300'
 
@@ -83,13 +95,18 @@ export default function DepartmentsPage() {
 	useEffect(() => { load() }, [load])
 
 	const filtered = useMemo(() => {
-		if (!search.trim()) return departments
 		const q = search.trim().toLowerCase()
-		return departments.filter(d =>
-			d.department_name.toLowerCase().includes(q) ||
-			d.department_code.toLowerCase().includes(q) ||
-			(d.display_name?.toLowerCase().includes(q) ?? false) ||
-			(d.library?.incharge_name?.toLowerCase().includes(q) ?? false)
+		const rows = q
+			? departments.filter(d =>
+				d.department_name.toLowerCase().includes(q) ||
+				d.department_code.toLowerCase().includes(q) ||
+				(d.display_name?.toLowerCase().includes(q) ?? false) ||
+				(d.library?.incharge_name?.toLowerCase().includes(q) ?? false)
+			)
+			: departments
+
+		return [...rows].sort((a, b) =>
+			inchargeRank(a) - inchargeRank(b) || a.department_name.localeCompare(b.department_name)
 		)
 	}, [departments, search])
 
