@@ -7,12 +7,25 @@
  * number. At the door there is a queue, one scanner and no free hand for the
  * mouse, so the box must take the next card without anybody putting the cursor
  * back — after a scan, after the Record button was clicked, after the register
- * refreshed, after a stray click on the page. The circulation desk is the same
- * job with a queue of books instead.
+ * refreshed. The circulation desk is the same job with a queue of books.
  *
- * It gives the cursor up willingly, though. If the librarian is typing in the
- * search box, picking a date, or answering a dialog, that field keeps the
- * cursor until they are done with it.
+ * It gives the cursor up willingly, though, and this is where the first version
+ * went wrong: it put the cursor back sixty milliseconds after EVERY click and
+ * EVERY keystroke anywhere on the page. Clicking a line to read it, or double
+ * clicking a roll number to copy it, threw the cursor into the scan box and
+ * cleared the selection — the screen could not be used for anything but
+ * scanning.
+ *
+ * So the cursor is taken back on two occasions only:
+ *
+ *   * a button, link or tab was pressed — the work is done and the next card is
+ *     what comes next; and
+ *   * the cursor is sitting on nothing at all, which is what a stray click on
+ *     empty space leaves behind.
+ *
+ * And never while a dialog is open, while text is selected, while somebody is
+ * typing in another field, or when the click was a double click — that is
+ * somebody selecting a word, not asking for the scan box.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
@@ -23,11 +36,23 @@ const OWNS_CURSOR = 'input, textarea, select, [contenteditable="true"]'
 /** While one of these is open the cursor belongs to it, not to the door. */
 const OPEN_OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]'
 
+/** Pressing one of these ends a piece of work; the next card comes after it. */
+const ACTIONS = 'button, a[href], [role="button"], [role="tab"], [role="menuitem"], summary'
+
 /**
  * Long enough for a dialog or menu to have claimed the cursor before we check
  * whether it is ours to take, short enough that nobody at the door notices.
  */
 const SETTLE_MS = 60
+
+/**
+ * The wait after a click that landed on nothing.
+ *
+ * Longer than the browser's double-click window, so the second click of
+ * somebody selecting a roll number to copy it arrives first and the selection
+ * it makes is seen. Nobody waiting to scan notices a third of a second.
+ */
+const IDLE_MS = 350
 
 export function useScanFocus(active: boolean) {
 	const inputRef = useRef<HTMLInputElement>(null)
@@ -67,32 +92,53 @@ export function useScanFocus(active: boolean) {
 	// On arrival, and again the moment scanning becomes possible
 	useEffect(() => { focusScanBox() }, [focusScanBox])
 
-	// Focus that drifts anywhere else comes back on its own
+	// The two occasions the cursor comes back on its own
 	useEffect(() => {
 		if (!active) return
 
 		let timer: ReturnType<typeof setTimeout> | undefined
-		const restore = () => {
+		const soon = (wait = SETTLE_MS) => {
 			if (timer) clearTimeout(timer)
-			timer = setTimeout(focusScanBox, SETTLE_MS)
+			timer = setTimeout(focusScanBox, wait)
 		}
 
+		/** True while the cursor is on nothing — the page body, or lost entirely. */
+		const onNothing = () => {
+			const current = document.activeElement
+			return !current || current === document.body || current === document.documentElement
+		}
+
+		const onClick = (event: MouseEvent) => {
+			// A double click is somebody selecting a word to copy it. Any pending
+			// restore is dropped as well, or it would clear that selection.
+			if (event.detail > 1) { if (timer) clearTimeout(timer); return }
+			const target = event.target instanceof HTMLElement ? event.target : null
+			if (target?.closest(OWNS_CURSOR)) return
+			if (target?.closest(ACTIONS)) { soon(); return }
+			// A click on plain text, a card or a table row leaves the cursor
+			// nowhere; only then is it ours to take back, and not before the
+			// second click of a double click would have arrived.
+			soon(IDLE_MS)
+		}
+
+		// The box losing the cursor to nothing at all — a line that vanished from
+		// under it, say — brings it back. Losing it to a button or another field
+		// does not: that is where the work is, and the click above decides.
+		const onBlur = () => { if (onNothing()) soon(IDLE_MS) }
+
+		// Coming back to this browser tab with cards still to scan
+		const onWindowFocus = () => { if (onNothing()) soon() }
+
 		const box = inputRef.current
-		box?.addEventListener('blur', restore)
-		document.addEventListener('click', restore)
-		window.addEventListener('focus', restore)
-		// Tabs are also switched from the keyboard (Alt+1/2/3, F1–F3), which no
-		// click ever sees. Any key is enough of a signal to put the cursor back
-		// where cards are typed — and a key pressed inside a field somebody is
-		// using is refused above, so typing a name is never interrupted.
-		document.addEventListener('keydown', restore)
+		box?.addEventListener('blur', onBlur)
+		document.addEventListener('click', onClick)
+		window.addEventListener('focus', onWindowFocus)
 
 		return () => {
 			if (timer) clearTimeout(timer)
-			box?.removeEventListener('blur', restore)
-			document.removeEventListener('click', restore)
-			window.removeEventListener('focus', restore)
-			document.removeEventListener('keydown', restore)
+			box?.removeEventListener('blur', onBlur)
+			document.removeEventListener('click', onClick)
+			window.removeEventListener('focus', onWindowFocus)
 		}
 	}, [active, focusScanBox])
 
