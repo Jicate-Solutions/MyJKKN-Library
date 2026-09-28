@@ -108,34 +108,46 @@ export const navGroups: NavGroup[] = [
 		items: [
 			{ title: 'Circulation Desk', url: '/circulation', icon: RefreshCw },
 			{ title: 'Gate Entry', url: '/visits', icon: ScanLine },
-			{ title: 'Holds', url: '/circulation/holds', icon: ListOrdered },
+			// Hidden from the menu since 28 Sep 2026, at Deepak's request — see the
+			// note above Acquisition.
+			// { title: 'Holds', url: '/circulation/holds', icon: ListOrdered },
 			{ title: 'Overdue', url: '/circulation/overdue', icon: ClockAlert },
 			{ title: 'Late Charges', url: '/circulation/charges', icon: BadgeDollarSign },
 		],
 	},
 	{
+		// Hidden from the menu since 28 Sep 2026, at Deepak's request: these
+		// screens are not in use yet, and a menu full of pages nobody may act on
+		// makes the ones that matter harder to find.
+		//
+		// Nothing is deleted. Every page, API and permission is exactly as it
+		// was, each still opens at its own address, and a group with no items
+		// left is dropped by `visibleNavGroups` on its own — so the empty
+		// Acquisition heading does not appear. Uncomment a line to show it again.
 		label: 'Acquisition',
 		items: [
-			{ title: 'Purchase Requests', url: '/acquisition/requests', icon: PackagePlus },
-			{ title: 'Orders', url: '/acquisition/orders', icon: ShoppingCart },
-			{ title: 'Suppliers', url: '/acquisition/suppliers', icon: Truck },
-			{ title: 'Budget', url: '/acquisition/budget', icon: Wallet },
+			// { title: 'Purchase Requests', url: '/acquisition/requests', icon: PackagePlus },
+			// { title: 'Orders', url: '/acquisition/orders', icon: ShoppingCart },
+			// { title: 'Suppliers', url: '/acquisition/suppliers', icon: Truck },
+			// { title: 'Budget', url: '/acquisition/budget', icon: Wallet },
 		],
 	},
 	{
 		label: 'Periodicals',
 		items: [
 			{ title: 'Subscriptions', url: '/periodicals', icon: Newspaper },
-			{ title: 'Digital Resources', url: '/digital', icon: MonitorPlay },
+			// Hidden since 28 Sep 2026 — see the note above Acquisition.
+			// { title: 'Digital Resources', url: '/digital', icon: MonitorPlay },
 		],
 	},
 	{
 		label: 'Other',
 		items: [
 			{ title: 'Departments List', url: '/departments-list', icon: Layers },
-			{ title: 'Retirement', url: '/retirement', icon: Recycle },
-			{ title: 'Inter-Campus', url: '/intercampus', icon: ArrowLeftRight },
-			{ title: 'Conservation', url: '/conservation', icon: Wrench },
+			// Hidden since 28 Sep 2026 — see the note above Acquisition.
+			// { title: 'Retirement', url: '/retirement', icon: Recycle },
+			// { title: 'Inter-Campus', url: '/intercampus', icon: ArrowLeftRight },
+			// { title: 'Conservation', url: '/conservation', icon: Wrench },
 			{ title: 'OPAC Search', url: '/opac', icon: Search },
 		],
 	},
