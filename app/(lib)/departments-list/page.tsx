@@ -261,16 +261,15 @@ export default function DepartmentsListPage() {
 										<TableHead>Department</TableHead>
 										<TableHead className="hidden sm:table-cell">Code</TableHead>
 										<TableHead className="hidden md:table-cell">Source</TableHead>
-										<TableHead className="hidden md:table-cell text-right">Titles</TableHead>
 										<TableHead className="text-center">Offered</TableHead>
 										<TableHead className="w-[90px]" />
 									</TableRow>
 								</TableHeader>
 								<TableBody>
 									{loading ? (
-										<TableRow><TableCell colSpan={6} className="text-center py-8 text-sm text-muted-foreground">Loading…</TableCell></TableRow>
+										<TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-muted-foreground">Loading…</TableCell></TableRow>
 									) : filtered.length === 0 ? (
-										<TableRow><TableCell colSpan={6} className="text-center py-8 text-sm text-muted-foreground">
+										<TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-muted-foreground">
 											{search ? 'No department matches that' : 'No departments yet — add the first one'}
 										</TableCell></TableRow>
 									) : filtered.map(d => (
@@ -298,7 +297,6 @@ export default function DepartmentsListPage() {
 													<Badge variant="outline" className="text-[10px] ml-1 border-amber-400 text-amber-700">Inactive in MyJKKN</Badge>
 												)}
 											</TableCell>
-											<TableCell className="hidden md:table-cell text-right text-sm text-muted-foreground">{d.title_count || '—'}</TableCell>
 											<TableCell className="text-center">
 												<Switch
 													checked={d.is_active}
