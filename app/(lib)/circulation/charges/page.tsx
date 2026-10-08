@@ -22,7 +22,7 @@ import {
 import {
 	IndianRupee, AlertCircle, CheckCircle2, MinusCircle,
 	MoreHorizontal, Undo2, Search, RefreshCw,
-	ChevronLeft, ChevronRight, Loader2,
+	ChevronLeft, ChevronRight, Loader2, ReceiptIndianRupee,
 } from 'lucide-react'
 import { fetchCharges, waiveCharge } from '@/services/library/lib-late-charges-service'
 import { settleFine } from '@/services/library/lib-circulation-service'
@@ -37,12 +37,25 @@ const STATUS_COLORS: Record<LibChargePaymentStatus, string> = {
 
 type ActionMode = 'waive' | null
 
+/**
+ * A charge as this list reads it.
+ *
+ * `can_bill` and `on_myjkkn_bill` are worked out by the server, not here: this
+ * page cannot know whether the server has MyJKKN billing at all, and the row
+ * itself does not carry the bill it was put on. They answer "may this fine go
+ * on their bill" and "is it already there".
+ */
+type ChargeRow = LibLateCharge & {
+	can_bill?: boolean
+	on_myjkkn_bill?: boolean
+}
+
 export default function ChargesPage() {
 	const canWrite = useLibrarianWrite()
 	const { isReady, institutionId, shouldFilter } = useInstitutionFilter()
 	const { toast } = useToast()
 
-	const [charges, setCharges] = useState<LibLateCharge[]>([])
+	const [charges, setCharges] = useState<ChargeRow[]>([])
 	const [loading, setLoading] = useState(true)
 	const [search, setSearch] = useState('')
 	const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -51,9 +64,12 @@ export default function ChargesPage() {
 
 	const [sheetOpen, setSheetOpen] = useState(false)
 	const [actionMode, setActionMode] = useState<ActionMode>(null)
-	const [selectedCharge, setSelectedCharge] = useState<LibLateCharge | null>(null)
+	const [selectedCharge, setSelectedCharge] = useState<ChargeRow | null>(null)
 	/** The charge waiting on "Mark as paid?" — Yes records it paid in full. */
-	const [payingCharge, setPayingCharge] = useState<LibLateCharge | null>(null)
+	const [payingCharge, setPayingCharge] = useState<ChargeRow | null>(null)
+	/** The charge waiting on "Add it to their MyJKKN bill?" */
+	const [billingCharge, setBillingCharge] = useState<ChargeRow | null>(null)
+	const [billing, setBilling] = useState(false)
 	const [paying, setPaying] = useState(false)
 	const [waiverReason, setWaiverReason] = useState('')
 	const [waiverAmount, setWaiverAmount] = useState('')
@@ -140,7 +156,40 @@ export default function ChargesPage() {
 		}
 	}
 
-	const openWaive = (c: LibLateCharge) => {
+	/**
+	 * Add to bill — the amount goes onto the learner's MyJKKN bill.
+	 *
+	 * Nothing is taken at the counter and nothing is marked paid: the fine stays
+	 * owed until MyJKKN says it has been paid, and this list marks it Paid on
+	 * its own the next time it is opened after that. The same settle route the
+	 * desk uses, so a fine is billed the same way wherever it is billed.
+	 */
+	const confirmBill = async () => {
+		if (!billingCharge) return
+		try {
+			setBilling(true)
+			const saved = await settleFine({
+				institution_id: billingCharge.institution_id ?? institutionId ?? '',
+				mode: 'bill',
+				charge_id: billingCharge.id,
+			})
+			setCharges(prev => prev.map(c => c.id === saved.id
+				? { ...c, ...saved, member: c.member, transaction: c.transaction, on_myjkkn_bill: true, can_bill: false }
+				: c))
+			toast({
+				title: `✅ ₹${billingCharge.net_payable.toFixed(2)} added to their MyJKKN bill`,
+				description: `${billingCharge.member?.display_name ?? ''} — they pay it in MyJKKN`,
+				className: 'bg-green-50 border-green-200 text-green-800',
+			})
+			setBillingCharge(null)
+		} catch (err) {
+			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Could not add it to their bill'), variant: 'destructive' })
+		} finally {
+			setBilling(false)
+		}
+	}
+
+	const openWaive = (c: ChargeRow) => {
 		setSelectedCharge(c)
 		setActionMode('waive')
 		setWaiverReason('')
@@ -323,9 +372,16 @@ export default function ChargesPage() {
 												</TableCell>
 												<TableCell className="text-sm font-medium">₹{c.net_payable.toFixed(2)}</TableCell>
 												<TableCell>
-													<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[c.payment_status]}`}>
-														{c.payment_status}
-													</Badge>
+													<div className="flex flex-col items-start gap-1">
+														<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[c.payment_status]}`}>
+															{c.payment_status}
+														</Badge>
+														{c.on_myjkkn_bill && (
+															<Badge variant="outline" className="text-[10px] border-brand-green/40 text-brand-green">
+																On MyJKKN bill
+															</Badge>
+														)}
+													</div>
 												</TableCell>
 												<TableCell>
 													{c.payment_status === 'unpaid' && canWrite && (
@@ -339,6 +395,11 @@ export default function ChargesPage() {
 																<DropdownMenuItem onClick={() => setPayingCharge(c)}>
 																	<CheckCircle2 className="h-4 w-4 mr-2 text-emerald-600" />Paid
 																</DropdownMenuItem>
+												{c.can_bill && (
+													<DropdownMenuItem onClick={() => setBillingCharge(c)}>
+														<ReceiptIndianRupee className="h-4 w-4 mr-2 text-brand-green" />Add to MyJKKN bill
+													</DropdownMenuItem>
+												)}
 																<DropdownMenuSeparator />
 																<DropdownMenuItem onClick={() => openWaive(c)}>
 																	<Undo2 className="h-4 w-4 mr-2 text-blue-500" />Waive Charge
@@ -384,6 +445,11 @@ export default function ChargesPage() {
 													<DropdownMenuItem onClick={() => setPayingCharge(c)}>
 														<CheckCircle2 className="h-4 w-4 mr-2 text-emerald-600" />Paid
 													</DropdownMenuItem>
+												{c.can_bill && (
+													<DropdownMenuItem onClick={() => setBillingCharge(c)}>
+														<ReceiptIndianRupee className="h-4 w-4 mr-2 text-brand-green" />Add to MyJKKN bill
+													</DropdownMenuItem>
+												)}
 													<DropdownMenuSeparator />
 													<DropdownMenuItem onClick={() => openWaive(c)}>
 														<Undo2 className="h-4 w-4 mr-2 text-blue-500" />Waive Charge
@@ -397,6 +463,11 @@ export default function ChargesPage() {
 										<Badge variant="outline" className={`text-xs capitalize ${STATUS_COLORS[c.payment_status]}`}>
 											{c.payment_status}
 										</Badge>
+										{c.on_myjkkn_bill && (
+											<Badge variant="outline" className="text-[10px] border-brand-green/40 text-brand-green">
+												On MyJKKN bill
+											</Badge>
+										)}
 										<span className="text-xs text-muted-foreground">{c.overdue_days} days overdue</span>
 									</div>
 									<div className="flex items-center justify-between text-sm">
@@ -533,6 +604,32 @@ export default function ChargesPage() {
 							{paying
 								? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</>
 								: 'Yes'}
+						</Button>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			{/* Add to MyJKKN bill — Yes / No */}
+			<AlertDialog open={!!billingCharge} onOpenChange={o => { if (!o && !billing) setBillingCharge(null) }}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Add this fine to their MyJKKN bill?</AlertDialogTitle>
+						<AlertDialogDescription>
+							{billingCharge?.member?.display_name ?? 'This learner'}
+							{billingCharge?.transaction?.item?.catalogue_record?.title
+								? ` — ${billingCharge.transaction.item.catalogue_record.title}`
+								: ''}
+							. <span className="font-semibold">₹{billingCharge?.net_payable.toFixed(2)}</span> goes onto
+							their MyJKKN bill, beside their other fees, and they pay it there. It stays owed until
+							MyJKKN says it is paid — so do not take the money at the counter as well.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={billing}>No</AlertDialogCancel>
+						<Button onClick={() => { void confirmBill() }} disabled={billing}>
+							{billing
+								? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Adding…</>
+								: 'Yes, add to their bill'}
 						</Button>
 					</AlertDialogFooter>
 				</AlertDialogContent>

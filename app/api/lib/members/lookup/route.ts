@@ -19,6 +19,7 @@
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { syncBilledForScope, billingReady } from '@/lib/library/myjkkn-billing'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { getInstitutionSettings, chargeableLateDays } from '@/lib/library/institution-settings'
 import { chargePerDayFrom, fineFor, outstandingFine, settledChargesFor } from '@/lib/library/late-fine'
@@ -79,10 +80,17 @@ export async function GET(request: Request) {
 		//
 		// The category rules and the campus policy hang off nothing, so they ride
 		// alongside rather than after.
+		// A fine paid in MyJKKN was paid there, and nothing told this database.
+		// So any fine in this library that is sitting on a MyJKKN bill is
+		// checked against that bill on every scan — otherwise the desk would go
+		// on asking for money already handed over, and go on refusing the book.
+		// It rides alongside the card rather than in front of it, and costs
+		// nothing at all while no fine anywhere is on a bill.
 		const [
 			{ data: borrowerRow },
 			{ data: category },
 			settings,
+			nowPaid,
 		] = await Promise.all([
 			supabase
 				.from('lib_borrowers')
@@ -136,12 +144,15 @@ export async function GET(request: Request) {
 				.eq('category_code', person.member_category)
 				.maybeSingle(),
 			getInstitutionSettings(institutionId),
+			syncBilledForScope(supabase, { institutionId }),
 		])
 
 		// Null until their first book, exactly as before.
 		const borrower = (borrowerRow as any) ?? null
 		const openLoans: any[] = borrower?.loans ?? []
-		const unpaid: any[] = borrower?.charges ?? []
+		// A fine the sync has just marked paid was still unpaid when the card
+		// was read a moment ago, so it is dropped here rather than read again.
+		const unpaid: any[] = (borrower?.charges ?? []).filter((c: { id: string }) => !nowPaid.has(c.id))
 		const openHolds: any[] = borrower?.holds ?? []
 		// The filtered list is the count — no separate query to ask how many.
 		const onLoan = openLoans.length
@@ -277,6 +288,9 @@ export async function GET(request: Request) {
 
 			items_on_loan: onLoan,
 			outstanding_charges: outstanding,
+			// A fine of theirs can go on a MyJKKN bill: they are a learner, and
+			// this server has somewhere to put it.
+			can_bill_fines: person.person_kind === 'learner' && (await billingReady()),
 			category_name: category?.category_name ?? person.member_category,
 			max_items_allowed: category?.max_items_allowed ?? null,
 			loan_period_days: category?.loan_period_days ?? null,

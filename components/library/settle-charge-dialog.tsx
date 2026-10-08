@@ -7,12 +7,20 @@ import { Textarea } from '@/components/ui/textarea'
 import {
 	Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, CheckCircle, IndianRupee, Loader2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle, IndianRupee, Loader2, ReceiptIndianRupee } from 'lucide-react'
 import { settleFine } from '@/services/library/lib-circulation-service'
 import { rupees, messageOf, type MemberCharge } from '@/lib/library/desk'
 import type { LibLateCharge } from '@/types/lib'
 
-export type SettleMode = 'paid' | 'waive'
+/**
+ * The three ways a late fine stops standing in the way of the book.
+ *
+ * 'paid' and 'waive' are the counter's: money in hand, or let off. 'bill' puts
+ * the amount on the learner's MyJKKN bill instead, beside their tuition and
+ * hostel fees — the library stops asking for it, and it is marked paid here
+ * only when MyJKKN says they have paid it.
+ */
+export type SettleMode = 'paid' | 'waive' | 'bill'
 
 export interface SettleRequest {
 	/** What is being settled, as the desk shows it. */
@@ -57,21 +65,29 @@ export function fineAsCharge(fine: {
 }
 
 /**
- * Waive, and under it Paid — the two ways a fine is cleared at the desk.
+ * Waive, Paid, and — for a learner — Add to bill: the ways a fine is cleared.
  *
- * The same pair wherever a fine is met: the book scanned at Return or Renew,
- * a late book on the member's card, a charge already owing, and the line that
- * says what just happened. Both are open to the assistant librarian, who runs
+ * The same set wherever a fine is met: the book scanned at Return or Renew, a
+ * late book on the member's card, a charge already owing, and the line that
+ * says what just happened. All are open to the assistant librarian, who runs
  * the desk.
+ *
+ * Add to bill only appears where it can work — a learner, in a library whose
+ * MyJKKN billing is set up. A facilitator has no MyJKKN bill to put it on, and
+ * before somebody creates the Library Fine category over there the button
+ * would only ever fail, so neither is offered it.
  */
 export function FineButtons({
 	onChoose,
 	disabled,
 	compact,
+	canBill,
 }: {
 	onChoose: (mode: SettleMode) => void
 	disabled?: boolean
 	compact?: boolean
+	/** Whether this fine can go on a MyJKKN bill — a learner, billing configured. */
+	canBill?: boolean
 }) {
 	const size = compact ? 'h-9 text-xs sm:h-7' : 'h-10 text-xs sm:h-8'
 	return (
@@ -79,6 +95,19 @@ export function FineButtons({
 			<Button size="sm" variant="outline" className={size} disabled={disabled} onClick={() => onChoose('waive')}>
 				Waive
 			</Button>
+			{canBill && (
+				<Button
+					size="sm"
+					variant="outline"
+					className={size}
+					disabled={disabled}
+					title="Put it on their MyJKKN bill — they pay it there with their other fees"
+					onClick={() => onChoose('bill')}
+				>
+					<ReceiptIndianRupee className="mr-1 h-3 w-3" />
+					Add to bill
+				</Button>
+			)}
 			<Button size="sm" className={size} disabled={disabled} onClick={() => onChoose('paid')}>
 				<IndianRupee className="mr-1 h-3 w-3" />
 				Paid
@@ -91,8 +120,10 @@ export function FineButtons({
  * Clearing one late fine, where the member is standing.
  *
  * Paid asks one question — is the money in hand? — and Yes records the whole
- * amount as paid. Waive asks why, and lets the whole amount off. Either way
- * the fine is cleared, and a late book can then be returned or renewed.
+ * amount as paid. Waive asks why, and lets the whole amount off. Add to bill
+ * asks nothing beyond Yes: the amount goes onto the learner's MyJKKN bill and
+ * stays owed there. Any of the three clears the counter, and a late book can
+ * then be returned or renewed.
  */
 export function SettleChargeDialog({
 	settling,
@@ -151,7 +182,11 @@ export function SettleChargeDialog({
 			<DialogContent className="sm:max-w-[440px]">
 				<DialogHeader>
 					<DialogTitle>
-						{settling?.mode === 'paid' ? 'Mark the fine as paid?' : 'Waive the fine'}
+						{settling?.mode === 'paid'
+							? 'Mark the fine as paid?'
+							: settling?.mode === 'bill'
+								? 'Add the fine to their MyJKKN bill?'
+								: 'Waive the fine'}
 					</DialogTitle>
 					<DialogDescription>
 						{settling?.charge.title} — {amount}{late}
@@ -163,6 +198,18 @@ export function SettleChargeDialog({
 						<p className="text-sm">
 							Yes records <span className="font-semibold">{amount}</span> as paid in full and clears the fine.
 						</p>
+					) : settling?.mode === 'bill' ? (
+						<div className="space-y-2 text-sm">
+							<p>
+								<span className="font-semibold">{amount}</span> goes onto their MyJKKN bill, beside
+								their other fees. They pay it there, in their own time.
+							</p>
+							<p className="text-xs text-muted-foreground">
+								The book can go back now. The fine stays owed until MyJKKN says it is paid, and
+								this library marks it Paid on its own when that happens — so do not take the money
+								at the counter as well.
+							</p>
+						</div>
 					) : (
 						<div className="space-y-2">
 							<Label htmlFor="fine-reason">Why</Label>
@@ -190,14 +237,16 @@ export function SettleChargeDialog({
 
 				<DialogFooter>
 					<Button variant="outline" onClick={onClose} disabled={saving}>
-						{settling?.mode === 'paid' ? 'No' : 'Cancel'}
+						{settling?.mode === 'paid' || settling?.mode === 'bill' ? 'No' : 'Cancel'}
 					</Button>
-					<Button onClick={submit} disabled={saving} autoFocus={settling?.mode === 'paid'}>
+					<Button onClick={submit} disabled={saving} autoFocus={settling?.mode !== 'waive'}>
 						{saving
 							? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</>
 							: settling?.mode === 'paid'
 								? <><CheckCircle className="mr-2 h-4 w-4" />Yes, paid</>
-								: `Waive ${amount}`}
+								: settling?.mode === 'bill'
+									? <><ReceiptIndianRupee className="mr-2 h-4 w-4" />Yes, add {amount} to their bill</>
+									: `Waive ${amount}`}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

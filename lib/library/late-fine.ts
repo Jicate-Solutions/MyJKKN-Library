@@ -95,21 +95,33 @@ export interface SettledChargeRow {
 	total_charge: number | string | null
 	payment_status: string
 	created_at: string
+	/** Set when the fine went onto the learner's MyJKKN bill instead of the till. */
+	billing_student_bill_id?: string | null
 	[column: string]: unknown
 }
+
+/** A fine that has been dealt with: taken, let off, or put on their MyJKKN bill. */
+const isSettled = (charge: SettledChargeRow) =>
+	charge.payment_status === 'paid'
+	|| charge.payment_status === 'waived'
+	|| !!charge.billing_student_bill_id
 
 /**
  * The charges that count towards this loan's lateness as it stands.
  *
- * Paid or waived, and made on or after the current due date. A loan that was
- * late, settled, renewed and is now late again owes for the new lateness: the
- * charge from before the renewal was made before the new due date, so it
- * does not count against it.
+ * Taken, let off or billed, and made on or after the current due date. A loan
+ * that was late, settled, renewed and is now late again owes for the new
+ * lateness: the charge from before the renewal was made before the new due
+ * date, so it does not count against it.
+ *
+ * A billed fine counts although no money has arrived. It is owed in MyJKKN
+ * now, where it is collected, and the library has nothing left to do at the
+ * counter — so the book may go back and the desk stops asking for it.
  */
 function coveringCharges(charges: SettledChargeRow[], loan: { id: string; due_date: string }) {
 	return charges.filter(charge =>
 		charge.transaction_id === loan.id
-		&& (charge.payment_status === 'paid' || charge.payment_status === 'waived')
+		&& isSettled(charge)
 		&& charge.created_at.slice(0, 10) >= loan.due_date.slice(0, 10)
 	)
 }
@@ -132,19 +144,40 @@ export function outstandingFine(
 	return Math.max(0, Math.round((fine.amount - cleared) * 100) / 100)
 }
 
-/** The paid or waived charges on these loans, newest first. */
+/**
+ * The charges on these loans that have been dealt with, newest first.
+ *
+ * Billed ones are asked for separately, and a database where the billing
+ * migration has not been run yet (42703) simply has none — the fines that were
+ * settled at the counter still come back and nothing stops working.
+ */
 export async function settledChargesFor(
 	supabase: Supabase,
 	transactionIds: string[]
 ): Promise<SettledChargeRow[]> {
 	if (transactionIds.length === 0) return []
-	const { data } = await supabase
-		.from('lib_late_charges')
-		.select('*')
-		.in('transaction_id', transactionIds)
-		.in('payment_status', ['paid', 'waived'])
-		.order('created_at', { ascending: false })
-	return (data ?? []) as SettledChargeRow[]
+
+	const [atCounter, billed] = await Promise.all([
+		supabase
+			.from('lib_late_charges')
+			.select('*')
+			.in('transaction_id', transactionIds)
+			.in('payment_status', ['paid', 'waived'])
+			.order('created_at', { ascending: false }),
+		supabase
+			.from('lib_late_charges')
+			.select('*')
+			.in('transaction_id', transactionIds)
+			.not('billing_student_bill_id', 'is', null)
+			.order('created_at', { ascending: false }),
+	])
+
+	const rows = [...((atCounter.data ?? []) as SettledChargeRow[])]
+	const seen = new Set(rows.map(row => row.id))
+	for (const row of (billed.data ?? []) as SettledChargeRow[]) {
+		if (!seen.has(row.id)) rows.push(row)
+	}
+	return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
 export interface LoanFineStatus {

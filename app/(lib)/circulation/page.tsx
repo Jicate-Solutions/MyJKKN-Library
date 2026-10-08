@@ -116,8 +116,12 @@ const loanFine = (tx: LibLendingTransaction) => fineAsCharge({
 const settledToast = (request: SettleRequest) => ({
 	title: request.mode === 'paid'
 		? `✅ ${rupees(request.charge.net_payable)} paid`
-		: `✅ ${rupees(request.charge.net_payable)} waived`,
-	description: request.charge.title,
+		: request.mode === 'bill'
+			? `✅ ${rupees(request.charge.net_payable)} added to their MyJKKN bill`
+			: `✅ ${rupees(request.charge.net_payable)} waived`,
+	description: request.mode === 'bill'
+		? `${request.charge.title} — they pay it in MyJKKN; the book can go back now`
+		: request.charge.title,
 	className: 'bg-green-50 border-green-200 text-green-800',
 })
 
@@ -211,79 +215,35 @@ function ScanFeedback({
 }
 
 /**
- * The books a member is holding, with the two actions the desk needs on each.
+ * The books a member is holding — read here, acted on elsewhere.
  *
  * This is the first question asked at the counter — "what have I got out, and
  * when is it due" — so it belongs beside the member, not behind another search.
+ *
+ * It used to carry a Renew and a Return button on every line, which read well
+ * and worked badly: this list is on the Issue tab, and a librarian halfway
+ * through issuing would return the wrong book from it by reflex. Returning and
+ * renewing have tabs of their own, where the book is scanned and shown before
+ * anything happens, so that is where they belong. A fine still owed is the one
+ * exception and keeps its Waive / Paid buttons: it has to be cleared before the
+ * book can be issued at all, so it is part of the issue in front of them.
  */
 function MemberLoansPanel({
 	loans,
 	maxItems,
 	institutionId,
-	member,
+	canBill,
 	onChanged,
-	onEvent,
 }: {
 	loans: MemberLoan[]
 	maxItems?: number | null
 	institutionId: string | null
-	member: DeskMember
+	/** Whether this member's fines can go on a MyJKKN bill — a learner, billing on. */
+	canBill?: boolean
 	onChanged: () => void
-	onEvent: (event: DeskEvent) => void
 }) {
 	const { toast } = useToast()
-	const [busyId, setBusyId] = useState<string | null>(null)
 	const [settling, setSettling] = useState<SettleRequest | null>(null)
-
-	const act = async (loan: MemberLoan, action: 'return' | 'renew') => {
-		try {
-			setBusyId(loan.id)
-			if (action === 'return') {
-				const result = await returnItem({ transaction_id: loan.id, institution_id: institutionId ?? '' })
-				const returnedAt = result.transaction?.returned_at ?? new Date().toISOString()
-				onEvent({
-					key: eventKey('return', loan.id, returnedAt),
-					kind: 'return',
-					at: returnedAt,
-					transaction_id: loan.id,
-					title: loan.title,
-					accession_number: loan.accession_number,
-					member_name: member.display_name,
-					member_number: member.member_number,
-					due_date: loan.due_date,
-					late_days: result.overdue_days ?? 0,
-					charge: result.late_charge
-						? chargeFromRow(result.late_charge, { title: loan.title, accession_number: loan.accession_number, due_date: loan.due_date, returned_at: returnedAt })
-						: null,
-					undoable_until: Date.now() + UNDO_WINDOW_MS,
-				})
-			} else {
-				const result = await renewItem({ transaction_id: loan.id, institution_id: institutionId ?? '' })
-				const renewedAt = result.transaction?.last_renewed_at ?? new Date().toISOString()
-				onEvent({
-					key: eventKey('renew', loan.id, renewedAt),
-					kind: 'renew',
-					at: renewedAt,
-					transaction_id: loan.id,
-					title: loan.title,
-					accession_number: loan.accession_number,
-					member_name: member.display_name,
-					member_number: member.member_number,
-					due_date: result.new_due_date ?? result.transaction?.due_date ?? null,
-					previous_due_date: result.previous_due_date ?? loan.due_date,
-					undoable_until: Date.now() + UNDO_WINDOW_MS,
-				})
-			}
-			onChanged()
-		} catch (err) {
-			toast({
-				title: '❌ ' + (err instanceof Error ? err.message : 'Action failed'),
-				variant: 'destructive',
-			})
-		} finally {
-			setBusyId(null)
-		}
-	}
 
 	if (loans.length === 0) {
 		return (
@@ -307,8 +267,8 @@ function MemberLoansPanel({
 
 			<div className="divide-y rounded-md border">
 				{loans.map(loan => {
-					// A late book's fine is cleared before it can go back or be
-					// renewed, so the two buttons wait and Waive / Paid come first.
+					// A late book's fine is cleared before it can go back, be renewed
+					// or let another book out, so Waive / Paid stay on the line.
 					const fineDue = loan.fine_due ?? loan.estimated_charge
 					const fineOwing = fineDue > 0 && !loan.fine_settled
 					return (
@@ -344,7 +304,7 @@ function MemberLoansPanel({
 
 						{fineOwing && (
 							<FineButtons
-								disabled={busyId === loan.id}
+								canBill={canBill}
 								onChoose={mode => setSettling({
 									mode,
 									transaction_id: loan.id,
@@ -359,33 +319,6 @@ function MemberLoansPanel({
 							/>
 						)}
 
-						<div className="flex items-center gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								className="h-10 text-xs sm:h-8"
-								disabled={busyId === loan.id || !loan.can_renew || fineOwing}
-								title={fineOwing ? 'Clear the fine first — Waive or Paid' : loan.can_renew ? 'Extend the due date' : 'Renewal limit reached'}
-								onClick={() => act(loan, 'renew')}
-							>
-								{busyId === loan.id
-									? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-									: <RotateCcw className="mr-1 h-3 w-3" />}
-								Renew
-							</Button>
-							<Button
-								size="sm"
-								className="h-10 text-xs sm:h-8"
-								disabled={busyId === loan.id || fineOwing}
-								title={fineOwing ? 'Clear the fine first — Waive or Paid' : undefined}
-								onClick={() => act(loan, 'return')}
-							>
-								{busyId === loan.id
-									? <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
-									: <CheckCircle className="mr-1 h-3 w-3" />}
-								Return
-							</Button>
-						</div>
 					</div>
 					)
 				})}
@@ -499,10 +432,13 @@ function MemberHoldsPanel({ holds, onChanged }: { holds: MemberHold[]; onChanged
 function MemberChargesPanel({
 	charges,
 	institutionId,
+	canBill,
 	onChanged,
 }: {
 	charges: MemberCharge[]
 	institutionId: string | null
+	/** Whether this member's fines can go on a MyJKKN bill — a learner, billing on. */
+	canBill?: boolean
 	onChanged: () => void
 }) {
 	const { toast } = useToast()
@@ -544,7 +480,7 @@ function MemberChargesPanel({
 							{charge.payment_status === 'partial' ? ` of ${rupees(charge.total_charge)}` : ''}
 						</Badge>
 
-						<FineButtons onChoose={mode => setSettling({ charge, mode })} />
+						<FineButtons canBill={canBill} onChoose={mode => setSettling({ charge, mode })} />
 					</div>
 				))}
 			</div>
@@ -990,9 +926,8 @@ function IssueTab({
 								loans={member.loans ?? []}
 								maxItems={limit}
 								institutionId={institutionId}
-								member={member}
+								canBill={member.can_bill_fines}
 								onChanged={refreshMember}
-								onEvent={onEvent}
 							/>
 							<MemberHoldsPanel
 								holds={member.holds ?? []}
@@ -1001,6 +936,7 @@ function IssueTab({
 							<MemberChargesPanel
 								charges={member.charges ?? []}
 								institutionId={institutionId}
+								canBill={member.can_bill_fines}
 								onChanged={refreshMember}
 							/>
 						</div>
@@ -1242,7 +1178,10 @@ function LoanFineBox({
 					{loanFineDue(transaction) < amount ? ` still to clear, of ${rupees(amount)}` : ''}.
 					{' '}Mark it Paid or Waived before the book can be {action}.
 				</span>
-				<FineButtons onChoose={mode => setSettling({ mode, transaction_id: transaction.id, charge: loanFine(transaction) })} />
+				<FineButtons
+					canBill={(transaction as { can_bill_fines?: boolean }).can_bill_fines}
+					onChoose={mode => setSettling({ mode, transaction_id: transaction.id, charge: loanFine(transaction) })}
+				/>
 			</div>
 
 			<SettleChargeDialog
@@ -1396,7 +1335,7 @@ function ReturnTab({
 					/>
 					<ScanFeedback busy={busy || returning} code={scan} error={transaction ? null : error} info={info} />
 					<p className="mt-2 text-[11px] text-muted-foreground">
-						A member card scanned here opens their card in Issue, with a Return button on every book they hold.
+						A member card scanned here opens their card in Issue, where everything they hold is listed. Books come back one scan at a time, here.
 					</p>
 				</CardContent>
 			</Card>
@@ -1530,7 +1469,7 @@ function RenewTab({
 					/>
 					<ScanFeedback busy={busy || renewing} code={scan} error={transaction ? null : error} info={info} />
 					<p className="mt-2 text-[11px] text-muted-foreground">
-						Renewing several for one member? Scan their card instead — it opens their card in Issue with a Renew button on every book they hold.
+						Renewing several for one member? Scan each book here in turn — the box stays open and the member card in Issue keeps up on its own.
 					</p>
 				</CardContent>
 			</Card>
@@ -1672,6 +1611,14 @@ export default function CirculationPage() {
 	const onEvent = useCallback((event: DeskEvent) => {
 		setEvents(prev => [event, ...prev.filter(e => e.key !== event.key)].slice(0, 200))
 		setLastResult(event)
+		// A book returned or renewed on its own tab changes what the member on
+		// the Issue card is holding, and all three tabs stay mounted — so
+		// without this the librarian switches back to Issue and still sees the
+		// book they just took in. The card is re-read the moment it happens,
+		// not when they look: by the time the tab is in front of them it is
+		// already right. An issue is left out because the Issue tab has just
+		// done it and has already put the new book on the card itself.
+		if (event.kind !== 'issue') setResyncNonce(n => n + 1)
 	}, [])
 
 	const redirect = useCallback((code: string, guess: 'member' | 'item' | 'loan') => {

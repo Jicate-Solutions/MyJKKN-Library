@@ -95,7 +95,7 @@ export async function renewItem(payload: LibRenewPayload): Promise<DeskRenewResu
  */
 export async function settleFine(payload: {
 	institution_id: string
-	mode: 'paid' | 'waive'
+	mode: 'paid' | 'waive' | 'bill'
 	transaction_id?: string
 	charge_id?: string
 	waiver_reason?: string

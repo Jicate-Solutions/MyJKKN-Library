@@ -86,6 +86,15 @@ export interface DeskMember {
 	items_on_loan?: number
 	max_items_allowed?: number | null
 	outstanding_charges?: number
+	/**
+	 * Whether a fine of theirs can go on a MyJKKN bill.
+	 *
+	 * True only for a learner, and only where this server has MyJKKN billing
+	 * and somebody has made the Library Fine category over there. The desk
+	 * offers Add to bill on this and nothing else, so the button is never shown
+	 * where pressing it could only fail.
+	 */
+	can_bill_fines?: boolean
 	category_name?: string
 	loans?: MemberLoan[]
 	holds?: MemberHold[]

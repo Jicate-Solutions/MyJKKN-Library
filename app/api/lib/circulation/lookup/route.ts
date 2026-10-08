@@ -8,6 +8,7 @@
 
 import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
+import { syncBilledForScope, billingReady } from '@/lib/library/myjkkn-billing'
 import { guardCollection } from '@/lib/auth/api-guard'
 import { getInstitutionSettings } from '@/lib/library/institution-settings'
 import { loanFineStatus } from '@/lib/library/late-fine'
@@ -69,6 +70,10 @@ export async function GET(request: Request) {
 		// be renewed once it has, so the desk has to know before it offers the
 		// button.
 		const today = new Date().toISOString().split('T')[0]
+		// A fine already paid on their MyJKKN bill is a fine this desk must not
+		// ask for again, so the bills are checked before the amount is worked
+		// out. It does nothing while no fine in this library is on a bill.
+		await syncBilledForScope(supabase, { institutionId: item.institution_id })
 		const { fine, due } = await loanFineStatus(supabase, loan, item.institution_id, settings, today)
 
 		return NextResponse.json({
@@ -84,6 +89,10 @@ export async function GET(request: Request) {
 			estimated_charge: fine.amount,
 			fine_due: due,
 			fine_settled: due <= 0,
+			// Whether this fine could go on their MyJKKN bill instead of the till
+			can_bill_fines:
+				(loan.member as { member_category?: string } | null)?.member_category === 'learner'
+				&& (await billingReady()),
 		})
 	} catch (error) {
 		console.error('Unexpected error looking up loan:', error)
