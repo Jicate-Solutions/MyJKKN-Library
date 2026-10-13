@@ -73,6 +73,7 @@ export const PAGE_CATALOGUE: CatalogueGroup[] = [
 		pages: [
 			{ title: 'Catalogue', url: '/registry' },
 			{ title: 'Missing Books', url: '/registry/missing' },
+			{ title: 'Stock Check', url: '/registry/stock-check' },
 			{ title: 'Department Libraries', url: '/departments' },
 			{ title: 'Members', url: '/members' },
 		],
@@ -239,12 +240,24 @@ export function pageForPath(pathname: string): CataloguePage | null {
  * admin, who is never restricted. A path outside the catalogue is allowed: a
  * page added to the application but not yet listed here should appear as it
  * always did, not disappear.
+ *
+ * `only` turns that whole arrangement around, for somebody who is not library
+ * staff at all — a stock check helper let in on a temporary grant. Then the
+ * list is the complete answer: the locks below do not apply, the dashboard
+ * nobody else can lose is not theirs, and a path this file has never heard of
+ * is closed rather than open. Nothing else in the library passes it.
  */
 export function canOpenPath(
 	role: string | null | undefined,
 	pathname: string,
-	allowedPages: string[] | null
+	allowedPages: string[] | null,
+	only = false
 ): boolean {
+	if (only) {
+		const wanted = pageForPath(pathname)
+		return Boolean(wanted && (allowedPages ?? []).includes(wanted.url))
+	}
+
 	if (role === 'super_admin') return true
 
 	const page = pageForPath(pathname)

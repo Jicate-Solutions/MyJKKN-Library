@@ -16,7 +16,8 @@
  * not strangers, and the rest of their menu is still theirs.
  */
 
-import { usePathname } from 'next/navigation'
+import { useEffect } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { canOpenPath, pageForPath } from '@/lib/auth/role-pages'
@@ -27,14 +28,29 @@ import { Lock, ArrowLeft } from 'lucide-react'
 
 export function RolePageGuard({ children }: { children: React.ReactNode }) {
 	const pathname = usePathname()
-	const { role, isReady, pages } = useLibraryRole()
+	const router = useRouter()
+	const { role, isReady, pages, limitedToPages } = useLibraryRole()
+
+	// Somebody on a temporary grant for one job — a stock check helper. Their
+	// page is the only one they have, so signing in has to land them on it:
+	// everyone else arrives at the dashboard, and for them that is a locked
+	// door with nothing behind it to go back to.
+	const theirOnePage = limitedToPages ? (pages ?? [])[0] ?? null : null
+	const shutOut = isReady && !canOpenPath(role, pathname, pages, limitedToPages)
+
+	useEffect(() => {
+		if (shutOut && theirOnePage) router.replace(theirOnePage)
+	}, [shutOut, theirOnePage, router])
 
 	// Until the answer is in, draw the page. The layout above this one already
 	// holds everything back until access itself is settled, so there is nothing
 	// on screen yet to flash.
 	if (!isReady) return <>{children}</>
 
-	if (canOpenPath(role, pathname, pages)) return <>{children}</>
+	if (!shutOut) return <>{children}</>
+
+	// On the way to their own page; the refusal below would only flash past
+	if (theirOnePage) return null
 
 	const page = pageForPath(pathname)
 	const roleLabel = role ? ROLE_LABEL[role] : 'Your role'

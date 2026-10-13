@@ -382,7 +382,12 @@ async function walkAllStaff(): Promise<MyjkknStaff[]> {
 
 // ── Which of our colleges a MyJKKN institution is ───────────────────────────
 
-let collegeMap: { byMyjkknId: Map<string, string>; expiresAt: number } | null = null
+let collegeMap: {
+	byMyjkknId: Map<string, string>
+	/** Our own code — COP, CNR, DCH — upper case, as the grant list writes it. */
+	byCode: Map<string, string>
+	expiresAt: number
+} | null = null
 
 /** A college's MyJKKN institutions barely change; an hour is well inside that. */
 const COLLEGE_MAP_TTL_MS = 60 * 60 * 1000
@@ -396,21 +401,41 @@ const COLLEGE_MAP_TTL_MS = 60 * 60 * 1000
  */
 export async function collegeForMyjkknInstitution(myjkknInstitutionId: string | null): Promise<string | null> {
 	if (!myjkknInstitutionId) return null
+	return (await colleges()).byMyjkknId.get(myjkknInstitutionId) ?? null
+}
 
-	if (!collegeMap || collegeMap.expiresAt <= Date.now()) {
-		const supabase = getSupabaseServer()
-		const { data } = await supabase.from('institutions').select('id, myjkkn_institution_ids')
+/**
+ * Our college id for a code — 'CNR', 'COP'.
+ *
+ * Read only for a temporary access grant, which names a college by the code a
+ * person would recognise rather than by a UUID nobody can check at a glance.
+ * Unknown code gives null, and the caller refuses them rather than guessing.
+ */
+export async function collegeForCode(code: string | null): Promise<string | null> {
+	const wanted = (code ?? '').trim().toUpperCase()
+	if (!wanted) return null
+	return (await colleges()).byCode.get(wanted) ?? null
+}
 
-		const byMyjkknId = new Map<string, string>()
-		for (const row of data ?? []) {
-			const ids: string[] = Array.isArray(row.myjkkn_institution_ids) ? row.myjkkn_institution_ids : []
-			for (const id of ids) byMyjkknId.set(id, row.id as string)
-		}
+/** The two lookups above, from one read of our own `institutions` table. */
+async function colleges(): Promise<NonNullable<typeof collegeMap>> {
+	if (collegeMap && collegeMap.expiresAt > Date.now()) return collegeMap
 
-		collegeMap = { byMyjkknId, expiresAt: Date.now() + COLLEGE_MAP_TTL_MS }
+	const supabase = getSupabaseServer()
+	const { data } = await supabase.from('institutions').select('id, institution_code, myjkkn_institution_ids')
+
+	const byMyjkknId = new Map<string, string>()
+	const byCode = new Map<string, string>()
+	for (const row of data ?? []) {
+		const ids: string[] = Array.isArray(row.myjkkn_institution_ids) ? row.myjkkn_institution_ids : []
+		for (const id of ids) byMyjkknId.set(id, row.id as string)
+
+		const code = (row.institution_code as string | null)?.trim().toUpperCase()
+		if (code) byCode.set(code, row.id as string)
 	}
 
-	return collegeMap.byMyjkknId.get(myjkknInstitutionId) ?? null
+	collegeMap = { byMyjkknId, byCode, expiresAt: Date.now() + COLLEGE_MAP_TTL_MS }
+	return collegeMap
 }
 
 /** True when MyJKKN can be reached at all. */

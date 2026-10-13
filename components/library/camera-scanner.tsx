@@ -38,9 +38,15 @@
  * `getUserMedia` needs a secure context: the live site over https, or
  * localhost. On plain http over a LAN address the browser hides the camera
  * altogether, so that is said plainly rather than looking broken.
+ *
+ * One scan closes the camera, because issuing a book is one book. `continuous`
+ * is the other way round, for counting a shelf at a stock check: the camera is
+ * opened once, every code is handed over as it is read, a code already read is
+ * quietly dropped rather than sent twice, and the person closes it when the
+ * shelf is done.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import {
 	Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
@@ -86,7 +92,11 @@ async function nativeDetector(): Promise<NativeDetector | null> {
 }
 
 interface CameraScannerProps {
-	/** What was read. Called once per scan, with the camera already stopped. */
+	/**
+	 * What was read. Called once per scan, with the camera already stopped —
+	 * unless `continuous` is set, when it is called for each new code and the
+	 * picture carries on.
+	 */
 	onScan: (value: string) => void
 	disabled?: boolean
 	/** Said above the picture, so the person knows what to point it at. */
@@ -94,6 +104,22 @@ interface CameraScannerProps {
 	className?: string
 	/** Shown on the button next to the icon, on wider screens. */
 	buttonText?: string
+	/**
+	 * Keep scanning until the person closes it.
+	 *
+	 * For counting a shelf rather than issuing one book: the camera is opened
+	 * once, every code it reads is handed over straight away, and it is put
+	 * down when the person says so. A code already read since the camera was
+	 * opened is NOT sent again — the lens keeps coming back to books already
+	 * counted, and nobody wants that journey made twice.
+	 */
+	continuous?: boolean
+	/**
+	 * Drawn under the picture while scanning. The camera fills a phone's
+	 * screen, so whatever the page would have shown about the last few scans
+	 * has to be shown in here instead, or the person is counting blind.
+	 */
+	feed?: ReactNode
 }
 
 export function CameraScanner({
@@ -102,6 +128,8 @@ export function CameraScanner({
 	label = 'Point the camera at the QR code or barcode',
 	className,
 	buttonText,
+	continuous = false,
+	feed,
 }: CameraScannerProps) {
 	const [open, setOpen] = useState(false)
 	const [starting, setStarting] = useState(false)
@@ -130,6 +158,25 @@ export function CameraScanner({
 	 * stops the frames already behind it from firing a second lookup.
 	 */
 	const doneRef = useRef(false)
+
+	/**
+	 * Every code read since the camera was opened, while scanning on.
+	 *
+	 * The reader fires several times a second at whatever is in front of it, so
+	 * without this one book held still would be sent twenty times. It is also
+	 * the answer to a book scanned again on purpose: it is simply not sent.
+	 */
+	const seenRef = useRef<Set<string>>(new Set())
+	const [readCount, setReadCount] = useState(0)
+	/** The code just read that had already been counted, shown for a moment. */
+	const [repeated, setRepeated] = useState<string | null>(null)
+
+	/**
+	 * The latest `onScan`, so the reading loop — which was started once, when
+	 * the camera opened — never calls back into a stale version of the page.
+	 */
+	const onScanRef = useRef(onScan)
+	useEffect(() => { onScanRef.current = onScan }, [onScan])
 
 	/** Everything the camera holds, put down. Safe to call more than once. */
 	const release = useCallback(() => {
@@ -162,12 +209,35 @@ export function CameraScanner({
 	}, [open])
 
 	const finish = useCallback((value: string) => {
+		// Counting a shelf: hand it over and keep the picture. The camera is put
+		// down by the person, not by the first book it happens to read.
+		if (continuous) {
+			if (seenRef.current.has(value)) {
+				setRepeated(value)
+				return
+			}
+			seenRef.current.add(value)
+			setReadCount(seenRef.current.size)
+			setRepeated(null)
+			// A phone held against a shelf is not being watched closely
+			try { navigator.vibrate?.(30) } catch { /* not every device has it */ }
+			onScanRef.current(value)
+			return
+		}
+
 		if (doneRef.current) return
 		doneRef.current = true
 		release()
 		setOpen(false)
-		onScan(value)
-	}, [onScan, release])
+		onScanRef.current(value)
+	}, [continuous, release])
+
+	// The "already counted" note is a flash, not a state to get stuck in
+	useEffect(() => {
+		if (!repeated) return
+		const timer = setTimeout(() => setRepeated(null), 1_500)
+		return () => clearTimeout(timer)
+	}, [repeated])
 
 	/** Starts the picture and keeps reading until something decodes. */
 	const start = useCallback(async () => {
@@ -239,6 +309,7 @@ export function CameraScanner({
 
 				const look = async () => {
 					if (stopped || doneRef.current) return
+					let justRead = false
 					try {
 						// Before the first frame has arrived the picture is 0×0, and
 						// the detector refuses it
@@ -246,15 +317,22 @@ export function CameraScanner({
 							const codes = await native.detect(video)
 							const hit = codes.find(code => code.rawValue?.trim())
 							if (hit) {
-								stop()
+								// Counting a shelf: the picture stays, and the next look
+								// waits a little longer so the book being lifted away is
+								// not read a second time on its way out of shot.
+								if (!continuous) {
+									stop()
+									finish(hit.rawValue.trim())
+									return
+								}
+								justRead = true
 								finish(hit.rawValue.trim())
-								return
 							}
 						}
 					} catch {
 						// A frame it could not read — the usual case, several times a second
 					}
-					if (!stopped) window.setTimeout(look, 150)
+					if (!stopped) window.setTimeout(look, justRead ? 400 : 150)
 				}
 				void look()
 			} else {
@@ -288,7 +366,11 @@ export function CameraScanner({
 						if (!result) return
 						const text = result.getText().trim()
 						if (!text) return
-						ctrl.stop()
+						// Counting a shelf: every code is handed over and the reader
+						// is left running; a code already counted is dropped inside
+						// `finish`, which is what stops the same book firing on every
+						// frame it stays in shot for.
+						if (!continuous) ctrl.stop()
 						finish(text)
 					}
 				)
@@ -324,7 +406,7 @@ export function CameraScanner({
 		} finally {
 			setStarting(false)
 		}
-	}, [finish, release])
+	}, [finish, release, continuous])
 
 	// Opening starts it, closing puts it down, and a switch restarts it. Nothing
 	// else does, so the picture is never taken down mid-scan by a render.
@@ -377,7 +459,14 @@ export function CameraScanner({
 						    gate, which is the other button that starts a scan. */}
 						<Button
 							type="button"
-							onClick={() => setOpen(true)}
+							onClick={() => {
+								// A fresh session each time it is opened — and only here,
+								// so switching camera or torch mid-shelf keeps the count
+								seenRef.current = new Set()
+								setReadCount(0)
+								setRepeated(null)
+								setOpen(true)
+							}}
 							disabled={disabled}
 							className={cn(
 								'shrink-0 bg-brand-green text-white hover:bg-brand-green-600',
@@ -397,7 +486,14 @@ export function CameraScanner({
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="sm:max-w-[440px]">
 					<DialogHeader>
-						<DialogTitle>Scan with the camera</DialogTitle>
+						<DialogTitle>
+							{continuous ? 'Keep scanning' : 'Scan with the camera'}
+							{continuous && readCount > 0 && (
+								<span className="ml-2 text-sm font-normal text-brand-green dark:text-brand-green-400">
+									{readCount} scanned
+								</span>
+							)}
+						</DialogTitle>
 						<DialogDescription>{label}</DialogDescription>
 					</DialogHeader>
 
@@ -429,7 +525,20 @@ export function CameraScanner({
 									<Loader2 className="h-6 w-6 animate-spin text-white" />
 								</div>
 							)}
+
+							{/* A book the camera has already counted this time round */}
+							{continuous && repeated && (
+								<div className="absolute inset-x-0 bottom-0 bg-amber-500/90 px-3 py-1.5 text-center text-xs font-medium text-white">
+									{repeated} — already scanned
+								</div>
+							)}
 						</div>
+					)}
+
+					{/* What the page would have shown, shown here: on a phone the
+					    camera is the whole screen. */}
+					{continuous && feed && !problem && (
+						<div className="max-h-[150px] overflow-y-auto rounded-md border p-2">{feed}</div>
 					)}
 
 					{zoomRange && !problem && (
@@ -463,9 +572,20 @@ export function CameraScanner({
 								Switch camera
 							</Button>
 						)}
-						<Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={() => setOpen(false)}>
-							Close
-						</Button>
+						{continuous ? (
+							<Button
+								type="button"
+								size="sm"
+								className="ml-auto bg-brand-green text-white hover:bg-brand-green-600 dark:bg-brand-green-400 dark:text-brand-green-900 dark:hover:bg-brand-green-500"
+								onClick={() => setOpen(false)}
+							>
+								Done{readCount > 0 ? ` (${readCount})` : ''}
+							</Button>
+						) : (
+							<Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={() => setOpen(false)}>
+								Close
+							</Button>
+						)}
 					</div>
 				</DialogContent>
 			</Dialog>

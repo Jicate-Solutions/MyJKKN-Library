@@ -49,12 +49,13 @@ import {
 	staffByEmail,
 	staffById,
 	collegeForMyjkknInstitution,
+	collegeForCode,
 	invalidateStaff,
 	type MyjkknStaff,
 } from './myjkkn-staff'
 import { verifyAccessToken } from './supabase-auth-server'
 import { ACCESS_TOKEN_COOKIE } from './supabase-auth'
-import { grantFor, idForGrantedEmail } from './role-grants'
+import { grantFor, idForGrantedEmail, STOCK_CHECK_PAGES } from './role-grants'
 
 export type { LibraryRole } from './library-roles'
 export { LIBRARY_ROLES, ROLE_LABEL } from './library-roles'
@@ -78,6 +79,14 @@ export interface Caller {
 	 * keyboard, so an action taken during impersonation stays traceable.
 	 */
 	impersonatedBy?: { userId: string; email: string } | null
+	/**
+	 * Set only for somebody let in on a temporary grant written for one job —
+	 * today, a stock check helper. It is the complete list of pages they may
+	 * open, and it is read as a limit rather than as a preference: the menu, the
+	 * page guard and the API guard all shut everything else, including the
+	 * dashboard that nobody else can lose. Null for all library staff.
+	 */
+	onlyPages?: string[] | null
 }
 
 export interface AccessResult {
@@ -144,7 +153,13 @@ function readToken(request: Request): string | null {
  */
 async function callerFromStaff(
 	staff: MyjkknStaff,
-	extraRoleKeys: string[] = []
+	extraRoleKeys: string[] = [],
+	/**
+	 * What a temporary grant added, for somebody MyJKKN has no staff record for:
+	 * the college it pinned them to, and the pages it shut them into. Not passed
+	 * for anybody else, and never read over a staff record's own college.
+	 */
+	granted: { institutionId?: string | null; onlyPages?: string[] | null } = {}
 ): Promise<Identity> {
 	const allRoleKeys = [...new Set([...staff.roleKeys, ...extraRoleKeys.map(String)])]
 
@@ -179,7 +194,7 @@ async function callerFromStaff(
 	const spansEveryCollege = role === 'super_admin' || role === 'library_admin'
 	const institutionId = spansEveryCollege
 		? null
-		: await collegeForMyjkknInstitution(staff.myjkknInstitutionId)
+		: (await collegeForMyjkknInstitution(staff.myjkknInstitutionId)) ?? granted.institutionId ?? null
 
 	// A librarian must belong to a college; without one there is nothing for
 	// them to run, and letting them through unscoped would show them every
@@ -207,6 +222,7 @@ async function callerFromStaff(
 			institutionId,
 			isSuperAdmin: role === 'super_admin',
 			impersonatedBy: null,
+			onlyPages: granted.onlyPages ?? null,
 		},
 	}
 }
@@ -427,15 +443,30 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 	if (!real.ok && (real.reason === 'not_staff' || real.reason === 'role_not_allowed')) {
 		const grant = grantFor(identity.email)
 		if (grant) {
-			const granted = await callerFromStaff({
-				id: staff?.id ?? idForGrantedEmail(identity.email),
-				email: identity.email,
-				fullName: staff?.fullName ?? identity.fullName,
-				staffCode: staff?.staffCode ?? null,
-				roleKeys: [grant.role],
-				myjkknInstitutionId: staff?.myjkknInstitutionId ?? null,
-				isActive: true,
-			})
+			// The college the grant names, for somebody with no staff record to say
+			// it. A staff record still wins: `callerFromStaff` reads this only when
+			// MyJKKN gave it nothing.
+			const grantedCollege = grant.collegeCode ? await collegeForCode(grant.collegeCode) : null
+			if (grant.collegeCode && !grantedCollege) {
+				console.warn(`[access-grant] ${grant.email} names college "${grant.collegeCode}", which is not a library here`)
+			}
+
+			const granted = await callerFromStaff(
+				{
+					id: staff?.id ?? idForGrantedEmail(identity.email),
+					email: identity.email,
+					fullName: staff?.fullName ?? identity.fullName,
+					staffCode: staff?.staffCode ?? null,
+					roleKeys: [grant.role],
+					myjkknInstitutionId: staff?.myjkknInstitutionId ?? null,
+					isActive: true,
+				},
+				[],
+				{
+					institutionId: grantedCollege,
+					onlyPages: grant.scanOnly ? STOCK_CHECK_PAGES : null,
+				}
+			)
 			if (granted.ok) real = granted
 		}
 	}

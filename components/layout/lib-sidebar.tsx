@@ -29,6 +29,7 @@ import {
 	LogOut,
 	Crown,
 	ScanLine,
+	ClipboardCheck,
 	SlidersHorizontal,
 	Layers,
 	ScrollText,
@@ -99,6 +100,7 @@ export const navGroups: NavGroup[] = [
 		items: [
 			{ title: 'Catalogue', url: '/registry', icon: BookOpen },
 			{ title: 'Missing Books', url: '/registry/missing', icon: BookX },
+			{ title: 'Stock Check', url: '/registry/stock-check', icon: ClipboardCheck },
 			{ title: 'Department Libraries', url: '/departments', icon: Building2 },
 			{ title: 'Members', url: '/members', icon: Users },
 		],
@@ -193,12 +195,17 @@ export const navGroups: NavGroup[] = [
 export function visibleNavGroups(
 	role: string | null | undefined,
 	isMember: boolean,
-	allowedPages: string[] | null = null
+	allowedPages: string[] | null = null,
+	/**
+	 * Set for somebody on a temporary grant for one job — a stock check helper.
+	 * `allowedPages` is then the whole menu they get, dashboard included.
+	 */
+	onlyAllowedPages = false
 ): NavGroup[] {
 	const withoutRestricted = navGroups
 		.map(group => ({
 			...group,
-			items: group.items.filter(i => canOpenPath(role, i.url, allowedPages)),
+			items: group.items.filter(i => canOpenPath(role, i.url, allowedPages, onlyAllowedPages)),
 		}))
 		.filter(group => group.items.length > 0)
 
@@ -212,7 +219,7 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const pathname = usePathname()
 	const { state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
-	const { isMember, role, pages } = useLibraryRole()
+	const { isMember, role, pages, limitedToPages } = useLibraryRole()
 	const { logout } = useAuth()
 
 	// The foot of the sidebar is Log out (it was Collapse until 8 Sep 2026; the
@@ -233,8 +240,8 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	}
 
 	const visibleGroups = React.useMemo(
-		() => visibleNavGroups(role, isMember, pages),
-		[isMember, role, pages]
+		() => visibleNavGroups(role, isMember, pages, limitedToPages),
+		[isMember, role, pages, limitedToPages]
 	)
 
 	const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>(() => {

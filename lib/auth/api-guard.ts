@@ -24,6 +24,7 @@ import { getCaller, resolveInstitutionScope, type Caller } from './server-access
 import { rankAtLeast } from './library-roles'
 import { recordImpersonatedAction } from './impersonation-log'
 import { isLibrarianWrite, LIBRARIAN_ONLY_MESSAGE } from './librarian-only'
+import { limitedHelperAllows, LIMITED_HELPER_MESSAGE } from './role-grants'
 
 export type GuardResult =
 	| { ok: true; caller: Caller; institutionId: string | null }
@@ -48,6 +49,21 @@ function belowLibrarian(caller: Caller, request: Request): { ok: false; response
 	if (!isLibrarianWrite(request.method, new URL(request.url).pathname)) return null
 	if (caller.isSuperAdmin || rankAtLeast(caller.role, 'librarian')) return null
 	return deny(LIBRARIAN_ONLY_MESSAGE, 403)
+}
+
+/**
+ * Somebody on a temporary grant written for one job, asking for another.
+ *
+ * A stock check helper is not library staff — they are a few people counting
+ * shelves for a week. Their menu holds one page, but hiding a page has never
+ * shut a route, so the same limit is applied here: what the Stock Check screen
+ * reads, one scan to write, nothing else. Null for everybody else, so no
+ * library role is touched by this.
+ */
+function outsideTheirOneJob(caller: Caller, request: Request): { ok: false; response: NextResponse } | null {
+	if (!caller.onlyPages) return null
+	if (limitedHelperAllows(request.method, new URL(request.url).pathname)) return null
+	return deny(LIMITED_HELPER_MESSAGE, 403)
 }
 
 /**
@@ -87,7 +103,7 @@ export async function guardCollection(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const refused = belowLibrarian(caller, request)
+	const refused = belowLibrarian(caller, request) ?? outsideTheirOneJob(caller, request)
 	if (refused) return refused
 
 
@@ -109,7 +125,7 @@ export async function guardWrite(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const refused = belowLibrarian(caller, request)
+	const refused = belowLibrarian(caller, request) ?? outsideTheirOneJob(caller, request)
 	if (refused) return refused
 
 
@@ -139,7 +155,7 @@ export async function guardRecord(
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const refused = belowLibrarian(caller, request)
+	const refused = belowLibrarian(caller, request) ?? outsideTheirOneJob(caller, request)
 	if (refused) return refused
 
 
@@ -191,7 +207,7 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 	const { caller, error, status } = await getCaller(request)
 	if (!caller) return deny(error ?? 'Not signed in', status ?? 401)
 
-	const refused = belowLibrarian(caller, request)
+	const refused = belowLibrarian(caller, request) ?? outsideTheirOneJob(caller, request)
 	if (refused) return refused
 
 

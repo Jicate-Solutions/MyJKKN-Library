@@ -45,6 +45,12 @@ export interface LibraryIdentity {
 	 * being in yet.
 	 */
 	pages: string[] | null
+	/**
+	 * True for somebody let in on a temporary grant for one job — a stock check
+	 * helper. `pages` is then the complete list of what they may open, and the
+	 * menu and the page guard read it as a limit rather than a preference.
+	 */
+	limitedToPages: boolean
 }
 
 const EMPTY: LibraryIdentity = {
@@ -57,6 +63,7 @@ const EMPTY: LibraryIdentity = {
 	myjkknRoles: [],
 	libraryRoles: [],
 	pages: null,
+	limitedToPages: false,
 }
 
 let cached: LibraryIdentity | null = null
@@ -84,6 +91,7 @@ async function loadIdentity(): Promise<LibraryIdentity> {
 						myjkknRoles: json.myjkkn_roles ?? [],
 						libraryRoles: json.library_roles ?? [],
 						pages: Array.isArray(json.pages) ? json.pages : null,
+						limitedToPages: json.limited_to_pages === true,
 					}
 					: EMPTY
 				return cached
@@ -124,6 +132,7 @@ export function useLibraryRole() {
 		myjkknRoles: identity.myjkknRoles,
 		libraryRoles: identity.libraryRoles,
 		pages: identity.pages,
+		limitedToPages: identity.limitedToPages,
 		/**
 		 * Kept so the sidebar's signature does not have to change. Nobody is a
 		 * `member` any more — borrowers do not sign in — so this is always false.

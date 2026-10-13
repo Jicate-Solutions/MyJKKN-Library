@@ -49,17 +49,25 @@ export async function GET(request: Request) {
 	// super admin, who is never restricted. Answered here rather than from a
 	// route of its own because the menu, the page guard and the mobile navbar all
 	// want it and this reply is already fetched once per tab and cached.
-	const pages = await allowedPagesFor(caller.role)
+	// Somebody on a temporary grant for one job carries their own short list,
+	// and it is the whole answer — a role's configured pages are not consulted,
+	// so nothing a super admin ticks for assistant librarians widens it.
+	const pages = caller.onlyPages ?? await allowedPagesFor(caller.role)
 
 	// Their college's roll is started on the way in, not awaited: the members
 	// page and the desk then find it in hand instead of paying MyJKKN's walk on
 	// their first visit. A super admin has no one college, so nothing is warmed.
-	if (caller.institutionId) warmCollegeDirectory(caller.institutionId)
+	// A helper who only scans shelves never reads a member, so nothing is
+	// fetched from MyJKKN for them at all.
+	if (caller.institutionId && !caller.onlyPages) warmCollegeDirectory(caller.institutionId)
 
 	return NextResponse.json({
 		allowed: true,
 		role: caller.role,
 		pages,
+		// True for a stock check helper: the menu shows their one page, and the
+		// screens hide what they cannot do rather than offering it and refusing.
+		limited_to_pages: Boolean(caller.onlyPages),
 		myjkkn_roles: caller.myjkknRoles,
 		library_roles: LIBRARY_ROLES,
 		institution_id: caller.institutionId,

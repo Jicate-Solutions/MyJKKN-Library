@@ -17,7 +17,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { verifyAccessToken } from '@/lib/auth/supabase-auth-server'
 import { ACCESS_TOKEN_COOKIE } from '@/lib/auth/supabase-auth'
-import { staffByEmail, collegeForMyjkknInstitution } from '@/lib/auth/myjkkn-staff'
+import { staffByEmail, collegeForMyjkknInstitution, collegeForCode } from '@/lib/auth/myjkkn-staff'
 import { permissionsForRoles } from '@/lib/auth/role-permissions'
 import { grantFor } from '@/lib/auth/role-grants'
 import { highestLibraryRole } from '@/lib/auth/library-roles'
@@ -95,9 +95,15 @@ export async function GET(request: Request) {
 	const role = highestLibraryRole(roleKeys)
 	const isSuperAdmin = role === 'super_admin'
 	const spansEveryCollege = isSuperAdmin || role === 'library_admin'
-	const institutionId = spansEveryCollege
+	// A temporary grant may name the college itself, for somebody MyJKKN has no
+	// staff record for — a stock check helper. The staff record still wins; this
+	// is only read when MyJKKN gave nothing, exactly as the access check does.
+	let institutionId = spansEveryCollege
 		? null
 		: await collegeForMyjkknInstitution(staff?.myjkknInstitutionId ?? null)
+	if (!spansEveryCollege && !institutionId && grant?.collegeCode) {
+		institutionId = await collegeForCode(grant.collegeCode)
+	}
 
 	const [permissions, institution] = await Promise.all([
 		isSuperAdmin ? Promise.resolve([] as string[]) : permissionsForRoles(roleKeys),
