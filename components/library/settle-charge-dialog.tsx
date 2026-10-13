@@ -212,7 +212,13 @@ export function SettleChargeDialog({
 						</div>
 					) : (
 						<div className="space-y-2">
-							<Label htmlFor="fine-reason">Why</Label>
+							{/* Required, and said so before the librarian types rather than
+							    after they press the button. Money let off is the one thing
+							    here nobody can reconstruct later: without the reason on the
+							    record there is no answer to "why was this waived". */}
+							<Label htmlFor="fine-reason">
+								Why <span className="text-destructive">*</span>
+							</Label>
 							<Textarea
 								id="fine-reason"
 								value={reason}
@@ -220,9 +226,11 @@ export function SettleChargeDialog({
 								placeholder="e.g. Library was closed for three of those days"
 								rows={3}
 								autoFocus
+								required
+								aria-required="true"
 							/>
 							<p className="text-xs text-muted-foreground">
-								The whole {amount} is let off and the fine is cleared.
+								A reason is needed. The whole {amount} is let off and the fine is cleared.
 							</p>
 						</div>
 					)}
@@ -239,7 +247,14 @@ export function SettleChargeDialog({
 					<Button variant="outline" onClick={onClose} disabled={saving}>
 						{settling?.mode === 'paid' || settling?.mode === 'bill' ? 'No' : 'Cancel'}
 					</Button>
-					<Button onClick={submit} disabled={saving} autoFocus={settling?.mode !== 'waive'}>
+					{/* Waive waits for its reason: the button cannot be pressed on an
+					    empty box, so the refusal is visible before the click, not after
+					    it. Paid and Add to bill ask nothing and stay ready. */}
+					<Button
+						onClick={submit}
+						disabled={saving || (settling?.mode === 'waive' && !reason.trim())}
+						autoFocus={settling?.mode !== 'waive'}
+					>
 						{saving
 							? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</>
 							: settling?.mode === 'paid'
