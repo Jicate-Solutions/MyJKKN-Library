@@ -42,6 +42,16 @@ import { setDelinquent } from '@/lib/library/borrower'
 import { loanFineStatus } from '@/lib/library/late-fine'
 import { raiseFineBill, billingReady } from '@/lib/library/myjkkn-billing'
 
+/**
+ * A settle that failed only because the waiver-letter columns are not there.
+ *
+ * Migrations sit unrun for weeks here, so the letter must never be what stops
+ * a fine being let off: the librarian is told which migration to run, and can
+ * waive without a letter in the meantime.
+ */
+const missingWaiverColumns = (error: { code?: string; message?: string } | null) =>
+	error?.code === '42703' && /waiver_document/.test(error?.message ?? '')
+
 type Mode = 'paid' | 'waive' | 'bill'
 
 /** A member who owes nothing any more stops being marked as owing. */
@@ -66,6 +76,12 @@ export async function POST(request: Request) {
 			? body.mode
 			: null
 		const reason = String(body.waiver_reason ?? '').trim()
+		// The principal's signed letter, if one was uploaded. Optional: a small
+		// fine let off at the counter needs no signature, and demanding one
+		// would only teach people to upload anything to get past the button.
+		// The file is already in the bucket by now — see waiver-document.
+		const docPath = String(body.waiver_document_path ?? '').trim() || null
+		const docName = String(body.waiver_document_name ?? '').trim() || null
 		// Who cleared it. collected_by and waiver_approved_by are uuid columns, so
 		// it is the signed-in staff member's id - their MyJKKN staff id, or their
 		// sign-in id - and never their name: a name there made Postgres refuse
@@ -90,6 +106,15 @@ export async function POST(request: Request) {
 		if (mode === 'waive' && !reason) {
 			return NextResponse.json({ error: 'Say why the fine is being let off' }, { status: 400 })
 		}
+		// A letter is stored under the college that uploaded it. Checking the
+		// path here stops one college's waiver from pointing at another's
+		// letter, however the path reached this request.
+		if (docPath && !docPath.startsWith(`${institutionId}/`)) {
+			return NextResponse.json({ error: 'That letter belongs to another college' }, { status: 400 })
+		}
+		if (docPath && mode !== 'waive') {
+			return NextResponse.json({ error: 'A letter only belongs with a waiver' }, { status: 400 })
+		}
 		if (!body.transaction_id && !body.charge_id) {
 			return NextResponse.json({ error: 'Name the loan or the charge to settle' }, { status: 400 })
 		}
@@ -108,6 +133,10 @@ export async function POST(request: Request) {
 				waiver_amount: Math.min(total, alreadyWaived),
 				waiver_reason: reason,
 				waiver_approved_by: who,
+				// Left out entirely when no letter was uploaded, so a library
+				// whose migration is still waiting settles exactly as before
+				// instead of failing on a column that does not exist yet.
+				...(docPath ? { waiver_document_path: docPath, waiver_document_name: docName } : {}),
 			}
 			// Billed: still owed, and owed in MyJKKN. Nothing is marked paid
 			// here — the bill below carries the money, and this row learns it is
@@ -246,6 +275,12 @@ export async function POST(request: Request) {
 				.single()
 
 			if (error) {
+				if (missingWaiverColumns(error)) {
+					return NextResponse.json(
+						{ error: 'Waiver letters are not set up yet — run migration 20261013_lib_waiver_document.sql, or waive without a letter' },
+						{ status: 503 }
+					)
+				}
 				console.error('Error settling a late charge at the desk:', error)
 				return NextResponse.json({ error: 'Could not settle the fine' }, { status: 500 })
 			}
@@ -308,6 +343,12 @@ export async function POST(request: Request) {
 			.single()
 
 		if (error) {
+			if (missingWaiverColumns(error)) {
+				return NextResponse.json(
+					{ error: 'Waiver letters are not set up yet — run migration 20261013_lib_waiver_document.sql, or waive without a letter' },
+					{ status: 503 }
+				)
+			}
 			console.error('Error recording a late fine at the desk:', error)
 			return NextResponse.json({ error: 'Could not settle the fine' }, { status: 500 })
 		}

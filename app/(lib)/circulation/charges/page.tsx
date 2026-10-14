@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
@@ -22,9 +22,9 @@ import {
 import {
 	IndianRupee, AlertCircle, CheckCircle2, MinusCircle,
 	MoreHorizontal, Undo2, Search, RefreshCw,
-	ChevronLeft, ChevronRight, Loader2, ReceiptIndianRupee,
+	ChevronLeft, ChevronRight, Loader2, ReceiptIndianRupee, Paperclip, X,
 } from 'lucide-react'
-import { fetchCharges, waiveCharge } from '@/services/library/lib-late-charges-service'
+import { fetchCharges, waiveCharge, uploadWaiverLetter, waiverLetterUrl } from '@/services/library/lib-late-charges-service'
 import { settleFine } from '@/services/library/lib-circulation-service'
 import type { LibLateCharge, LibChargePaymentStatus } from '@/types/lib'
 
@@ -74,6 +74,11 @@ export default function ChargesPage() {
 	const [waiverReason, setWaiverReason] = useState('')
 	const [waiverAmount, setWaiverAmount] = useState('')
 	const [processing, setProcessing] = useState(false)
+	/** The principal's signed letter, chosen but not yet sent. Optional. */
+	const [letter, setLetter] = useState<File | null>(null)
+	const letterRef = useRef<HTMLInputElement>(null)
+	/** The waiver whose letter is being fetched, so only its link shows a spinner. */
+	const [openingLetter, setOpeningLetter] = useState<string | null>(null)
 
 	const fetchData = useCallback(async () => {
 		if (!isReady || !institutionId) return
@@ -194,6 +199,8 @@ export default function ChargesPage() {
 		setActionMode('waive')
 		setWaiverReason('')
 		setWaiverAmount(String(c.net_payable))
+		setLetter(null)
+		if (letterRef.current) letterRef.current.value = ''
 		setSheetOpen(true)
 	}
 
@@ -201,6 +208,31 @@ export default function ChargesPage() {
 		setSheetOpen(false)
 		setSelectedCharge(null)
 		setActionMode(null)
+		setLetter(null)
+		if (letterRef.current) letterRef.current.value = ''
+	}
+
+	/**
+	 * Opens a waiver letter in a new tab.
+	 *
+	 * The link is signed when it is asked for and lasts five minutes, so there
+	 * is nothing durable to copy out of the address bar. window.open is called
+	 * before the await so the browser still counts it as the click that opened
+	 * it and does not treat the tab as a popup.
+	 */
+	const openLetter = async (c: ChargeRow) => {
+		const tab = window.open('', '_blank')
+		try {
+			setOpeningLetter(c.id)
+			const { url } = await waiverLetterUrl(c.id)
+			if (tab) tab.location.href = url
+			else window.location.href = url
+		} catch (err) {
+			tab?.close()
+			toast({ title: '❌ ' + (err instanceof Error ? err.message : 'Could not open the letter'), variant: 'destructive' })
+		} finally {
+			setOpeningLetter(null)
+		}
 	}
 
 	const handleAction = async () => {
@@ -216,7 +248,17 @@ export default function ChargesPage() {
 				toast({ title: '❌ Waiver reason is required', variant: 'destructive' })
 				return
 			}
-			const updated = await waiveCharge(selectedCharge.id, { waiver_amount: amount, waiver_reason: waiverReason })
+			// The letter goes up first and the waiver carries its path, so a
+			// failed upload leaves the fine owing rather than a waiver claiming
+			// a letter nobody can open.
+			const doc = letter
+				? await uploadWaiverLetter(selectedCharge.institution_id, letter)
+				: null
+			const updated = await waiveCharge(selectedCharge.id, {
+				waiver_amount: amount,
+				waiver_reason: waiverReason,
+				...(doc ? { waiver_document_path: doc.path, waiver_document_name: doc.name } : {}),
+			})
 			setCharges(prev => prev.map(c => c.id === updated.id ? updated : c))
 			toast({ title: '✅ Charge waived', className: 'bg-green-50 border-green-200 text-green-800' })
 			closeSheet()
@@ -381,6 +423,24 @@ export default function ChargesPage() {
 																On MyJKKN bill
 															</Badge>
 														)}
+																{/* The paper that authorised the money being let go. Shown only
+																    where a letter was kept, so its absence is never mistaken
+																    for a broken link. */}
+																{c.waiver_document_path && (
+																	<Button
+																		variant="ghost"
+																		size="sm"
+																		className="h-6 w-fit gap-1 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+																		disabled={openingLetter === c.id}
+																		onClick={() => openLetter(c)}
+																		title={c.waiver_document_name ?? 'Open the signed letter'}
+																	>
+																		{openingLetter === c.id
+																			? <Loader2 className="h-3 w-3 animate-spin" />
+																			: <Paperclip className="h-3 w-3" />}
+																		Letter
+																	</Button>
+																)}
 													</div>
 												</TableCell>
 												<TableCell>
@@ -467,6 +527,24 @@ export default function ChargesPage() {
 											<Badge variant="outline" className="text-[10px] border-brand-green/40 text-brand-green">
 												On MyJKKN bill
 											</Badge>
+										)}
+										{/* The paper that authorised the money being let go. Shown only
+										    where a letter was kept, so its absence is never mistaken
+										    for a broken link. */}
+										{c.waiver_document_path && (
+											<Button
+												variant="ghost"
+												size="sm"
+												className="h-6 w-fit gap-1 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+												disabled={openingLetter === c.id}
+												onClick={() => openLetter(c)}
+												title={c.waiver_document_name ?? 'Open the signed letter'}
+											>
+												{openingLetter === c.id
+													? <Loader2 className="h-3 w-3 animate-spin" />
+													: <Paperclip className="h-3 w-3" />}
+												Letter
+											</Button>
 										)}
 										<span className="text-xs text-muted-foreground">{c.overdue_days} days overdue</span>
 									</div>
@@ -565,6 +643,54 @@ export default function ChargesPage() {
 												value={waiverReason}
 												onChange={e => setWaiverReason(e.target.value)}
 												placeholder="Reason for waiver"
+											/>
+										</div>
+										{/* The letter the principal signed. Optional here for
+										    the same reason as at the desk: where the college
+										    asked for a signature it belongs on the record,
+										    and where it did not, a waiver should not wait. */}
+										<div className="space-y-2">
+											<Label className="text-sm font-semibold">
+												Signed letter <span className="font-normal text-muted-foreground">(optional)</span>
+											</Label>
+											{letter ? (
+												<div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
+													<Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+													<span className="min-w-0 flex-1 truncate" title={letter.name}>{letter.name}</span>
+													<span className="shrink-0 text-muted-foreground">{(letter.size / 1048576).toFixed(1)} MB</span>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														className="h-6 w-6 shrink-0 p-0"
+														disabled={processing}
+														onClick={() => { setLetter(null); if (letterRef.current) letterRef.current.value = '' }}
+														aria-label="Remove the letter"
+													>
+														<X className="h-3.5 w-3.5" />
+													</Button>
+												</div>
+											) : (
+												<p className="text-xs text-muted-foreground">
+													Attach the letter the principal signed, if there is one. PDF, JPG or PNG, up to 1 MB.
+												</p>
+											)}
+											<Input
+												ref={letterRef}
+												type="file"
+												accept="application/pdf,image/jpeg,image/png"
+												disabled={processing}
+												className="h-9 cursor-pointer text-xs file:mr-2 file:cursor-pointer file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs"
+												onChange={e => {
+													const picked = e.target.files?.[0] ?? null
+													if (picked && picked.size > 1024 * 1024) {
+														toast({ title: `❌ That file is ${(picked.size < 2 * 1024 * 1024 ? `${Math.round(picked.size / 1024)} KB` : `${(picked.size / 1048576).toFixed(1)} MB`)} — 1 MB is the most we can take`, variant: 'destructive' })
+														e.target.value = ''
+														setLetter(null)
+														return
+													}
+													setLetter(picked)
+												}}
 											/>
 										</div>
 									</div>

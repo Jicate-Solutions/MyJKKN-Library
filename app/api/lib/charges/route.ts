@@ -5,6 +5,18 @@ import { guardCollection, guardWrite, guardRecord } from '@/lib/auth/api-guard'
 import { fetchAllRows } from '@/lib/library/fetch-all'
 
 /** The fields the charges screen and its collect/waive sheet read. */
+/**
+ * The letter kept with a waiver, asked for separately from the rest.
+ *
+ * Migrations sit unrun for weeks here. Putting these two straight into the
+ * list below would mean that, on any library whose migration is still
+ * waiting, the whole Late Charges page answered 42703 and showed nothing —
+ * so the columns are tried once and dropped if they are not there yet.
+ */
+const WAIVER_DOC_COLUMNS = `,
+	waiver_document_path,
+	waiver_document_name`
+
 const CHARGE_COLUMNS = `
 	id,
 	institution_id,
@@ -53,10 +65,10 @@ export async function GET(request: Request) {
 
 		// Settled charges are never purged, so this table is the likeliest in the
 		// system to cross the 1,000-row ceiling a single request is capped at.
-		const { data, error } = await fetchAllRows<Record<string, any>>(range => {
+		const read = (columns: string) => fetchAllRows<Record<string, any>>(range => {
 			let query = supabase
 				.from('lib_late_charges')
-				.select(CHARGE_COLUMNS)
+				.select(columns)
 
 			if (institutionId) query = query.eq('institution_id', institutionId)
 			if (memberId) query = query.eq('member_id', memberId)
@@ -64,6 +76,13 @@ export async function GET(request: Request) {
 
 			return query.order('created_at', { ascending: false }).range(range.from, range.to)
 		})
+
+		let { data, error } = await read(CHARGE_COLUMNS + WAIVER_DOC_COLUMNS)
+		// 42703: the waiver-letter migration has not been run on this database
+		// yet. The list is worth more than the link, so it is read again without.
+		if ((error as { code?: string } | null)?.code === '42703') {
+			({ data, error } = await read(CHARGE_COLUMNS))
+		}
 
 		if (error) {
 			console.error('Error fetching charges:', error)

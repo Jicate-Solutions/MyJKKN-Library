@@ -99,6 +99,9 @@ export async function settleFine(payload: {
 	transaction_id?: string
 	charge_id?: string
 	waiver_reason?: string
+	/** The principal's signed letter, already in the bucket. Waive only, optional. */
+	waiver_document_path?: string | null
+	waiver_document_name?: string | null
 }): Promise<LibLateCharge> {
 	const res = await fetch('/api/lib/circulation/settle', {
 		method: 'POST',

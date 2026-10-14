@@ -323,6 +323,10 @@ export interface LibLateCharge {
 	collected_by?: string
 	waiver_reason?: string
 	waiver_approved_by?: string
+	/** The principal's signed letter in the private library-waivers bucket, if one was kept. */
+	waiver_document_path?: string | null
+	/** What the librarian called that file, for the link to show. */
+	waiver_document_name?: string | null
 	created_at: string
 	updated_at: string
 	transaction?: LibLendingTransaction
@@ -697,6 +701,9 @@ export interface LibPaymentPayload {
 export interface LibWaivePayload {
 	waiver_amount: number
 	waiver_reason?: string
+	/** An uploaded letter to keep with the waiver. Optional. */
+	waiver_document_path?: string | null
+	waiver_document_name?: string | null
 }
 
 export interface LibChargeCalculation {

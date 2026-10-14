@@ -49,6 +49,40 @@ export async function waiveCharge(id: string, data: LibWaivePayload): Promise<Li
 	return res.json()
 }
 
+/**
+ * Puts the principal's signed letter in the bucket and hands back its path.
+ *
+ * Done before the waiver is saved, not with it, so the settle and waive calls
+ * keep taking plain JSON. The cost is that a librarian who picks a file and
+ * then cancels leaves it behind unattached — a stray file nobody can reach,
+ * which is cheaper than making both save paths carry multipart.
+ */
+export async function uploadWaiverLetter(
+	institutionId: string,
+	file: File
+): Promise<{ path: string; name: string }> {
+	const form = new FormData()
+	form.set('institution_id', institutionId)
+	form.set('file', file)
+
+	const res = await fetch('/api/lib/circulation/waiver-document', { method: 'POST', body: form })
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}))
+		throw new Error(err.error || 'Could not upload the letter')
+	}
+	return res.json()
+}
+
+/** A link to one waiver's letter that works for five minutes. */
+export async function waiverLetterUrl(chargeId: string): Promise<{ url: string; name: string }> {
+	const res = await fetch(`/api/lib/circulation/waiver-document?charge_id=${encodeURIComponent(chargeId)}`)
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}))
+		throw new Error(err.error || 'Could not open the letter')
+	}
+	return res.json()
+}
+
 export async function calculateCharge(transactionId: string): Promise<LibChargeCalculation> {
 	const params = new URLSearchParams()
 	params.set('transaction_id', transactionId)

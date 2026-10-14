@@ -74,6 +74,17 @@ export async function PUT(
 				: Number(existing.total_charge)
 			const stillOwed = Math.max(0, Number(existing.total_charge) - waived)
 
+			// The principal's signed letter, if one was uploaded first. Stored
+			// under the college that uploaded it, so a path pointing anywhere
+			// else is refused rather than quietly kept. Left out entirely when
+			// there is no letter, so a library whose migration is still waiting
+			// goes on waiving exactly as it did.
+			const docPath = String(body.waiver_document_path ?? '').trim() || null
+			const docName = String(body.waiver_document_name ?? '').trim() || null
+			if (docPath && !docPath.startsWith(`${existing.institution_id}/`)) {
+				return NextResponse.json({ error: 'That letter belongs to another college' }, { status: 400 })
+			}
+
 			updateData = {
 				...updateData,
 				payment_status: stillOwed > 0 ? 'unpaid' : 'waived',
@@ -81,6 +92,7 @@ export async function PUT(
 				net_payable: stillOwed,
 				waiver_reason: body.waiver_reason,
 				waiver_approved_by: body.waiver_approved_by ?? null,
+				...(docPath ? { waiver_document_path: docPath, waiver_document_name: docName } : {}),
 			}
 		} else if (body.payment_status === 'partial') {
 			const partialAmount = Number(body.partial_payment_amount ?? 0)
@@ -106,6 +118,15 @@ export async function PUT(
 			.single()
 
 		if (error) {
+			// Migrations sit unrun for weeks here, so a waiver must never be
+			// blocked by the letter columns being absent: name the migration
+			// and let the librarian waive without a letter meanwhile.
+			if (error.code === '42703' && /waiver_document/.test(error.message ?? '')) {
+				return NextResponse.json(
+					{ error: 'Waiver letters are not set up yet — run migration 20261013_lib_waiver_document.sql, or waive without a letter' },
+					{ status: 503 }
+				)
+			}
 			console.error('Error updating charge:', error)
 			return NextResponse.json({ error: 'Failed to update charge' }, { status: 500 })
 		}

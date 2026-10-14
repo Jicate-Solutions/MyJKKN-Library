@@ -1,14 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
 	Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, CheckCircle, IndianRupee, Loader2, ReceiptIndianRupee } from 'lucide-react'
+import { AlertTriangle, CheckCircle, IndianRupee, Loader2, Paperclip, ReceiptIndianRupee, X } from 'lucide-react'
 import { settleFine } from '@/services/library/lib-circulation-service'
+import { uploadWaiverLetter } from '@/services/library/lib-late-charges-service'
 import { rupees, messageOf, type MemberCharge } from '@/lib/library/desk'
 import type { LibLateCharge } from '@/types/lib'
 
@@ -139,12 +141,17 @@ export function SettleChargeDialog({
 	const [reason, setReason] = useState('')
 	const [saving, setSaving] = useState(false)
 	const [formError, setFormError] = useState<string | null>(null)
+	/** The principal's signed letter, chosen but not yet sent. Optional. */
+	const [letter, setLetter] = useState<File | null>(null)
+	const letterRef = useRef<HTMLInputElement>(null)
 
 	// A fresh form for each fine opened
 	useEffect(() => {
 		if (!settling) return
 		setReason('')
 		setFormError(null)
+		setLetter(null)
+		if (letterRef.current) letterRef.current.value = ''
 	}, [settling])
 
 	const submit = async () => {
@@ -159,11 +166,21 @@ export function SettleChargeDialog({
 		try {
 			setSaving(true)
 			setFormError(null)
+
+			// The letter goes up first and the waiver carries its path. If this
+			// throws, nothing is settled — better a fine still owing than a
+			// waiver on record claiming a letter that was never stored.
+			let doc: { path: string; name: string } | null = null
+			if (mode === 'waive' && letter) {
+				doc = await uploadWaiverLetter(institutionId ?? '', letter)
+			}
+
 			const saved = await settleFine({
 				institution_id: institutionId ?? '',
 				mode,
 				...(transaction_id ? { transaction_id } : { charge_id: charge.id }),
 				...(mode === 'waive' ? { waiver_reason: reason.trim() } : {}),
+				...(doc ? { waiver_document_path: doc.path, waiver_document_name: doc.name } : {}),
 			})
 			onSettled(saved, settling)
 		} catch (err) {
@@ -232,6 +249,69 @@ export function SettleChargeDialog({
 							<p className="text-xs text-muted-foreground">
 								A reason is needed. The whole {amount} is let off and the fine is cleared.
 							</p>
+
+							{/* The signed letter, and deliberately optional. Where the
+							    college asks for a letter the principal has signed, it
+							    belongs on the record beside the reason — a typed
+							    sentence is not what authorised the money. Where no
+							    letter was asked for, a small fine let off at the
+							    counter should not wait for one. */}
+							<div className="space-y-1.5 pt-1">
+								<Label htmlFor="waiver-letter" className="text-xs font-normal text-muted-foreground">
+									Signed letter <span className="font-normal">(optional)</span>
+								</Label>
+
+								{letter ? (
+									<div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs">
+										<Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+										<span className="min-w-0 flex-1 truncate" title={letter.name}>{letter.name}</span>
+										<span className="shrink-0 text-muted-foreground">
+											{(letter.size / 1048576).toFixed(1)} MB
+										</span>
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											className="h-6 w-6 shrink-0 p-0"
+											disabled={saving}
+											onClick={() => {
+												setLetter(null)
+												if (letterRef.current) letterRef.current.value = ''
+											}}
+											aria-label="Remove the letter"
+										>
+											<X className="h-3.5 w-3.5" />
+										</Button>
+									</div>
+								) : (
+									<p className="text-xs text-muted-foreground">
+										Attach the letter the principal signed, if there is one. PDF, JPG or PNG, up to 1 MB.
+									</p>
+								)}
+
+								<Input
+									ref={letterRef}
+									id="waiver-letter"
+									type="file"
+									accept="application/pdf,image/jpeg,image/png"
+									disabled={saving}
+									className="h-9 cursor-pointer text-xs file:mr-2 file:cursor-pointer file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs"
+									onChange={e => {
+										const picked = e.target.files?.[0] ?? null
+										// Refused here as well as on the server, so the
+										// librarian hears it now rather than after waiting
+										// for the upload to finish and fail.
+										if (picked && picked.size > 1024 * 1024) {
+											setFormError(`That file is ${(picked.size < 2 * 1024 * 1024 ? `${Math.round(picked.size / 1024)} KB` : `${(picked.size / 1048576).toFixed(1)} MB`)} — 1 MB is the most we can take`)
+											e.target.value = ''
+											setLetter(null)
+											return
+										}
+										setFormError(null)
+										setLetter(picked)
+									}}
+								/>
+							</div>
 						</div>
 					)}
 
