@@ -19,9 +19,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import * as XLSX from 'xlsx'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -269,9 +266,13 @@ export default function CirculationReportsPage() {
 		[report, from, to]
 	)
 
-	const exportExcel = () => {
+	const exportExcel = async () => {
 		if (!data || data.rows.length === 0) return
 		try {
+			// The spreadsheet writer is a ~400 KB download and most visits never
+			// export, so it is fetched on the first click rather than with the page.
+			// The browser keeps it from then on.
+			const XLSX = await import('xlsx')
 			const sheet = XLSX.utils.json_to_sheet(
 				data.rows.map(row => {
 					const out: Record<string, any> = {}
@@ -296,9 +297,15 @@ export default function CirculationReportsPage() {
 		}
 	}
 
-	const exportPdf = () => {
+	const exportPdf = async () => {
 		if (!data || data.rows.length === 0) return
 		try {
+			// Same reason as the spreadsheet: the PDF writer and its table plugin
+			// are fetched when somebody actually asks for a PDF.
+			const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+				import('jspdf'),
+				import('jspdf-autotable'),
+			])
 			// Landscape, because these reports are wide and a squeezed table is
 			// the reason people go back to asking for a spreadsheet
 			const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })

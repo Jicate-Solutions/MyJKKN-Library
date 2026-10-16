@@ -19,7 +19,6 @@
  */
 
 import { useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -138,6 +137,10 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 			const headers = columns.map(c => c.required ? `${c.header} *` : c.header)
 			const body = rows.map(row => columns.map(c => row[c.key] ?? ''))
 
+			// The spreadsheet writer is a ~400 KB download and most visits never
+			// export, so it is fetched on the first click rather than with the page.
+			// The browser keeps it from then on.
+			const XLSX = await import('xlsx')
 			const sheet = XLSX.utils.aoa_to_sheet([headers, ...body])
 			sheet['!cols'] = columns.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
 
@@ -205,6 +208,10 @@ export function CatalogueBulkEdit({ institutionId, institutionCode, onSaved, dis
 		try {
 			setBusy(true)
 
+			// The spreadsheet writer is a ~400 KB download and most visits never
+			// export, so it is fetched on the first click rather than with the page.
+			// The browser keeps it from then on.
+			const XLSX = await import('xlsx')
 			const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true })
 			const sheet = workbook.Sheets[workbook.SheetNames[0]]
 			const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false })

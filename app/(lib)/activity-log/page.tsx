@@ -14,7 +14,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import * as XLSX from 'xlsx'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useToast } from '@/hooks/common/use-toast'
 import { Button } from '@/components/ui/button'
@@ -285,6 +284,10 @@ export default function ActivityLogPage() {
 				return
 			}
 
+			// The spreadsheet writer is a ~400 KB download and most visits never
+			// export, so it is fetched on the first click rather than with the page.
+			// The browser keeps it from then on.
+			const XLSX = await import('xlsx')
 			const sheet = XLSX.utils.json_to_sheet(exportRows.map(row => {
 				const { day, time } = stampParts(row.created_at)
 				const person = personOf(row)

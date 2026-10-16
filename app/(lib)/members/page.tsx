@@ -36,7 +36,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import * as XLSX from 'xlsx'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useInstitution } from '@/context/institution-context'
 import { useToast } from '@/hooks/common/use-toast'
@@ -433,7 +432,7 @@ export default function MembersPage() {
 	}, [goToPage, currentPage, openMember])
 
 	/** The list as it stands on screen — same filters, every page. */
-	const exportList = () => {
+	const exportList = async () => {
 		if (filtered.length === 0) {
 			toast({ title: 'Nothing to download for these filters', variant: 'destructive' })
 			return
@@ -448,6 +447,10 @@ export default function MembersPage() {
 			Library: m.is_delinquent ? 'Fine due' : m.has_borrowed ? 'Has borrowed' : '',
 			'Card issue': !m.member_number ? 'No card number' : isDuplicate(m) ? 'Duplicate number' : '',
 		}))
+		// The spreadsheet writer is a ~400 KB download and most visits never
+		// export, so it is fetched on the first click rather than with the page.
+		// The browser keeps it from then on.
+		const XLSX = await import('xlsx')
 		const sheet = XLSX.utils.json_to_sheet(rows)
 		sheet['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 36 }, { wch: 34 }, ...(mustSelectInstitution ? [{ wch: 8 }] : []), { wch: 14 }, { wch: 18 }]
 		const book = XLSX.utils.book_new()

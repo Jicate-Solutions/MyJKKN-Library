@@ -18,7 +18,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useLibrarianWrite } from '@/hooks/library/use-librarian-write'
 import { useRouter } from 'next/navigation'
-import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -382,7 +381,7 @@ export function AccessionRegisterTable({
 	 * page of it. What the search and the chips have narrowed it to is what the
 	 * librarian was looking at, so that is what goes into the file.
 	 */
-	const downloadExcel = useCallback(() => {
+	const downloadExcel = useCallback(async () => {
 		const sheetRows = filtered.map(r => ({
 			'Accession #': r.accession_number,
 			'Title': r.title,
@@ -401,6 +400,10 @@ export function AccessionRegisterTable({
 			'Date of Adding': r.accession_date ?? '',
 		}))
 
+		// The spreadsheet writer is a ~400 KB download and most visits never
+		// export, so it is fetched on the first click rather than with the page.
+		// The browser keeps it from then on.
+		const XLSX = await import('xlsx')
 		const sheet = XLSX.utils.json_to_sheet(sheetRows)
 		sheet['!cols'] = [12, 44, 24, 24, 24, 10, 12, 18, 12, 14, 14, 10, 24, 20, 14].map(wch => ({ wch }))
 

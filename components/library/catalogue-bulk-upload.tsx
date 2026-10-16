@@ -17,7 +17,6 @@
  */
 
 import { useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -105,7 +104,7 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 	const [progress, setProgress] = useState({ done: 0, total: 0 })
 	const [result, setResult] = useState<UploadResult | null>(null)
 
-	const downloadTemplate = (kind: CatalogueSheetKind) => {
+	const downloadTemplate = async (kind: CatalogueSheetKind) => {
 		const columns = uploadColumnsFor(kind)
 		const example = templateExampleFor(kind)
 		const isBooks = kind === 'books'
@@ -114,6 +113,10 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 		const headers = columns.map(c => c.required ? `${c.header} *` : c.header)
 		const exampleRow = columns.map(c => example[c.key] ?? '')
 
+		// The spreadsheet writer is a ~400 KB download and most visits never
+		// export, so it is fetched on the first click rather than with the page.
+		// The browser keeps it from then on.
+		const XLSX = await import('xlsx')
 		const rows = XLSX.utils.aoa_to_sheet([headers, exampleRow])
 		// Wide enough to read the header without dragging every column open
 		rows['!cols'] = columns.map(c => ({ wch: Math.max(16, c.header.length + 4) }))
@@ -167,6 +170,10 @@ export function CatalogueBulkUpload({ institutionId, institutionCode, onUploaded
 		try {
 			setUploading(true)
 
+			// The spreadsheet writer is a ~400 KB download and most visits never
+			// export, so it is fetched on the first click rather than with the page.
+			// The browser keeps it from then on.
+			const XLSX = await import('xlsx')
 			const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true })
 			const sheet = workbook.Sheets[workbook.SheetNames[0]]
 			const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false })

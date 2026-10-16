@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import * as XLSX from 'xlsx'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, FileText, Loader2, Printer } from 'lucide-react'
@@ -88,7 +87,7 @@ export function ReportResult({
 		return set
 	}, [data, rows])
 
-	const downloadExcel = () => {
+	const downloadExcel = async () => {
 		if (!data || rows.length === 0) return
 		const sheetRows = rows.map(row => {
 			const out: Record<string, unknown> = {}
@@ -98,6 +97,10 @@ export function ReportResult({
 			}
 			return out
 		})
+		// The spreadsheet writer is a ~400 KB download and most visits never
+		// export, so it is fetched on the first click rather than with the page.
+		// The browser keeps it from then on.
+		const XLSX = await import('xlsx')
 		const sheet = XLSX.utils.json_to_sheet(sheetRows, { header: data.columns })
 		const book = XLSX.utils.book_new()
 		XLSX.utils.book_append_sheet(book, sheet, context.title.slice(0, 31).replace(/[\\/?*[\]:]/g, ' '))

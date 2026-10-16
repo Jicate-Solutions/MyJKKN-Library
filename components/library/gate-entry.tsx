@@ -41,7 +41,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import * as XLSX from 'xlsx'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useInstitution } from '@/context/institution-context'
 import { useScanFocus } from '@/hooks/library/use-scan-focus'
@@ -719,7 +718,7 @@ export function GateEntry() {
 	}, [fromDate, toDate, today, confirmClose])
 
 	// ── Excel: the rows as filtered, and a by-day sheet inspection can read ──
-	const exportRegister = () => {
+	const exportRegister = async () => {
 		if (filtered.length === 0) {
 			toast({ title: isSingleDay ? 'Nothing to export for this day' : 'Nothing to export for these days', variant: 'destructive' })
 			return
@@ -738,6 +737,10 @@ export function GateEntry() {
 			Status: v.exit_time ? 'Left' : 'Inside',
 		}))
 
+		// The spreadsheet writer is a ~400 KB download and most visits never
+		// export, so it is fetched on the first click rather than with the page.
+		// The browser keeps it from then on.
+		const XLSX = await import('xlsx')
 		const book = XLSX.utils.book_new()
 		const sheet = XLSX.utils.json_to_sheet(rows)
 		sheet['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 12 }, { wch: 34 }, ...(mustSelectInstitution ? [{ wch: 8 }] : []), { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }]
