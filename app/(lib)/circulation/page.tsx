@@ -19,7 +19,7 @@ import {
 } from '@/components/library/settle-charge-dialog'
 import {
 	CheckCircle, RefreshCw, RotateCcw, BookOpen, AlertTriangle, ArrowRightLeft, Loader2, UserPlus,
-	Bookmark, X, Info,
+	Bookmark, X, Info, ReceiptIndianRupee,
 } from 'lucide-react'
 import {
 	issueItem, returnItem, renewItem, cancelHold, undoDeskAction, fetchRecentDeskEvents,
@@ -480,7 +480,23 @@ function MemberChargesPanel({
 							{charge.payment_status === 'partial' ? ` of ${rupees(charge.total_charge)}` : ''}
 						</Badge>
 
-						<FineButtons canBill={canBill} onChoose={mode => setSettling({ charge, mode })} />
+						{/* On their bill: shown so the money is not forgotten, with
+						    nothing to press. It is collected in MyJKKN, and the
+						    sync on the way into this screen marks it Paid here the
+						    moment they pay it there. Offering Paid would take the
+						    money twice; offering Add to bill would bill it twice. */}
+						{charge.on_myjkkn_bill ? (
+							<Badge
+								variant="outline"
+								className="border-brand-green/40 text-xs font-normal text-brand-green"
+								title="Already on their MyJKKN bill — they pay it there, and it clears here on its own"
+							>
+								<ReceiptIndianRupee className="mr-1 h-3 w-3" />
+								On MyJKKN bill
+							</Badge>
+						) : (
+							<FineButtons canBill={canBill} onChoose={mode => setSettling({ charge, mode })} />
+						)}
 					</div>
 				))}
 			</div>

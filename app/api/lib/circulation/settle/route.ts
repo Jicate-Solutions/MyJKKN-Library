@@ -218,8 +218,30 @@ export async function POST(request: Request) {
 			if (existing.payment_status === 'paid' || existing.payment_status === 'waived') {
 				return NextResponse.json(existing)
 			}
-			// Already on their bill — a second click must not raise a second one.
-			if (existing.billing_student_bill_id) return NextResponse.json(existing)
+			// Already on their bill.
+			//
+			// Pressed Add to bill again, the answer is the bill already raised —
+			// a second click must not raise a second one.
+			//
+			// Pressed Paid or Waive, it is refused, and refused out loud. The
+			// money is collected in MyJKKN now; taking it at the counter as well
+			// would either charge the learner twice or leave MyJKKN showing a
+			// payment it never received. When they pay it there, the sync on the
+			// way into this screen marks this charge Paid on its own.
+			//
+			// This used to return the unchanged charge for every mode, so Paid
+			// answered 200, the desk showed it cleared, and the fine was back on
+			// the next refresh — a refusal that looked like success.
+			if (existing.billing_student_bill_id) {
+				if (mode === 'bill') return NextResponse.json(existing)
+				return NextResponse.json(
+					{
+						error: 'This fine is on their MyJKKN bill — they pay it there, and it clears here on its own once they have',
+						reason: 'already_billed',
+					},
+					{ status: 409 }
+				)
+			}
 
 			if (mode === 'bill') {
 				// What the learner will read on their bill, so they know which book

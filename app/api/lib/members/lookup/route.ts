@@ -106,7 +106,7 @@ export async function GET(request: Request) {
 					),
 					charges:lib_late_charges(
 						id, overdue_days, charge_per_day, total_charge, waiver_amount,
-						net_payable, payment_status, created_at,
+						net_payable, payment_status, created_at, billing_student_bill_id,
 						transaction:lib_lending_transactions(
 							id, due_date, returned_at,
 							item:lib_items(
@@ -185,6 +185,10 @@ export async function GET(request: Request) {
 				waiver_amount: Number(charge.waiver_amount ?? 0),
 				net_payable: Number(charge.net_payable ?? 0),
 				payment_status: charge.payment_status,
+				// Owed, but owed in MyJKKN. The desk shows it so the librarian
+				// knows the money is still out there, and offers no buttons on
+				// it: it is collected over there and clears here on its own.
+				on_myjkkn_bill: !!charge.billing_student_bill_id,
 				created_at: charge.created_at,
 				due_date: transaction?.due_date ?? null,
 				returned_at: transaction?.returned_at ?? null,

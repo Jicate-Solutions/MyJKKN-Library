@@ -55,6 +55,14 @@ export interface MemberCharge {
 	waiver_amount: number
 	net_payable: number
 	payment_status: 'unpaid' | 'partial' | 'paid' | 'waived'
+	/**
+	 * Still owed, but owed in MyJKKN rather than at this counter.
+	 *
+	 * The desk shows it so the money is not forgotten, and offers no way to
+	 * settle it: it is collected over there, and the sync on the way into this
+	 * screen marks it Paid here the moment MyJKKN says they have paid.
+	 */
+	on_myjkkn_bill?: boolean
 	created_at: string
 	due_date: string | null
 	returned_at: string | null
