@@ -12,7 +12,24 @@
  * button and one Print button serve all of them.
  */
 
-export type ParamType = 'date' | 'number' | 'text' | 'select'
+export type ParamType = 'date' | 'number' | 'text' | 'select' | 'lookup'
+
+/**
+ * The lists a `lookup` filter is filled from, read from this college's own
+ * data by /api/lib/reports/options.
+ *
+ * `department` and `location_department` are deliberately two lists and not
+ * one. A title carries the department it was bought for; a copy sits in a
+ * department library, which is a location. The two are usually spelt the same
+ * and are occasionally not, and offering one report the other's spellings
+ * would hand the librarian a choice that returns nothing.
+ */
+export type LookupList =
+	| 'book_type'
+	| 'department'
+	| 'location_department'
+	| 'fiscal_year'
+	| 'order_number'
 
 export interface ParamOption {
 	value: string
@@ -26,6 +43,8 @@ export interface ReportParam {
 	/** For `date`: 'today' | 'month_start' | 'year_start' | 'academic_year_start'. For others: the literal. */
 	defaultValue?: string
 	options?: ParamOption[]
+	/** For `lookup`: which list of real values to offer. */
+	lookup?: LookupList
 	placeholder?: string
 	/** Left empty, the filter is not applied. */
 	optional?: boolean
@@ -104,15 +123,24 @@ const DAYS = (key: string, label: string, defaultValue: string, hint?: string): 
 	key, label, type: 'number', defaultValue, hint,
 })
 
-const CONTAINS = (key: string, label: string, placeholder: string): ReportParam => ({
-	key, label, type: 'text', placeholder, optional: true, hint: 'Any part of it; leave empty for all',
+/**
+ * A filter offering what this college actually has, and nothing else.
+ *
+ * These were typed boxes matching on "any part of it", which asked the
+ * librarian to know the spelling and punished them for a stray space. The
+ * choices are now read from the data itself, so the list is always exactly
+ * what is on the shelves, and picking one matches it exactly.
+ */
+const FROM_DATA = (key: string, label: string, lookup: LookupList): ReportParam => ({
+	key, label, type: 'lookup', lookup, defaultValue: 'all', optional: true,
+	hint: 'Only what this library holds',
 })
 
 // ── The reports ─────────────────────────────────────────────────────────────
 
 export const REPORTS: ReportDef[] = [
 	// Catalogue
-	{ id: 'cat-register', tab: 'catalogue', title: 'Accession register, full', description: 'Every copy on the shelf, every column, in accession order.', params: [CONTAINS('book_type', 'Book Type', 'e.g. Books'), CONTAINS('department', 'Department', 'e.g. Pharmaceutics')], money: ['Price (₹)'] },
+	{ id: 'cat-register', tab: 'catalogue', title: 'Accession register, full', description: 'Every copy on the shelf, every column, in accession order.', params: [FROM_DATA('book_type', 'Book Type', 'book_type'), FROM_DATA('department', 'Department', 'department')], money: ['Price (₹)'] },
 	{ id: 'cat-added', tab: 'catalogue', title: 'Titles added in a period', description: 'Copies received between two dates, by date received.', params: PERIOD('year_start'), money: ['Price (₹)'] },
 	{ id: 'cat-by-type', tab: 'catalogue', title: 'Titles by Book Type', description: 'How many titles and copies of each type, and what they are worth.', params: [], money: ['Value (₹)'] },
 	{ id: 'cat-by-department', tab: 'catalogue', title: 'Titles by department', description: 'Titles, copies and value per owning department.', params: [], money: ['Value (₹)'] },
@@ -128,7 +156,7 @@ export const REPORTS: ReportDef[] = [
 
 	// Department libraries
 	{ id: 'dept-summary', tab: 'departments', title: 'Copies in each department library', description: 'Per department: copies held, how many may be issued, and the in-charge.', params: [] },
-	{ id: 'dept-copies', tab: 'departments', title: 'Copies in a department library, listed', description: 'Every copy sitting in a department library.', params: [CONTAINS('department', 'Department', 'e.g. Oral Pathology')] },
+	{ id: 'dept-copies', tab: 'departments', title: 'Copies in a department library, listed', description: 'Every copy sitting in a department library.', params: [FROM_DATA('department', 'Department', 'location_department')] },
 	{ id: 'dept-transfers', tab: 'departments', title: 'Department transfers in a period', description: 'Copies moved to or from a department: which, where, who, when.', params: PERIOD() },
 
 	// Members
@@ -183,7 +211,7 @@ export const REPORTS: ReportDef[] = [
 
 	// Orders
 	{ id: 'po-period', tab: 'orders', title: 'Orders in a period', description: 'Orders placed, by status, with value and supplier.', params: [...PERIOD('year_start'), STATUS(['draft', 'placed', 'acknowledged', 'partially_received', 'received', 'cancelled', 'claimed'])], money: ['Value (₹)'] },
-	{ id: 'po-items', tab: 'orders', title: 'Order items: received vs pending', description: 'Every line of every open order, ordered against received.', params: [CONTAINS('order', 'Order number', 'e.g. PO/2026/012')], money: ['Line total (₹)'] },
+	{ id: 'po-items', tab: 'orders', title: 'Order items: received vs pending', description: 'Every line of every open order, ordered against received.', params: [FROM_DATA('order', 'Order number', 'order_number')], money: ['Line total (₹)'] },
 	{ id: 'po-overdue', tab: 'orders', title: 'Orders overdue from the supplier', description: 'Past the expected delivery date and not yet received.', params: [], money: ['Value (₹)'] },
 
 	// Suppliers
@@ -191,9 +219,9 @@ export const REPORTS: ReportDef[] = [
 	{ id: 'sup-performance', tab: 'suppliers', title: 'Supplier performance', description: 'Average days from order to receipt, and orders still open.', params: [] },
 
 	// Budget
-	{ id: 'bud-heads', tab: 'budget', title: 'Budget heads: allotted, spent, balance', description: 'Each head with what is left.', params: [CONTAINS('fiscal_year', 'Fiscal year', 'e.g. 2026')], money: ['Allocated (₹)', 'Spent (₹)', 'Committed (₹)', 'Balance (₹)'] },
+	{ id: 'bud-heads', tab: 'budget', title: 'Budget heads: allotted, spent, balance', description: 'Each head with what is left.', params: [FROM_DATA('fiscal_year', 'Fiscal year', 'fiscal_year')], money: ['Allocated (₹)', 'Spent (₹)', 'Committed (₹)', 'Balance (₹)'] },
 	{ id: 'bud-by-month', tab: 'budget', title: 'Spend by month, by head', description: 'Order value month by month under each budget head.', params: PERIOD('year_start'), money: ['Ordered (₹)'] },
-	{ id: 'bud-by-type', tab: 'budget', title: 'Spend by resource type', description: 'Books, periodicals, digital and the rest — the NAAC expenditure split.', params: [CONTAINS('fiscal_year', 'Fiscal year', 'e.g. 2026')], money: ['Allocated (₹)', 'Spent (₹)'] },
+	{ id: 'bud-by-type', tab: 'budget', title: 'Spend by resource type', description: 'Books, periodicals, digital and the rest — the NAAC expenditure split.', params: [FROM_DATA('fiscal_year', 'Fiscal year', 'fiscal_year')], money: ['Allocated (₹)', 'Spent (₹)'] },
 
 	// Subscriptions
 	{ id: 'sub-list', tab: 'subscriptions', title: 'Subscription list', description: 'Every subscription with cost, supplier, frequency, expected and received issues.', params: [STATUS(['active', 'expired', 'cancelled', 'gratis', 'suspended'])], money: ['Cost (₹)'] },

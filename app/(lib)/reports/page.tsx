@@ -86,19 +86,55 @@ function describeFilters(report: ReportDef, values: Record<string, string>): str
 	for (const param of report.params) {
 		const value = values[param.key]
 		if (!value) continue
-		const shown = param.type === 'date' ? value.split('-').reverse().join('-') : param.type === 'select' ? (param.options?.find(o => o.value === value)?.label ?? value) : value
+			const shown = param.type === 'date'
+			? value.split('-').reverse().join('-')
+			: param.type === 'select'
+				? (param.options?.find(o => o.value === value)?.label ?? value)
+				: param.type === 'lookup'
+					? (value === 'all' ? 'All' : value)
+					: value
 		parts.push(`${param.label}: ${shown}`)
 	}
 	return parts.join(' · ')
 }
 
-function ParamField({ param, value, onChange, onEnter }: { param: ReportParam; value: string; onChange: (v: string) => void; onEnter: () => void }) {
+function ParamField({ param, value, onChange, onEnter, choices }: {
+	param: ReportParam
+	value: string
+	onChange: (v: string) => void
+	onEnter: () => void
+	/** For a `lookup`: this college's own values, or undefined while they are on their way. */
+	choices?: string[]
+}) {
 	const id = `rp-${param.key}`
 	const label = (
 		<Label htmlFor={id} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 			{param.label}{param.optional ? '' : param.type === 'text' ? ' *' : ''}
 		</Label>
 	)
+	// A dropdown filled from the data. It is never disabled while the choices
+	// are on their way: "All" is already the answer, and a list that failed to
+	// arrive must not trap the librarian in a filter they cannot clear.
+	if (param.type === 'lookup') {
+		const waiting = choices === undefined
+		return (
+			<div className="space-y-1.5">
+				{label}
+				<Select value={value || 'all'} onValueChange={onChange}>
+					<SelectTrigger id={id} className="h-9 w-[220px] text-sm"><SelectValue /></SelectTrigger>
+					<SelectContent>
+						<SelectItem value="all">All</SelectItem>
+						{(choices ?? []).map(choice => (
+							<SelectItem key={choice} value={choice}>{choice}</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				<p className="text-[11px] text-muted-foreground">
+					{waiting ? 'Reading the list…' : choices.length === 0 ? 'Nothing recorded yet' : param.hint}
+				</p>
+			</div>
+		)
+	}
 	if (param.type === 'select') {
 		return (
 			<div className="space-y-1.5">
@@ -146,9 +182,56 @@ export default function ReportsPage() {
 	const [detail, setDetail] = useState<string | null>(null)
 	const [ranFilters, setRanFilters] = useState('')
 	const addressRead = useRef(false)
+	/** This college's own values for the dropdown filters, by list name. */
+	const [choices, setChoices] = useState<Record<string, string[]>>({})
+	const listsLoaded = useRef<Set<string>>(new Set())
 
 	const report = useMemo(() => (reportId ? reportById(reportId) ?? null : null), [reportId])
 	const tabReports = useMemo(() => reportsInTab(tab), [tab])
+
+	// One college's book types are not another's. Everything read for the last
+	// one is dropped rather than offered here.
+	useEffect(() => {
+		listsLoaded.current = new Set()
+		setChoices({})
+	}, [institutionId])
+
+	// What this report's dropdowns may offer, fetched once per college and then
+	// kept — switching between two reports must not ask again for the same list.
+	useEffect(() => {
+		if (!report || !institutionId) return
+		const wanted = [...new Set(
+			report.params
+				.filter(param => param.type === 'lookup' && param.lookup)
+				.map(param => param.lookup as string)
+		)].filter(name => !listsLoaded.current.has(name))
+		if (wanted.length === 0) return
+
+		let dropped = false
+		void (async () => {
+			try {
+				const res = await fetch(
+					`/api/lib/reports/options?institution_id=${institutionId}&lists=${wanted.join(',')}`
+				)
+				const body = await res.json().catch(() => ({}))
+				if (dropped) return
+				// A list that could not be read is remembered as empty rather than
+				// asked for again on every click. The filter still offers All, which
+				// is what it did before anybody typed in it.
+				const answer: Record<string, string[]> = {}
+				for (const name of wanted) answer[name] = res.ok && Array.isArray(body[name]) ? body[name] : []
+				for (const name of wanted) listsLoaded.current.add(name)
+				setChoices(prev => ({ ...prev, ...answer }))
+			} catch {
+				if (dropped) return
+				const answer: Record<string, string[]> = {}
+				for (const name of wanted) answer[name] = []
+				for (const name of wanted) listsLoaded.current.add(name)
+				setChoices(prev => ({ ...prev, ...answer }))
+			}
+		})()
+		return () => { dropped = true }
+	}, [report, institutionId])
 
 	// The address, read once, then kept up to date
 	useEffect(() => {
@@ -373,6 +456,7 @@ export default function ReportsPage() {
 												value={values[param.key] ?? ''}
 												onChange={v => setValues(prev => ({ ...prev, [param.key]: v }))}
 												onEnter={() => { void run() }}
+												choices={param.lookup ? choices[param.lookup] : undefined}
 											/>
 										))}
 										<Button onClick={() => { void run() }} disabled={loading || !ready} className="h-9">

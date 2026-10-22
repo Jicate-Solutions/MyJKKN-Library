@@ -41,9 +41,21 @@ const showTime = (column: string) => `to_char('2000-01-01'::date + ${column}, 'H
 const tsIn = (column: string, p: Params) => `${istDate(column)} between ${date(p.from)} and ${date(p.to)}`
 const dateIn = (column: string, p: Params) => `${column} between ${date(p.from)} and ${date(p.to)}`
 
-/** Case-insensitive "contains", or nothing when the box was left empty. */
-const contains = (column: string, value: string | undefined) =>
-	value ? ` and ${column} ilike ${lit('%' + value + '%')}` : ''
+/**
+ * One value chosen from a dropdown, or nothing for "All".
+ *
+ * Matched whole rather than by "contains": the choice came from this column in
+ * the first place, so there is nothing to be lenient about — and "Books" no
+ * longer drags in every title whose type merely contains the word.
+ *
+ * Case is the one thing still forgiven, because the shelves are not consistent
+ * about it: Pharmacy holds both "Pharmaceutics" and "PHARMACEUTICS", written
+ * by different people over the years. They are one department, the old typed
+ * box found both, and a report that quietly returned half the copies because
+ * of a shift key would be worse than no filter at all.
+ */
+const picked = (column: string, value: string | undefined) =>
+	value && value !== 'all' ? ` and lower(${column}) = lower(${lit(value)})` : ''
 
 /** A status choice, or nothing for "all". */
 const statusIs = (column: string, value: string | undefined) =>
@@ -78,7 +90,7 @@ select ${COPY_COLUMNS},
   join lib_catalogue_records c on c.id = i.catalogue_record_id
   left join lib_suppliers s on s.id = i.supplier_id
   left join lib_locations l on l.id = i.location_id
- where i.is_active${contains('c.book_type', p.book_type)}${contains('c.department', p.department)}
+ where i.is_active${picked('c.book_type', p.book_type)}${picked('c.department', p.department)}
  order by ${accessionOrder('i.accession_number')}`,
 
 	'cat-added': p => `
@@ -213,7 +225,7 @@ select coalesce(l.department_name, l.location_name) as "Department", ${COPY_COLU
   from lib_items i
   join lib_locations l on l.id = i.location_id
   join lib_catalogue_records c on c.id = i.catalogue_record_id
- where i.is_active and l.location_kind = 'department'${contains('coalesce(l.department_name, l.location_name)', p.department)}
+ where i.is_active and l.location_kind = 'department'${picked('coalesce(l.department_name, l.location_name)', p.department)}
  order by 1, ${accessionOrder('i.accession_number')}`,
 
 	'dept-transfers': p => `
@@ -621,7 +633,7 @@ select o.order_number as "Order #", ${showDate('o.order_date')} as "Ordered", s.
   from lib_procurement_items pi
   join lib_procurement_orders o on o.id = pi.order_id
   join lib_suppliers s on s.id = o.supplier_id
- where o.order_status not in ('cancelled')${contains('o.order_number', p.order)}
+ where o.order_status not in ('cancelled')${picked('o.order_number', p.order)}
  order by o.order_date desc, o.order_number, pi.title`,
 
 	'po-overdue': () => `
@@ -667,7 +679,7 @@ select bh.fiscal_year as "Fiscal year", bh.budget_head_code as "Code", bh.budget
        case when bh.allocated_amount > 0 then round(bh.spent_amount * 100 / bh.allocated_amount, 1) end as "Spent %",
        case when bh.is_active then 'Active' else 'Closed' end as "Status"
   from lib_budget_heads bh
- where true${contains('bh.fiscal_year', p.fiscal_year)}
+ where true${picked('bh.fiscal_year', p.fiscal_year)}
  order by bh.fiscal_year desc, bh.budget_head_name`,
 
 	'bud-by-month': p => `
@@ -684,7 +696,7 @@ select coalesce(bh.fiscal_year, '') as "Fiscal year", coalesce(bh.resource_type,
        count(*) as "Heads", sum(bh.allocated_amount) as "Allocated (₹)", sum(bh.spent_amount) as "Spent (₹)",
        case when sum(bh.allocated_amount) > 0 then round(sum(bh.spent_amount) * 100 / sum(bh.allocated_amount), 1) end as "Spent %"
   from lib_budget_heads bh
- where bh.is_active${contains('bh.fiscal_year', p.fiscal_year)}
+ where bh.is_active${picked('bh.fiscal_year', p.fiscal_year)}
  group by bh.fiscal_year, bh.resource_type
  order by 1 desc, 2`,
 
@@ -883,6 +895,12 @@ function checkParam(param: ReportParam, raw: string | undefined): string {
 		case 'select':
 			if (!param.options?.some(o => o.value === value)) throw new Error(`${param.label}: "${value}" is not one of the choices`)
 			return value
+		case 'lookup':
+			// Not checked against a list: the choices are this college's own data,
+			// which the server would have to read again to know them. It is quoted
+			// by lit() wherever it is used, exactly as free text always was, and a
+			// value that matches nothing simply returns no rows.
+			return value.slice(0, 200)
 		case 'text':
 			return value.slice(0, 200)
 	}
@@ -911,7 +929,7 @@ export function everySqlWithSampleParams(): { id: string; sql: string }[] {
 		const report = reportById(id)
 		const sample: Params = {}
 		for (const param of report?.params ?? []) {
-			sample[param.key] = param.type === 'date' ? '2026-09-01' : param.type === 'number' ? (param.defaultValue ?? '3') : param.type === 'select' ? 'all' : 'PB23001'
+			sample[param.key] = param.type === 'date' ? '2026-09-01' : param.type === 'number' ? (param.defaultValue ?? '3') : param.type === 'select' || param.type === 'lookup' ? 'all' : 'PB23001'
 		}
 		if ('by' in sample) sample.by = 'month'
 		return { id, sql: SQL[id](sample) }
