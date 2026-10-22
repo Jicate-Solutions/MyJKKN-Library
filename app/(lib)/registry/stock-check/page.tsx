@@ -43,6 +43,7 @@ import {
 import { OverflowText } from '@/components/library/overflow-text'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
 import { CameraScanner } from '@/components/library/camera-scanner'
+import { StockCheckHelpers } from '@/components/library/stock-check-helpers'
 import {
 	ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle2, Copy, HelpCircle,
 	Play, Lock, LockOpen, Loader2,
@@ -200,7 +201,7 @@ export default function StockCheckPage() {
 	const { isReady, institutionId, appendToUrl } = useInstitutionFilter()
 	// A temporary helper may scan, and nothing else — so they are not offered a
 	// Start or a Close button that the API would refuse them anyway.
-	const { limitedToPages: helperOnly } = useLibraryRole()
+	const { limitedToPages: helperOnly, role } = useLibraryRole()
 	const { toast } = useToast()
 
 	const [sessions, setSessions] = useState<StockSession[]>([])
@@ -584,6 +585,14 @@ export default function StockCheckPage() {
 							</div>
 						</CardContent>
 					</Card>
+
+					{/* Who else may scan. A super admin's to decide, and only theirs —
+					    the route refuses everybody else as well, because a helper can
+					    read anything under /api/lib/stock and a hidden button has
+					    never shut a door. */}
+					{role === 'super_admin' && institutionId && (
+						<StockCheckHelpers institutionId={institutionId} />
+					)}
 
 					{session && (
 						<>

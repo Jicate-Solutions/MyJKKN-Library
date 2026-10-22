@@ -68,6 +68,7 @@
  */
 
 import { createHash } from 'crypto'
+import { getSupabaseServer } from '@/lib/supabase-server'
 import { LIBRARY_ROLES, normaliseRoleKey, type LibraryRole } from './library-roles'
 
 export interface AccessGrant {
@@ -221,16 +222,116 @@ function allGrants(): Map<string, AccessGrant> {
 	return parsed
 }
 
-/** The grant for this email, if there is one and it has not lapsed. */
-export function grantFor(email: string | null | undefined): AccessGrant | null {
+// ── Stock check helpers, from the database ──────────────────────────────────
+//
+// The one kind of grant a super admin adds from a screen rather than from
+// Vercel. Everything else in this file still comes from the environment, and
+// deliberately so: the screen can only be opened by somebody who already holds
+// super_admin, so putting the last super_admin grant behind it is how a library
+// locks itself out.
+
+/** See supabase/migrations/20261022_lib_stock_check_helpers.sql. */
+const HELPERS_TABLE = 'lib_stock_check_helpers'
+
+/** What Postgres and PostgREST say when the migration has not been run. */
+const NO_TABLE = new Set(['42P01', 'PGRST205', '42703'])
+
+interface HelperRow {
+	email: string | null
+	expires_on: string | null
+	institution: { institution_code: string | null } | { institution_code: string | null }[] | null
+}
+
+/**
+ * Held for half a minute.
+ *
+ * This is asked on the way in to every request from somebody MyJKKN gave no
+ * library role, so it cannot be a database round trip each time. Half a minute
+ * is short enough that a helper added on the Stock Check page is working before
+ * anybody has finished telling them to try signing in again.
+ */
+const HELPER_CACHE_MS = 30_000
+let helperCache: { at: number; byEmail: Map<string, AccessGrant> } | null = null
+
+/** Forget the cached list — called by the route that has just changed it. */
+export function forgetStockHelpers(): void {
+	helperCache = null
+}
+
+/**
+ * Every helper whose last day has not passed, by email.
+ *
+ * A missing table is not an error here. Migrations in this project are run by
+ * hand and can sit for weeks, and a migration nobody has run yet must never be
+ * the reason somebody cannot sign in — so the answer is simply that there are
+ * no helpers, which until the table exists is true.
+ */
+async function liveHelpers(): Promise<Map<string, AccessGrant>> {
+	if (helperCache && Date.now() - helperCache.at < HELPER_CACHE_MS) return helperCache.byEmail
+
+	const byEmail = new Map<string, AccessGrant>()
+	try {
+		const { data, error } = await getSupabaseServer()
+			.from(HELPERS_TABLE)
+			.select('email, expires_on, institution:institutions(institution_code)')
+
+		if (error) {
+			if (!NO_TABLE.has((error as { code?: string }).code ?? '')) {
+				console.warn('[access-grant] could not read stock check helpers:', error.message)
+			}
+			helperCache = { at: Date.now(), byEmail }
+			return byEmail
+		}
+
+		for (const row of (data ?? []) as unknown as HelperRow[]) {
+			const email = (row.email ?? '').trim().toLowerCase()
+			// Supabase types a nested one-to-one join as an array, so it is read
+			// back through both shapes rather than fought with.
+			const joined = Array.isArray(row.institution) ? row.institution[0] : row.institution
+			// Kept as the college CODE, because that is what the rest of this file
+			// deals in and what the access check turns back into an id.
+			const collegeCode = (joined?.institution_code ?? '').toUpperCase() || null
+			if (!email || !collegeCode || !row.expires_on) continue
+
+			// The whole of the named day, read exactly as a grant written in the
+			// environment is read, so the two lists lapse the same way.
+			const expiresAt = Date.parse(`${row.expires_on}T23:59:59.999Z`)
+			if (Number.isNaN(expiresAt) || expiresAt < Date.now()) continue
+
+			byEmail.set(email, {
+				email,
+				// The lowest real role, then shut in to one page — the same shape a
+				// stock_check line in the environment is turned into above.
+				role: 'assistant_librarian' as LibraryRole,
+				collegeCode,
+				scanOnly: true,
+				expiresOn: row.expires_on,
+				expiresAt,
+			})
+		}
+	} catch (err) {
+		console.warn('[access-grant] stock check helpers unavailable:', err)
+	}
+
+	helperCache = { at: Date.now(), byEmail }
+	return helperCache.byEmail
+}
+
+/**
+ * The grant for this email, if there is one and it has not lapsed.
+ *
+ * Two lists, in this order. The environment first — every real library role
+ * lives there and it is already in memory. Then the stock check helpers in the
+ * database, which is the only list a screen can add to.
+ */
+export async function grantFor(email: string | null | undefined): Promise<AccessGrant | null> {
 	const key = (email ?? '').trim().toLowerCase()
 	if (!key) return null
 
 	const grant = allGrants().get(key)
-	if (!grant) return null
-	if (grant.expiresAt < Date.now()) return null
+	if (grant && grant.expiresAt >= Date.now()) return grant
 
-	return grant
+	return (await liveHelpers()).get(key) ?? null
 }
 
 /**

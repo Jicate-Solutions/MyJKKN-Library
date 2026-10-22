@@ -82,7 +82,7 @@ export async function GET(request: Request) {
 	}
 
 	const staff = await staffByEmail(identity.email)
-	const grant = grantFor(identity.email)
+	const grant = await grantFor(identity.email)
 
 	const roleKeys = [
 		...new Set([

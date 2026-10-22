@@ -441,7 +441,7 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 	// account switched off in MyJKKN stays off, and a grant must never be a way
 	// back in for somebody who has been deactivated on purpose.
 	if (!real.ok && (real.reason === 'not_staff' || real.reason === 'role_not_allowed')) {
-		const grant = grantFor(identity.email)
+		const grant = await grantFor(identity.email)
 		if (grant) {
 			// The college the grant names, for somebody with no staff record to say
 			// it. A staff record still wins: `callerFromStaff` reads this only when
