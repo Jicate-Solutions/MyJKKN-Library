@@ -34,8 +34,13 @@ const MIGRATION_MESSAGE =
 /** Table-not-there, from Postgres and from PostgREST. */
 const NO_TABLE = new Set(['42P01', 'PGRST205', '42703'])
 
-const COLUMNS =
-	'id, institution_id, email, display_name, member_number, myjkkn_id, expires_on, created_at, created_by_name'
+// Every column, on purpose. 20261022_lib_stock_helpers_any_college.sql adds
+// one, and naming them here would mean this route answering 42703 until that
+// file has been run — which in this project can be weeks.
+const COLUMNS = '*'
+
+/** What Postgres says when ON CONFLICT names columns it has no unique index for. */
+const NO_SUCH_CONFLICT = '42P10'
 
 /**
  * The longest a helper may be let in for.
@@ -92,6 +97,7 @@ export async function GET(request: Request) {
 			.select(COLUMNS)
 			.eq('institution_id', institutionId)
 			.order('expires_on', { ascending: false })
+			.order('email', { ascending: true })
 
 		if (error) {
 			if (NO_TABLE.has(error.code)) {
@@ -166,26 +172,41 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'That college was not found' }, { status: 400 })
 		}
 
-		// One address, one helper grant. Adding the same person again moves their
-		// date rather than failing — that is what somebody pressing Add a second
-		// time means, and refusing it would only send them to find the row first.
-		const { data, error } = await supabase
-			.from('lib_stock_check_helpers')
-			.upsert(
-				{
-					institution_id: institutionId,
-					email,
-					display_name: text(body.display_name) || null,
-					member_number: text(body.member_number) || null,
-					myjkkn_id: text(body.myjkkn_id) || null,
-					expires_on: expiresOn,
-					created_by: guard.caller.userId,
-					created_by_name: guard.caller.fullName ?? guard.caller.email,
-				},
-				{ onConflict: 'email' }
-			)
-			.select(COLUMNS)
-			.maybeSingle()
+		// One row per person per college. Adding the same person to the same
+		// college again moves their date rather than failing — that is what
+		// somebody pressing Add a second time means — while adding them to a
+		// second college leaves the first assignment alone.
+		const base = {
+			institution_id: institutionId,
+			email,
+			display_name: text(body.display_name) || null,
+			member_number: text(body.member_number) || null,
+			myjkkn_id: text(body.myjkkn_id) || null,
+			expires_on: expiresOn,
+			created_by: guard.caller.userId,
+			created_by_name: guard.caller.fullName ?? guard.caller.email,
+		}
+
+		const write = (row: Record<string, unknown>, onConflict: string) =>
+			supabase
+				.from('lib_stock_check_helpers')
+				.upsert(row, { onConflict })
+				.select(COLUMNS)
+				.maybeSingle()
+
+		// Which college the person themselves belongs to — a label for the list,
+		// never a permission.
+		let { data, error } = await write(
+			{ ...base, member_college_code: text(body.member_college_code).toUpperCase() || null },
+			'email,institution_id'
+		)
+
+		// Before 20261022_lib_stock_helpers_any_college.sql there is no such
+		// column and no such index. The older shape still works, and still means
+		// what it meant: one assignment per person.
+		if (error && (error.code === '42703' || error.code === NO_SUCH_CONFLICT)) {
+			({ data, error } = await write(base, 'email'))
+		}
 
 		if (error) {
 			if (NO_TABLE.has(error.code)) {

@@ -68,6 +68,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 import { useLibraryRole } from '@/hooks/use-library-role'
 import { isMemberAllowedPage } from '@/lib/auth/member-access'
 import { canOpenPath } from '@/lib/auth/role-pages'
+import { useBorrowedCollege, STOCK_CHECK_PAGES } from '@/hooks/use-borrowed-college'
 import { FavouritesSidebarSection } from '@/components/library/favourites-sidebar-section'
 
 export interface NavItem {
@@ -220,6 +221,9 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	const { state } = useSidebar()
 	const isCollapsed = state === 'collapsed'
 	const { isMember, role, pages, limitedToPages } = useLibraryRole()
+	// Standing in a college they were only lent to: the menu holds the one page
+	// they were lent for, whatever their own role opens at home.
+	const borrowed = useBorrowedCollege()
 	const { logout } = useAuth()
 
 	// The foot of the sidebar is Log out (it was Collapse until 8 Sep 2026; the
@@ -240,8 +244,10 @@ export function LibSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 	}
 
 	const visibleGroups = React.useMemo(
-		() => visibleNavGroups(role, isMember, pages, limitedToPages),
-		[isMember, role, pages, limitedToPages]
+		() => borrowed
+			? visibleNavGroups(role, isMember, STOCK_CHECK_PAGES, true)
+			: visibleNavGroups(role, isMember, pages, limitedToPages),
+		[isMember, role, pages, limitedToPages, borrowed]
 	)
 
 	const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>(() => {

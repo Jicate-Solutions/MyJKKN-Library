@@ -33,11 +33,19 @@ export async function GET(request: Request) {
 		const spansAllInstitutions = caller.isSuperAdmin || caller.role === 'library_admin'
 
 		if (!spansAllInstitutions) {
-			if (!caller.institutionId) {
+			// Their own college, plus any they have been lent to for a stock
+			// check. The borrowed ones have to be here or they cannot be switched
+			// to at all — and in them the menu holds one page and the API answers
+			// one job, which is decided elsewhere and not by this list.
+			const reachable = [
+				...(caller.institutionId ? [caller.institutionId] : []),
+				...(caller.stockCheckInstitutionIds ?? []),
+			]
+			if (reachable.length === 0) {
 				// Nothing to switch between — better an empty list than everyone's
 				return NextResponse.json([])
 			}
-			query = query.eq('id', caller.institutionId)
+			query = query.in('id', [...new Set(reachable)])
 		} else if (caller.institutionId) {
 			// An admin tied to one college still sees only that one
 			query = query.eq('id', caller.institutionId)

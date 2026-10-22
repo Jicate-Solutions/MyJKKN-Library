@@ -66,6 +66,36 @@ function outsideTheirOneJob(caller: Caller, request: Request): { ok: false; resp
 	return deny(LIMITED_HELPER_MESSAGE, 403)
 }
 
+/** Said in a college somebody was lent to, when they ask it for anything else. */
+const HELPER_COLLEGE_MESSAGE =
+	'You were asked to help with this college\'s stock check — that is the only thing it opens for you'
+
+/**
+ * A college lent to somebody for a stock check, asked for something else.
+ *
+ * This is the other half of `outsideTheirOneJob`, and it exists because the
+ * two are different people. That one is a helper who has no library role at
+ * all, so one list of pages describes everything they may ever reach. This one
+ * is library staff — Engineering's librarian, who runs Engineering perfectly
+ * normally and has been asked to count Pharmacy's shelves for a week. Their
+ * limit is not a property of the person, it is a property of the college they
+ * are asking about: everything at their own, one job at the borrowed one.
+ *
+ * So it is checked after the scope is resolved rather than before, because
+ * until then there is no college to compare against. Null for everybody not in
+ * somebody else's library, which is almost every request.
+ */
+function outsideTheirHelperCollege(
+	caller: Caller,
+	request: Request,
+	institutionId: string | null
+): { ok: false; response: NextResponse } | null {
+	if (!institutionId || institutionId === caller.institutionId) return null
+	if (!(caller.stockCheckInstitutionIds ?? []).includes(institutionId)) return null
+	if (limitedHelperAllows(request.method, new URL(request.url).pathname)) return null
+	return deny(HELPER_COLLEGE_MESSAGE, 403)
+}
+
 /**
  * Writes the audit line when a change is made while viewing as someone else.
  *
@@ -110,6 +140,9 @@ export async function guardCollection(
 	const scope = resolveInstitutionScope(caller, requestedInstitutionId)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
 
+	const borrowed = outsideTheirHelperCollege(caller, request, scope.institutionId)
+	if (borrowed) return borrowed
+
 	noteIfImpersonated(caller, request, scope.institutionId)
 	return { ok: true, caller, institutionId: scope.institutionId }
 }
@@ -131,6 +164,9 @@ export async function guardWrite(
 
 	const scope = resolveInstitutionScope(caller, bodyInstitutionId ?? null)
 	if (scope.error) return deny(scope.error, scope.status ?? 403)
+
+	const borrowed = outsideTheirHelperCollege(caller, request, scope.institutionId)
+	if (borrowed) return borrowed
 
 	// Anyone who spans institutions must say which one a new row belongs to —
 	// a super admin, or a library admin with no college of their own.

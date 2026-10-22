@@ -55,7 +55,7 @@ import {
 } from './myjkkn-staff'
 import { verifyAccessToken } from './supabase-auth-server'
 import { ACCESS_TOKEN_COOKIE } from './supabase-auth'
-import { grantFor, idForGrantedEmail, STOCK_CHECK_PAGES } from './role-grants'
+import { grantFor, idForGrantedEmail, stockCheckAssignmentsFor, STOCK_CHECK_PAGES } from './role-grants'
 
 export type { LibraryRole } from './library-roles'
 export { LIBRARY_ROLES, ROLE_LABEL } from './library-roles'
@@ -87,6 +87,20 @@ export interface Caller {
 	 * dashboard that nobody else can lose. Null for all library staff.
 	 */
 	onlyPages?: string[] | null
+	/**
+	 * Colleges this person has been asked to count the shelves of, on top of
+	 * whatever MyJKKN already gives them.
+	 *
+	 * Engineering's librarian is not turned away by MyJKKN — it knows them and
+	 * gives them Engineering — so being asked to check Pharmacy cannot work by
+	 * replacing what they have. It is added instead: Pharmacy appears in their
+	 * college switcher, and in Pharmacy the API answers nothing but the Stock
+	 * Check page's own reads and one scan.
+	 *
+	 * Empty for almost everybody. Their own college is never in here, even when
+	 * they are also assigned to it — this list is only what the assignment adds.
+	 */
+	stockCheckInstitutionIds?: string[]
 }
 
 export interface AccessResult {
@@ -473,18 +487,25 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 
 	if (!real.ok) return real
 
+	// What they have been asked to count elsewhere. Asked for every caller, not
+	// only one MyJKKN turned away: the whole point is that somebody who already
+	// holds a library role at their own college can be lent to another.
+	const caller = await withStockCheckColleges(real.caller)
+
 	// Only a super admin can be viewing as someone else. If anyone else has the
 	// cookie it is ignored outright rather than trusted.
-	if (viewAsId && real.caller.isSuperAdmin && viewAsId !== real.caller.userId) {
+	if (viewAsId && caller.isSuperAdmin && viewAsId !== caller.userId) {
 		const target = await staffById(viewAsId)
 		if (target) {
 			const asCaller = await callerFromStaff(target)
 			if (asCaller.ok) {
 				return {
 					ok: true,
+					// Theirs, not the super admin's: every rule applying to the
+					// person being viewed is what viewing as them is for.
 					caller: {
-						...asCaller.caller,
-						impersonatedBy: { userId: real.caller.userId, email: real.caller.email },
+						...(await withStockCheckColleges(asCaller.caller)),
+						impersonatedBy: { userId: caller.userId, email: caller.email },
 					},
 				}
 			}
@@ -493,7 +514,24 @@ async function resolveIdentityFor(token: string, viewAsId: string | null): Promi
 		// as the real super admin rather than refusing them their own session
 	}
 
-	return real
+	return { ok: true, caller }
+}
+
+/**
+ * The same caller, carrying the colleges they were lent to for a stock check.
+ *
+ * Their own college is dropped: being assigned to the library you already run
+ * must not quietly cut you down to one page in it. Untouched when there is
+ * nothing to add, which is almost everybody.
+ */
+async function withStockCheckColleges(caller: Caller): Promise<Caller> {
+	const assigned = await stockCheckAssignmentsFor(caller.email)
+	if (assigned.length === 0) return caller
+
+	const lent = [...new Set(assigned.map(a => a.institutionId))]
+		.filter(id => id !== caller.institutionId)
+
+	return lent.length > 0 ? { ...caller, stockCheckInstitutionIds: lent } : caller
 }
 
 /** True when the caller holds at least the given role. */
@@ -534,6 +572,13 @@ export function resolveInstitutionScope(
 	}
 
 	if (requestedInstitutionId && requestedInstitutionId !== caller.institutionId) {
+		// A college they have been lent to for a stock check. Allowed through
+		// here and cut down to that one job by `outsideTheirHelperCollege` in the
+		// API guard, which can see the path and this cannot.
+		if ((caller.stockCheckInstitutionIds ?? []).includes(requestedInstitutionId)) {
+			return { institutionId: requestedInstitutionId }
+		}
+
 		return {
 			institutionId: null,
 			error: 'You can only access your own institution',

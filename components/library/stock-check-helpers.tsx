@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
 	AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
 	AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -37,6 +38,8 @@ interface Helper {
 	myjkkn_id: string | null
 	expires_on: string
 	created_by_name: string | null
+	/** Which college the person belongs to. A label only — see the migration. */
+	member_college_code: string | null
 	is_expired: boolean
 }
 
@@ -46,6 +49,13 @@ interface Candidate {
 	display_name: string
 	email: string | null
 	role_label: string
+	/** Their own college, which is often not the one they are being lent to. */
+	institution_id: string
+}
+
+interface College {
+	id: string
+	institution_code: string
 }
 
 /** A helper is let in for the counting, not for the year. */
@@ -65,6 +75,10 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 	const [loading, setLoading] = useState(false)
 	const [setupError, setSetupError] = useState<string | null>(null)
 
+	// Anybody in MyJKKN may be asked to help, so the search is not tied to the
+	// college being managed: Engineering's staff count Pharmacy's shelves.
+	const [colleges, setColleges] = useState<College[]>([])
+	const [searchCollege, setSearchCollege] = useState('all')
 	const [search, setSearch] = useState('')
 	const [results, setResults] = useState<Candidate[]>([])
 	const [searching, setSearching] = useState(false)
@@ -106,6 +120,23 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 
 	useEffect(() => { load() }, [load])
 
+	// Read once. A super admin is the only person who opens this panel, so the
+	// switcher's list is every college.
+	useEffect(() => {
+		void (async () => {
+			try {
+				const res = await fetch('/api/lib/institutions')
+				if (!res.ok) return
+				const rows = await res.json()
+				setColleges((rows as College[]).map(row => ({ id: row.id, institution_code: row.institution_code })))
+			} catch {
+				// The picker stays on All colleges, which still finds everybody.
+			}
+		})()
+	}, [])
+
+	const codeOf = (id: string) => colleges.find(college => college.id === id)?.institution_code ?? ''
+
 	// Typing should not fire a request per keystroke, and a single letter would
 	// return most of the college.
 	useEffect(() => {
@@ -118,8 +149,11 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 		setSearching(true)
 		const timer = setTimeout(async () => {
 			try {
+				// No college named means every college — which is what a super
+				// admin's own member list does, and is the point of this panel.
+				const scope = searchCollege === 'all' ? '' : `&institution_id=${searchCollege}`
 				const res = await fetch(
-					`/api/lib/members?institution_id=${institutionId}&search=${encodeURIComponent(term)}`
+					`/api/lib/members?search=${encodeURIComponent(term)}${scope}`
 				)
 				if (!res.ok) throw new Error()
 				const rows = await res.json()
@@ -131,7 +165,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 			}
 		}, 400)
 		return () => clearTimeout(timer)
-	}, [search, institutionId])
+	}, [search, searchCollege])
 
 	const add = async () => {
 		if (!picked) return
@@ -146,6 +180,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 					display_name: picked.display_name,
 					member_number: picked.member_number,
 					myjkkn_id: picked.myjkkn_id,
+					member_college_code: codeOf(picked.institution_id),
 					expires_on: until,
 				}),
 			})
@@ -241,7 +276,9 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 															</span>
 														)}
 													</p>
-													<p className="truncate text-xs text-muted-foreground">{helper.email}</p>
+													<p className="truncate text-xs text-muted-foreground">
+													{helper.member_college_code ? helper.member_college_code + ' · ' : ''}{helper.email}
+												</p>
 												</div>
 												<div className="flex items-center gap-2">
 													{helper.is_expired ? (
@@ -285,6 +322,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 													</span>
 												</p>
 												<p className="truncate text-xs text-muted-foreground">
+													{codeOf(picked.institution_id) ? codeOf(picked.institution_id) + ' · ' : ''}
 													{picked.email} · {picked.role_label}
 												</p>
 											</div>
@@ -300,13 +338,31 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 										</div>
 									) : (
 										<>
+											<div className="flex flex-wrap items-center gap-2">
+												<Select value={searchCollege} onValueChange={setSearchCollege}>
+													<SelectTrigger className="h-9 w-[170px] text-sm">
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="all">All colleges</SelectItem>
+														{colleges.map(college => (
+															<SelectItem key={college.id} value={college.id}>
+																{college.institution_code}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+												<p className="text-xs text-muted-foreground">
+													Anybody in MyJKKN can be asked to help — staff or learner, any college
+												</p>
+											</div>
 											<div className="relative">
 												<Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
 												<Input
 													ref={searchRef}
 													value={search}
 													onChange={e => setSearch(e.target.value)}
-													placeholder="Search this college by name or ID"
+													placeholder="Search by name or ID"
 													className="h-9 pl-8 text-sm"
 												/>
 												{searching && (
@@ -316,7 +372,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 
 											{search.trim().length >= 2 && !searching && results.length === 0 && (
 												<p className="text-xs text-muted-foreground">
-													Nobody in this college matches that
+													Nobody matches that
 												</p>
 											)}
 
@@ -340,6 +396,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 																	</span>
 																</span>
 																<span className="block truncate text-xs text-muted-foreground">
+																	{codeOf(person.institution_id) ? codeOf(person.institution_id) + ' · ' : ''}
 																	{person.email || 'No email in MyJKKN — cannot sign in'}
 																</span>
 															</span>
@@ -375,7 +432,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 									</div>
 
 									<p className="text-xs text-muted-foreground">
-										They sign in with Google through MyJKKN exactly as everyone else does. This opens the Stock Check page for them and nothing else — they can scan into a round somebody else started, and that is all.
+										They sign in with Google through MyJKKN exactly as everyone else does. This college&apos;s Stock Check page opens for them and nothing else — they can scan into a round somebody else started, and that is all. Somebody who runs their own college&apos;s library keeps it: this is added to what they already have, not put in its place.
 									</p>
 								</div>
 							</>

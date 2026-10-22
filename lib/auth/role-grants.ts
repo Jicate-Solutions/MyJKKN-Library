@@ -238,8 +238,23 @@ const NO_TABLE = new Set(['42P01', 'PGRST205', '42703'])
 
 interface HelperRow {
 	email: string | null
+	institution_id: string | null
 	expires_on: string | null
 	institution: { institution_code: string | null } | { institution_code: string | null }[] | null
+}
+
+/**
+ * One person's permission to count one college's shelves.
+ *
+ * A person may hold several: Engineering's staff may be asked to check
+ * Pharmacy this week and Nursing the next, and one does not replace the other.
+ */
+export interface StockCheckAssignment {
+	institutionId: string
+	collegeCode: string
+	/** The last day it works, as written: 'YYYY-MM-DD'. */
+	expiresOn: string
+	expiresAt: number
 }
 
 /**
@@ -251,7 +266,7 @@ interface HelperRow {
  * anybody has finished telling them to try signing in again.
  */
 const HELPER_CACHE_MS = 30_000
-let helperCache: { at: number; byEmail: Map<string, AccessGrant> } | null = null
+let helperCache: { at: number; byEmail: Map<string, StockCheckAssignment[]> } | null = null
 
 /** Forget the cached list — called by the route that has just changed it. */
 export function forgetStockHelpers(): void {
@@ -266,14 +281,14 @@ export function forgetStockHelpers(): void {
  * the reason somebody cannot sign in — so the answer is simply that there are
  * no helpers, which until the table exists is true.
  */
-async function liveHelpers(): Promise<Map<string, AccessGrant>> {
+async function liveHelpers(): Promise<Map<string, StockCheckAssignment[]>> {
 	if (helperCache && Date.now() - helperCache.at < HELPER_CACHE_MS) return helperCache.byEmail
 
-	const byEmail = new Map<string, AccessGrant>()
+	const byEmail = new Map<string, StockCheckAssignment[]>()
 	try {
 		const { data, error } = await getSupabaseServer()
 			.from(HELPERS_TABLE)
-			.select('email, expires_on, institution:institutions(institution_code)')
+			.select('email, institution_id, expires_on, institution:institutions(institution_code)')
 
 		if (error) {
 			if (!NO_TABLE.has((error as { code?: string }).code ?? '')) {
@@ -288,27 +303,25 @@ async function liveHelpers(): Promise<Map<string, AccessGrant>> {
 			// Supabase types a nested one-to-one join as an array, so it is read
 			// back through both shapes rather than fought with.
 			const joined = Array.isArray(row.institution) ? row.institution[0] : row.institution
-			// Kept as the college CODE, because that is what the rest of this file
-			// deals in and what the access check turns back into an id.
+			// Both are kept: the id is what scope is decided on, the code is what
+			// the rest of this file and the access check deal in.
 			const collegeCode = (joined?.institution_code ?? '').toUpperCase() || null
-			if (!email || !collegeCode || !row.expires_on) continue
+			const institutionId = (row.institution_id ?? '').trim()
+			if (!email || !collegeCode || !institutionId || !row.expires_on) continue
 
 			// The whole of the named day, read exactly as a grant written in the
 			// environment is read, so the two lists lapse the same way.
 			const expiresAt = Date.parse(`${row.expires_on}T23:59:59.999Z`)
 			if (Number.isNaN(expiresAt) || expiresAt < Date.now()) continue
 
-			byEmail.set(email, {
-				email,
-				// The lowest real role, then shut in to one page — the same shape a
-				// stock_check line in the environment is turned into above.
-				role: 'assistant_librarian' as LibraryRole,
-				collegeCode,
-				scanOnly: true,
-				expiresOn: row.expires_on,
-				expiresAt,
-			})
+			const held = byEmail.get(email) ?? []
+			held.push({ institutionId, collegeCode, expiresOn: row.expires_on, expiresAt })
+			byEmail.set(email, held)
 		}
+
+		// Soonest to lapse first, so the one grant a non-staff helper is let in
+		// on is the one that is about to matter rather than an arbitrary row.
+		for (const held of byEmail.values()) held.sort((a, b) => a.expiresAt - b.expiresAt)
 	} catch (err) {
 		console.warn('[access-grant] stock check helpers unavailable:', err)
 	}
@@ -331,7 +344,46 @@ export async function grantFor(email: string | null | undefined): Promise<Access
 	const grant = allGrants().get(key)
 	if (grant && grant.expiresAt >= Date.now()) return grant
 
-	return (await liveHelpers()).get(key) ?? null
+	// Somebody MyJKKN has no library role for at all — a learner, or staff of a
+	// college that is not theirs to run. They are let in on their first
+	// assignment and shut into the Stock Check page; the others, if they hold
+	// any, come back through stockCheckAssignmentsFor below and appear in their
+	// college switcher.
+	const held = (await liveHelpers()).get(key) ?? []
+	const first = held[0]
+	if (!first) return null
+
+	return {
+		email: key,
+		// The lowest real role, then shut in to one page — the same shape a
+		// stock_check line in the environment is turned into above.
+		role: 'assistant_librarian' as LibraryRole,
+		collegeCode: first.collegeCode,
+		scanOnly: true,
+		expiresOn: first.expiresOn,
+		expiresAt: first.expiresAt,
+	}
+}
+
+/**
+ * The colleges this person may count the shelves of, whoever else they are.
+ *
+ * Read on EVERY sign-in, not only when MyJKKN turns somebody away — which is
+ * the whole point of it. Engineering's librarian is not turned away: MyJKKN
+ * knows them and gives them Engineering. Being asked to count Pharmacy's
+ * shelves must not take that away and must not depend on it, so this is added
+ * to what they already have rather than used in place of it.
+ *
+ * What it buys is narrow and enforced elsewhere: those colleges appear in their
+ * switcher, and in them the API answers nothing but the Stock Check page's own
+ * reads and one scan. See `limitedHelperAllows` and the API guard.
+ */
+export async function stockCheckAssignmentsFor(
+	email: string | null | undefined
+): Promise<StockCheckAssignment[]> {
+	const key = (email ?? '').trim().toLowerCase()
+	if (!key) return []
+	return (await liveHelpers()).get(key) ?? []
 }
 
 /**

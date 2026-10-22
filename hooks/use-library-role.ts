@@ -51,6 +51,13 @@ export interface LibraryIdentity {
 	 * menu and the page guard read it as a limit rather than a preference.
 	 */
 	limitedToPages: boolean
+	/**
+	 * Colleges this person was lent to for a stock check, if any.
+	 *
+	 * Not a limit on them — at their own college they are whatever MyJKKN says.
+	 * It is a limit on those colleges: see `useBorrowedCollege`.
+	 */
+	stockCheckInstitutionIds: string[]
 }
 
 const EMPTY: LibraryIdentity = {
@@ -64,6 +71,7 @@ const EMPTY: LibraryIdentity = {
 	libraryRoles: [],
 	pages: null,
 	limitedToPages: false,
+	stockCheckInstitutionIds: [],
 }
 
 let cached: LibraryIdentity | null = null
@@ -92,6 +100,9 @@ async function loadIdentity(): Promise<LibraryIdentity> {
 						libraryRoles: json.library_roles ?? [],
 						pages: Array.isArray(json.pages) ? json.pages : null,
 						limitedToPages: json.limited_to_pages === true,
+						stockCheckInstitutionIds: Array.isArray(json.stock_check_institution_ids)
+							? json.stock_check_institution_ids
+							: [],
 					}
 					: EMPTY
 				return cached
@@ -133,6 +144,7 @@ export function useLibraryRole() {
 		libraryRoles: identity.libraryRoles,
 		pages: identity.pages,
 		limitedToPages: identity.limitedToPages,
+		stockCheckInstitutionIds: identity.stockCheckInstitutionIds,
 		/**
 		 * Kept so the sidebar's signature does not have to change. Nobody is a
 		 * `member` any more — borrowers do not sign in — so this is always false.

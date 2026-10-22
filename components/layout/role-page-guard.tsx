@@ -20,6 +20,7 @@ import { useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLibraryRole } from '@/hooks/use-library-role'
+import { useBorrowedCollege, STOCK_CHECK_PAGES } from '@/hooks/use-borrowed-college'
 import { canOpenPath, pageForPath } from '@/lib/auth/role-pages'
 import { ROLE_LABEL } from '@/lib/auth/library-roles'
 import { Card, CardContent } from '@/components/ui/card'
@@ -29,7 +30,12 @@ import { Lock, ArrowLeft } from 'lucide-react'
 export function RolePageGuard({ children }: { children: React.ReactNode }) {
 	const pathname = usePathname()
 	const router = useRouter()
-	const { role, isReady, pages, limitedToPages } = useLibraryRole()
+	const { role, isReady, pages: ownPages, limitedToPages: ownLimit } = useLibraryRole()
+	// In a borrowed college the limit is the college's, not the person's — see
+	// useBorrowedCollege. At their own it is whatever their role gives them.
+	const borrowed = useBorrowedCollege()
+	const pages = borrowed ? STOCK_CHECK_PAGES : ownPages
+	const limitedToPages = borrowed || ownLimit
 
 	// Somebody on a temporary grant for one job — a stock check helper. Their
 	// page is the only one they have, so signing in has to land them on it:

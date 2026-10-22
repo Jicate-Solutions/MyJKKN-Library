@@ -68,6 +68,11 @@ export async function GET(request: Request) {
 		// True for a stock check helper: the menu shows their one page, and the
 		// screens hide what they cannot do rather than offering it and refusing.
 		limited_to_pages: Boolean(caller.onlyPages),
+		// Colleges they were lent to for a stock check. In these the menu holds
+		// the Stock Check page alone, however much their own role would open at
+		// home — the API refuses the rest either way, and offering a menu that
+		// only produces refusals is worse than not offering it.
+		stock_check_institution_ids: caller.stockCheckInstitutionIds ?? [],
 		myjkkn_roles: caller.myjkknRoles,
 		library_roles: LIBRARY_ROLES,
 		institution_id: caller.institutionId,

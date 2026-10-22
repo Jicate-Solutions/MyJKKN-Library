@@ -27,6 +27,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import Link from 'next/link'
 import { useInstitutionFilter } from '@/hooks/use-institution-filter'
 import { useLibraryRole } from '@/hooks/use-library-role'
+import { useBorrowedCollege } from '@/hooks/use-borrowed-college'
 import { useToast } from '@/hooks/common/use-toast'
 import { deskFetch } from '@/lib/library/desk-fetch'
 import { Button } from '@/components/ui/button'
@@ -201,7 +202,12 @@ export default function StockCheckPage() {
 	const { isReady, institutionId, appendToUrl } = useInstitutionFilter()
 	// A temporary helper may scan, and nothing else — so they are not offered a
 	// Start or a Close button that the API would refuse them anyway.
-	const { limitedToPages: helperOnly, role } = useLibraryRole()
+	const { limitedToPages, role } = useLibraryRole()
+	// Lent to this college for the counting: they scan, and the round is
+	// somebody else's to start and to close — the same as a helper who has no
+	// library role at all, which is what `helperOnly` has always meant here.
+	const borrowed = useBorrowedCollege()
+	const helperOnly = limitedToPages || borrowed
 	const { toast } = useToast()
 
 	const [sessions, setSessions] = useState<StockSession[]>([])
