@@ -16,7 +16,6 @@ import {
 	Search, RefreshCw, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { fetchOverdue } from '@/services/library/lib-circulation-service'
-import { SendRemindersButton } from '@/components/library/send-reminders-button'
 import type { LibLendingTransaction } from '@/types/lib'
 
 function getDaysOverdue(dueDate: string): number {
@@ -168,12 +167,6 @@ export default function OverduePage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} item{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
-								<SendRemindersButton
-									institutionId={institutionId}
-									type="overdue"
-									onSent={fetchData}
-									disabled={loading}
-								/>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<Button variant="outline" size="icon" className="h-11 w-11 sm:h-8 sm:w-8 p-0" onClick={fetchData}>

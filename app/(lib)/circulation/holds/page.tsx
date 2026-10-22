@@ -19,7 +19,6 @@ import {
 	ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { fetchHolds, cancelHold } from '@/services/library/lib-circulation-service'
-import { SendRemindersButton } from '@/components/library/send-reminders-button'
 import type { LibResourceHold } from '@/types/lib'
 
 const HOLD_STATUS_COLORS: Record<string, string> = {
@@ -162,12 +161,6 @@ export default function HoldsPage() {
 								<p className="text-xs text-muted-foreground">{filtered.length} hold{filtered.length !== 1 ? 's' : ''}</p>
 							</div>
 							<div className="flex items-center gap-1.5 shrink-0">
-								<SendRemindersButton
-									institutionId={institutionId}
-									type="hold_available"
-									onSent={fetchData}
-									disabled={loading}
-								/>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<Button variant="outline" size="icon" className="h-8 w-8 p-0" onClick={fetchData}>
