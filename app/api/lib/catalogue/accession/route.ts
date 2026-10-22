@@ -17,6 +17,7 @@ import { findExistingTitle, nextCopyNumber } from '@/lib/library/copy-grouping'
 import {
 	formatForBookType,
 	isbnRequiredFor,
+	supplierRequiredFor,
 	usesBookOnlyFields,
 	usesTypedAccessionNumber,
 	usesPageCount,
@@ -77,6 +78,14 @@ export async function POST(request: Request) {
 		}
 		if (isbnRequiredFor(bookType) && !text(body.isbn)) {
 			return NextResponse.json({ error: 'ISBN is required for books' }, { status: 400 })
+		}
+		// The same rule the form applies, kept here as well so a magazine
+		// cannot be entered without its vendor by any other route in.
+		if (supplierRequiredFor(bookType) && !text(body.supplier_name)) {
+			return NextResponse.json(
+				{ error: 'Supplier is required for a magazine or journal' },
+				{ status: 400 }
+			)
 		}
 
 		const supabase = getSupabaseServer()

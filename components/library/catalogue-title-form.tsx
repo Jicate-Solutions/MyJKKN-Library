@@ -25,6 +25,7 @@ import {
 	isbnRequiredFor,
 	usesIssn,
 	usesSupplier,
+	supplierRequiredFor,
 	usesBookOnlyFields,
 	departmentRequiredFor,
 	usesTypedAccessionNumber,
@@ -103,6 +104,7 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 	const { departments } = useDepartments()
 	const departmentRequired = departmentRequiredFor(form.book_type)
 	const showSupplier = showCopySection && usesSupplier(form.book_type)
+	const supplierRequired = supplierRequiredFor(form.book_type)
 	/** Author, Edition/Issue and Price belong to a book, not to a periodical. */
 	const bookOnly = usesBookOnlyFields(form.book_type)
 	/** A book's number is written inside it; a magazine's is allotted. */
@@ -305,15 +307,20 @@ export function CatalogueTitleForm<T extends TitleFormFields>({
 				    already there when that screen is put to work. */}
 				{showSupplier && (
 					<div className="space-y-2">
-						<Label className="text-sm font-semibold">Supplier</Label>
+						<Label className="text-sm font-semibold">Supplier {supplierRequired && <Required />}</Label>
 						<Input
 							value={form.supplier_name}
 							onChange={e => set({ supplier_name: e.target.value })}
 							placeholder="e.g. Universal Book Agency"
+							className={errors.supplier_name ? 'border-red-500' : ''}
 						/>
-						<p className="text-xs text-muted-foreground">
-							Who this magazine or journal comes from. Leave it blank if it is not bought from a vendor.
-						</p>
+						{errors.supplier_name
+							? <p className="text-xs text-red-500">{errors.supplier_name}</p>
+							: <p className="text-xs text-muted-foreground">
+								{supplierRequired
+									? 'Who this magazine or journal comes from — the vendor the subscription is paid to.'
+									: 'Who this magazine or journal comes from. Leave it blank if it is not bought from a vendor.'}
+							</p>}
 					</div>
 				)}
 

@@ -39,7 +39,7 @@ import { createItem } from '@/services/library/lib-items-service'
 import { CatalogueBulkUpload } from '@/components/library/catalogue-bulk-upload'
 import { CatalogueBulkEdit } from '@/components/library/catalogue-bulk-edit'
 import { CatalogueTitleForm } from '@/components/library/catalogue-title-form'
-import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, usesShelfMarks, usesPeriodicalScope, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
+import { usesAccessionRegister, formatForBookType, OTHER_BOOK_TYPE, BOOK_TYPE_LABELS, isbnRequiredFor, departmentRequiredFor, usesSupplier, supplierRequiredFor, usesBookOnlyFields, usesTypedAccessionNumber, usesPageCount, usesShelfMarks, usesPeriodicalScope, isReferenceOnlyForced } from '@/lib/library/catalogue-options'
 
 const FORMATS: LibResourceFormat[] = [
 	'book', 'periodical', 'thesis', 'report', 'map',
@@ -328,6 +328,13 @@ export default function RegistryPage() {
 					e.accession_number = 'Accession number is required'
 				}
 				if (!form.accession_date.trim()) e.accession_date = 'Date of adding is required'
+				// A subscription is paid to somebody, and the register asks who while
+				// the invoice is still in hand. Only where the field is on screen — a
+				// magazine or journal being added — so no book is ever held up for a
+				// vendor it does not have.
+				if (supplierRequiredFor(form.book_type) && !form.supplier_name.trim()) {
+					e.supplier_name = 'Supplier is required for a magazine or journal'
+				}
 			}
 		}
 

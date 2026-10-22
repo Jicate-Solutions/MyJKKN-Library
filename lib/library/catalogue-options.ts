@@ -232,6 +232,24 @@ export function usesSupplier(bookType: string): boolean {
 }
 
 /**
+ * And insisted on, once the field is shown.
+ *
+ * A subscription is paid to somebody, and that somebody is the only way back
+ * to a missing issue or a renewal nobody noticed lapsing. Left blank at entry
+ * it is nobody's job a year later, when the invoice is gone and the librarian
+ * who ordered it has moved on — so it is asked for while the invoice is still
+ * in hand.
+ *
+ * Books are not affected: a book's supplier belongs to its purchase order and
+ * the field is never shown for one. The bulk sheets keep it optional too — a
+ * sheet of a thousand back issues must not be refused over a column the old
+ * register never had.
+ */
+export function supplierRequiredFor(bookType: string): boolean {
+	return usesSupplier(bookType)
+}
+
+/**
  * Author, Edition/Issue and Price — a book's fields, and not a periodical's.
  *
  * The catalogue registers a magazine or journal once, as a title. What arrives
