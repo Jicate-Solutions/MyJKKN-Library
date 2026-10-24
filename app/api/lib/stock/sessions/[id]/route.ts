@@ -5,6 +5,7 @@
  *   ?view=pending&page=0        the copies this round has not seen yet
  *   ?view=pending&all=1         …all of them in one answer
  *   ?view=scans                 every copy this round has seen, newest first
+ *   ?view=mine                  the scans of whoever is asking, newest first
  *   ?view=index                 every copy, compact, for the phone to answer scans instantly
  *   ?view=unknown               numbers scanned that are not copies here
  *
@@ -160,6 +161,43 @@ export async function GET(
 						})
 				})
 				return NextResponse.json({ items })
+			} catch (error) {
+				if (needsMigration(codeOf(error))) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
+				throw error
+			}
+		}
+
+		// What the person asking has counted in this round.
+		//
+		// Everyone's tab answers "what has the round seen"; this answers "how far
+		// have I got", which is the question somebody halfway down a shelf
+		// actually has. It is read back from the round rather than kept on the
+		// phone, so a reload, a flat battery or carrying on from another phone
+		// does not take somebody's afternoon off the screen — and because the
+		// filter is who scanned it, two people sharing one phone each see only
+		// their own.
+		if (view === 'mine') {
+			const me = guard.caller.userId
+			if (!me) return NextResponse.json({ data: [], total: 0 })
+			try {
+				const data = await sharedRead(`mine:${id}:${me}`, SCANS_MS, async () => {
+					const { data, error } = await fetchAllRows(range =>
+						supabase
+							.from('lib_stock_scans')
+							.select('id, accession_number, outcome, title, item_status, scanned_by_name, scanned_at')
+							.eq('session_id', id)
+							.eq('scanned_by', me)
+							// Every outcome, the same as Everyone's: a number that is not a copy
+							// here is kept for the library to look into, and the person who read
+							// it is the one who can say what was on that shelf.
+							.order('scanned_at', { ascending: false })
+							.order('id')
+							.range(range.from, range.to)
+					)
+					throwIfFailed(error)
+					return data
+				})
+				return NextResponse.json({ data, total: data.length })
 			} catch (error) {
 				if (needsMigration(codeOf(error))) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
 				throw error

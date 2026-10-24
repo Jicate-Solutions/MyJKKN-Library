@@ -97,6 +97,30 @@ function outsideTheirHelperCollege(
 }
 
 /**
+ * Which college a single record is answered under — null when it is nobody's
+ * business of this caller's, which the guards turn into a 404.
+ *
+ * Their own college, and any they were lent to for a stock check. Those lent
+ * colleges are the reason this exists: `resolveInstitutionScope` learned about
+ * them when a librarian was first lent to another library, but that is reached
+ * only by the guards that take an institution from the URL or the body. A
+ * guard that reads one row by its id never asks for a college at all — it
+ * compares the row's own against the caller's — so a helper counting another
+ * college's shelves was told the round they were looking at did not exist,
+ * with no counts and no list.
+ *
+ * What they may then do in a borrowed college is not decided here. That is
+ * `outsideTheirHelperCollege`, exactly as it is for every other guard.
+ */
+function collegeForRecord(caller: Caller, rowInstitutionId: string | null): string | null {
+	if (caller.institutionId && rowInstitutionId === caller.institutionId) return caller.institutionId
+	if (rowInstitutionId && (caller.stockCheckInstitutionIds ?? []).includes(rowInstitutionId)) {
+		return rowInstitutionId
+	}
+	return null
+}
+
+/**
  * Writes the audit line when a change is made while viewing as someone else.
  *
  * Every route already passes through one of the guards below, so putting it
@@ -201,7 +225,7 @@ export async function guardRecord(
 		return { ok: true, caller, institutionId: null }
 	}
 
-	if (!caller.institutionId) {
+	if (!caller.institutionId && (caller.stockCheckInstitutionIds ?? []).length === 0) {
 		return deny('Your account is not linked to an institution', 403)
 	}
 
@@ -214,12 +238,14 @@ export async function guardRecord(
 
 	if (!row) return deny('Not found', 404)
 
-	if (row.institution_id !== caller.institutionId) {
-		return deny('Not found', 404)
-	}
+	const institutionId = collegeForRecord(caller, row.institution_id)
+	if (!institutionId) return deny('Not found', 404)
 
-	noteIfImpersonated(caller, request, caller.institutionId)
-	return { ok: true, caller, institutionId: caller.institutionId }
+	const borrowed = outsideTheirHelperCollege(caller, request, institutionId)
+	if (borrowed) return borrowed
+
+	noteIfImpersonated(caller, request, institutionId)
+	return { ok: true, caller, institutionId }
 }
 
 /**
@@ -270,14 +296,16 @@ export async function guardRecordRow<T extends { institution_id: string | null }
 		return { ok: true, caller, institutionId: null, row: record }
 	}
 
-	if (!caller.institutionId) {
+	if (!caller.institutionId && (caller.stockCheckInstitutionIds ?? []).length === 0) {
 		return deny('Your account is not linked to an institution', 403)
 	}
 
-	if (record.institution_id !== caller.institutionId) {
-		return deny('Not found', 404)
-	}
+	const institutionId = collegeForRecord(caller, record.institution_id)
+	if (!institutionId) return deny('Not found', 404)
 
-	noteIfImpersonated(caller, request, caller.institutionId)
-	return { ok: true, caller, institutionId: caller.institutionId, row: record }
+	const borrowed = outsideTheirHelperCollege(caller, request, institutionId)
+	if (borrowed) return borrowed
+
+	noteIfImpersonated(caller, request, institutionId)
+	return { ok: true, caller, institutionId, row: record }
 }
