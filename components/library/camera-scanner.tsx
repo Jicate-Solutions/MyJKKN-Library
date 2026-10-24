@@ -62,7 +62,22 @@ interface ReaderControls {
 
 /** The browser's own barcode reader, where it has one. Not in the DOM types yet. */
 interface NativeDetector {
-	detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>
+	detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string; format?: string }>>
+}
+
+/**
+ * Barcode types a library label is never printed in, and that a camera reads
+ * by mistake: EAN and UPC are the publisher's code on the cover, and ITF is
+ * known for finding a number in part of some other barcode. A library label
+ * 27087 was read as the UPC 616886983100. Where the page can say which
+ * numbers are real copies (`isKnown`), these are taken only when they are one.
+ */
+const UNSURE_FORMATS = new Set(['ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf'])
+
+/** One code the camera found, with the kind of barcode it was. */
+interface Read {
+	value: string
+	format: string
 }
 
 /** The formats the library meets, in the names the browser's reader uses. */
@@ -97,7 +112,7 @@ interface CameraScannerProps {
 	 * unless `continuous` is set, when it is called for each new code and the
 	 * picture carries on.
 	 */
-	onScan: (value: string) => void
+	onScan: (value: string, format?: string) => void
 	disabled?: boolean
 	/** Said above the picture, so the person knows what to point it at. */
 	label?: string
@@ -131,6 +146,12 @@ interface CameraScannerProps {
 	 * can say "already scanned" as loudly as it says "counted".
 	 */
 	onRepeat?: (value: string) => void
+	/**
+	 * Whether a number is a real copy here. Given, it lets the camera prefer the
+	 * library's label when a frame holds more than one barcode, and refuse a
+	 * publisher's code or a misread (see UNSURE_FORMATS) that matches nothing.
+	 */
+	isKnown?: (value: string) => boolean
 }
 
 export function CameraScanner({
@@ -143,8 +164,25 @@ export function CameraScanner({
 	feed,
 	onOpenChange,
 	onRepeat,
+	isKnown,
 }: CameraScannerProps) {
 	const [open, setOpen] = useState(false)
+
+	const isKnownRef = useRef(isKnown)
+	useEffect(() => { isKnownRef.current = isKnown }, [isKnown])
+
+	/**
+	 * The one code worth handing over from what a frame held — or none, when
+	 * all it held was a code a library label is never printed in.
+	 */
+	const pick = useCallback((reads: Read[]): Read | null => {
+		const usable = reads.filter(read => read.value)
+		const known = isKnownRef.current
+		if (!known) return usable[0] ?? null
+		return usable.find(read => known(read.value))
+			?? usable.find(read => !UNSURE_FORMATS.has(read.format))
+			?? null
+	}, [])
 
 	const onRepeatRef = useRef(onRepeat)
 	useEffect(() => { onRepeatRef.current = onRepeat }, [onRepeat])
@@ -240,7 +278,7 @@ export function CameraScanner({
 		return () => document.removeEventListener('visibilitychange', onVisibility)
 	}, [open, continuous, release])
 
-	const finish = useCallback((value: string) => {
+	const finish = useCallback((value: string, format = '') => {
 		// Counting a shelf: hand it over and keep the picture. The camera is put
 		// down by the person, not by the first book it happens to read.
 		if (continuous) {
@@ -258,7 +296,7 @@ export function CameraScanner({
 			setRepeated(null)
 			// A phone held against a shelf is not being watched closely
 			try { navigator.vibrate?.(30) } catch { /* not every device has it */ }
-			onScanRef.current(value)
+			onScanRef.current(value, format)
 			return
 		}
 
@@ -266,7 +304,7 @@ export function CameraScanner({
 		doneRef.current = true
 		release()
 		setOpen(false)
-		onScanRef.current(value)
+		onScanRef.current(value, format)
 	}, [continuous, release])
 
 	// The "already counted" note is a flash, not a state to get stuck in
@@ -355,18 +393,21 @@ export function CameraScanner({
 						// the detector refuses it
 						if (video.readyState >= 2) {
 							const codes = await native.detect(video)
-							const hit = codes.find(code => code.rawValue?.trim())
+							const hit = pick(codes.map(code => ({
+								value: (code.rawValue ?? '').trim(),
+								format: (code.format ?? '').toLowerCase(),
+							})))
 							if (hit) {
 								// Counting a shelf: the picture stays, and the next look
 								// waits a little longer so the book being lifted away is
 								// not read a second time on its way out of shot.
 								if (!continuous) {
 									stop()
-									finish(hit.rawValue.trim())
+									finish(hit.value, hit.format)
 									return
 								}
 								justRead = true
-								finish(hit.rawValue.trim())
+								finish(hit.value, hit.format)
 							}
 						}
 					} catch {
@@ -406,14 +447,17 @@ export function CameraScanner({
 						// A frame with nothing readable in it is the normal case, several
 						// times a second, and arrives here as an error worth ignoring.
 						if (!result) return
-						const text = result.getText().trim()
-						if (!text) return
+						const hit = pick([{
+							value: result.getText().trim(),
+							format: String(BarcodeFormat[result.getBarcodeFormat()] ?? '').toLowerCase(),
+						}])
+						if (!hit) return
 						// Counting a shelf: every code is handed over and the reader
 						// is left running; a code already counted is dropped inside
 						// `finish`, which is what stops the same book firing on every
 						// frame it stays in shot for.
 						if (!continuous) ctrl.stop()
-						finish(text)
+						finish(hit.value, hit.format)
 					}
 				)
 				controlsRef.current = controls
@@ -448,7 +492,7 @@ export function CameraScanner({
 		} finally {
 			setStarting(false)
 		}
-	}, [finish, release, continuous])
+	}, [finish, release, continuous, pick])
 
 	// Opening starts it, closing puts it down, and a switch restarts it. Nothing
 	// else does, so the picture is never taken down mid-scan by a render.

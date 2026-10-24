@@ -97,6 +97,8 @@ interface FeedLine {
 	itemStatus: string | null
 	firstBy: string | null
 	error: string | null
+	/** The kind of barcode the camera read — CODE_39, CODE_128… — to see what each college prints */
+	format?: string
 }
 
 interface ScanReply {
@@ -185,6 +187,19 @@ function defaultName(): string {
 
 function numbersIn(text: string): string[] {
 	return [...new Set(text.split(/[\s,;]+/).map(n => n.trim()).filter(Boolean))]
+}
+
+/**
+ * The copy a scanned number belongs to, read forgivingly: a Code 39 reader can
+ * leave its start and stop stars on, and one college's labels may pad with
+ * zeros (027087) where the catalogue holds 27087.
+ */
+function findCopy<T>(byNumber: Map<string, T> | undefined, raw: string): T | undefined {
+	if (!byNumber) return undefined
+	const plain = raw.replace(/^\*+|\*+$/g, '').trim()
+	return byNumber.get(raw)
+		?? byNumber.get(plain)
+		?? byNumber.get(plain.replace(/^0+(?=\d)/, ''))
 }
 
 /** A short buzz when a scan is not a clean tick — the phone in a quiet stack room. */
@@ -334,7 +349,10 @@ function CameraFeed({ lines, queued, banner }: { lines: FeedLine[]; queued: numb
 			)}
 			{lines.slice(0, 6).map(line => (
 				<li key={line.key} className="flex items-center justify-between gap-2 text-xs">
-					<span className="shrink-0 font-mono">{line.scanned}</span>
+					<span className="shrink-0 font-mono">
+						{line.scanned}
+						{line.format && <span className="ml-1 rounded bg-muted px-1 text-[10px] text-muted-foreground">{line.format}</span>}
+					</span>
 					<span className="min-w-0 flex-1 truncate text-muted-foreground">{line.title ?? ''}</span>
 					<StateBadge line={line} />
 				</li>
@@ -900,7 +918,7 @@ export default function StockCheckPage() {
 	 * typed from memory or copied off a list is exactly the thing a count is
 	 * supposed to catch. The camera has to see the book.
 	 */
-	const scan = useCallback((text: string) => {
+	const scan = useCallback((text: string, format?: string) => {
 		const numbers = numbersIn(text)
 		if (numbers.length === 0 || !sessionId || !isOpen) return
 
@@ -912,8 +930,8 @@ export default function StockCheckPage() {
 		// waits for the server as it always did.
 		const index = indexRef.current?.sessionId === sessionId ? indexRef.current : null
 		const lines: FeedLine[] = numbers.map((scanned, i) => {
-			const copy = index?.byNumber.get(scanned)
-			const base = { key: keys[i], scanned, itemStatus: null, firstBy: null, error: null }
+			const copy = findCopy(index?.byNumber, scanned)
+			const base = { key: keys[i], scanned, itemStatus: null, firstBy: null, error: null, format: format ? format.toUpperCase() : undefined }
 			if (!index) return { ...base, state: 'sending', title: null }
 			if (!copy) return { ...base, state: 'unknown', title: null }
 			if (index.seen.has(copy.accession)) return { ...base, state: 'repeat', title: copy.title }
@@ -943,8 +961,25 @@ export default function StockCheckPage() {
 		// send — the server would only say the same, and a hundred phones' worth
 		// of those is load the scans themselves do not need
 		const toSend = lines.filter(line => line.state !== 'repeat')
-		if (toSend.length > 0) void send(toSend.map(line => line.scanned), toSend.map(line => line.key), sessionId, !index)
+		// The copy's own accession number is sent where the phone found one, so the
+		// server matches it exactly however the label printed it
+		if (toSend.length > 0) {
+			void send(
+				toSend.map(line => findCopy(index?.byNumber, line.scanned)?.accession ?? line.scanned),
+				toSend.map(line => line.key),
+				sessionId,
+				!index,
+			)
+		}
 	}, [sessionId, isOpen, send])
+
+	/** Whether a number is a real copy of this college — so the camera can ignore a misread. */
+	const isKnownCopy = useCallback((value: string) => {
+		const index = indexRef.current
+		// Before the list is in, nothing can be ruled out
+		if (!index) return true
+		return findCopy(index.byNumber, value) !== undefined
+	}, [])
 
 	/** A book the camera already read is in front of it again: say so, loudly. */
 	const onCameraRepeat = useCallback((value: string) => {
@@ -1092,9 +1127,23 @@ export default function StockCheckPage() {
 		{
 			key: 'number',
 			header: 'Number',
-			cell: line => <span className="whitespace-nowrap font-mono text-sm font-medium">{line.scanned}</span>,
+			cell: line => (
+				<span className="whitespace-nowrap font-mono text-sm font-medium">
+					{line.scanned}
+					{line.format && (
+						<span className="ml-1.5 rounded bg-muted px-1 py-0.5 font-sans text-[10px] font-normal text-muted-foreground">{line.format}</span>
+					)}
+				</span>
+			),
 			sort: line => line.scanned,
 			excel: line => line.scanned,
+		},
+		{
+			key: 'format',
+			header: 'Barcode type',
+			excelOnly: true,
+			cell: () => null,
+			excel: line => line.format ?? '',
 		},
 		{
 			key: 'title',
@@ -1373,6 +1422,7 @@ export default function StockCheckPage() {
 											onScan={scan}
 											onOpenChange={onCameraOpenChange}
 											onRepeat={onCameraRepeat}
+											isKnown={isKnownCopy}
 											feed={<CameraFeed lines={feed} queued={queued} banner={banner} />}
 										/>
 									) : (
