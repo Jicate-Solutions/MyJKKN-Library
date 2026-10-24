@@ -34,7 +34,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -45,9 +44,10 @@ import { OverflowText } from '@/components/library/overflow-text'
 import { ResourceStatusBadge } from '@/components/library/resource-status-badge'
 import { CameraScanner } from '@/components/library/camera-scanner'
 import { StockCheckHelpers } from '@/components/library/stock-check-helpers'
+import { StockCheckTable, type StockColumn, type StockFacet } from '@/components/library/stock-check-table'
 import {
 	ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle2, Copy, HelpCircle,
-	Play, Lock, LockOpen, Loader2,
+	Play, Lock, LockOpen, Loader2, CloudOff, UploadCloud, BookCopy, ScanSearch,
 } from 'lucide-react'
 import type { LibItemStatus } from '@/types/lib'
 
@@ -66,7 +66,6 @@ interface StockProgress {
 	total: number
 	checked: number
 	pending: number
-	unknown: number
 }
 
 interface RecentScan {
@@ -86,18 +85,12 @@ interface PendingItem {
 	catalogue: { id: string; title: string | null; author: string | null } | null
 }
 
-interface UnknownScan {
-	id: string
-	accession_number: string
-	scanned_by_name: string | null
-	scanned_at: string
-}
-
 /** One line in the live feed: a scan of this tab's own, at whatever stage. */
 interface FeedLine {
 	key: string
 	scanned: string
-	state: 'sending' | 'checked' | 'repeat' | 'unknown' | 'failed'
+	/** `queued`: saved on this phone, to be sent when the internet is back */
+	state: 'sending' | 'queued' | 'checked' | 'repeat' | 'unknown' | 'failed'
 	title: string | null
 	itemStatus: string | null
 	firstBy: string | null
@@ -119,11 +112,55 @@ interface ScanReply {
 /** The server is asked again this often, so the other scanners' work shows up. */
 const REFRESH_MS = 15_000
 
-/** And this soon after a scan of our own, which is what the person is waiting for. */
-const AFTER_SCAN_MS = 1_500
+/**
+ * And this long after the last scan of our own. The counts on screen already
+ * moved when the scan was answered, so this only folds in the other scanners —
+ * waiting for a pause keeps the recount off the line while the shelf is being
+ * counted, where it would be queued alongside every book.
+ */
+const AFTER_SCAN_MS = 5_000
 
-/** Long enough for a slow phone signal, short enough to try again inside a scan. */
-const SCAN_TIMEOUT_MS = 12_000
+/**
+ * Long enough for a slow phone signal. Past it the scan is not lost: it goes
+ * to the outbox on the phone and is sent again from there.
+ */
+const SCAN_TIMEOUT_MS = 8_000
+
+/** How often a waiting outbox is tried again, besides the browser saying "online". */
+const OUTBOX_RETRY_MS = 8_000
+
+/** The most numbers the scan route takes in one request. */
+const OUTBOX_BATCH = 200
+
+/** Where scans wait on the phone while the internet is away. Survives a reload. */
+const OUTBOX_KEY = 'lib-stock-outbox'
+
+/** One scan that has not reached the server yet. */
+interface OutboxEntry {
+	key: string
+	scanned: string
+	sessionId: string
+	institutionId: string
+}
+
+function loadOutbox(): OutboxEntry[] {
+	try {
+		const raw = localStorage.getItem(OUTBOX_KEY)
+		const list = raw ? JSON.parse(raw) : []
+		return Array.isArray(list) ? list.filter(e => e?.key && e?.scanned && e?.sessionId && e?.institutionId) : []
+	} catch {
+		return []
+	}
+}
+
+function saveOutbox(entries: OutboxEntry[]) {
+	try {
+		if (entries.length === 0) localStorage.removeItem(OUTBOX_KEY)
+		else localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries))
+	} catch {
+		// Private mode or a full disk: the scans still wait in memory until sent
+	}
+}
 
 /** The feed is a running record of this session at the shelf, not a report. */
 const FEED_LINES = 150
@@ -161,6 +198,9 @@ function StateBadge({ line }: { line: FeedLine }) {
 	if (line.state === 'sending') {
 		return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Sending</span>
 	}
+	if (line.state === 'queued') {
+		return <span className="inline-flex items-center gap-1 text-xs font-medium text-sky-700 dark:text-sky-400"><CloudOff className="h-3.5 w-3.5" /> Saved offline</span>
+	}
 	if (line.state === 'checked') {
 		return <span className="inline-flex items-center gap-1 text-xs font-medium text-brand-green dark:text-brand-green-400"><CheckCircle2 className="h-3.5 w-3.5" /> Checked</span>
 	}
@@ -168,7 +208,7 @@ function StateBadge({ line }: { line: FeedLine }) {
 		return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400"><Copy className="h-3.5 w-3.5" /> Already checked</span>
 	}
 	if (line.state === 'unknown') {
-		return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400"><HelpCircle className="h-3.5 w-3.5" /> Not in this library</span>
+		return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><HelpCircle className="h-3.5 w-3.5" /> Skipped — not in this library</span>
 	}
 	return <span className="inline-flex items-center gap-1 text-xs font-medium text-destructive"><AlertTriangle className="h-3.5 w-3.5" /> Not sent</span>
 }
@@ -180,13 +220,19 @@ function StateBadge({ line }: { line: FeedLine }) {
  * counting a shelf cannot see whether the book they just pointed at was
  * counted, already counted, or not in this library at all.
  */
-function CameraFeed({ lines }: { lines: FeedLine[] }) {
+function CameraFeed({ lines, queued }: { lines: FeedLine[]; queued: number }) {
 	if (lines.length === 0) {
 		return <p className="text-xs text-muted-foreground">Point the camera at a book to start</p>
 	}
 
 	return (
 		<ul className="space-y-1">
+			{queued > 0 && (
+				<li className="flex items-center gap-1 text-xs font-medium text-sky-700 dark:text-sky-400">
+					<CloudOff className="h-3.5 w-3.5" />
+					{queued} saved on this phone — sent when the internet is back
+				</li>
+			)}
 			{lines.slice(0, 6).map(line => (
 				<li key={line.key} className="flex items-center justify-between gap-2 text-xs">
 					<span className="shrink-0 font-mono">{line.scanned}</span>
@@ -197,6 +243,121 @@ function CameraFeed({ lines }: { lines: FeedLine[] }) {
 		</ul>
 	)
 }
+
+/** What each line in My scans came to, in words — the filter and the report. */
+const FEED_LABEL: Record<FeedLine['state'], string> = {
+	sending: 'Sending',
+	queued: 'Saved offline',
+	checked: 'Checked',
+	repeat: 'Already checked',
+	unknown: 'Skipped — not in this library',
+	failed: 'Not sent',
+}
+
+/** The coloured edge down each line of My scans. */
+const FEED_TONE: Record<FeedLine['state'], string> = {
+	sending: 'border-l-muted-foreground/30',
+	queued: 'border-l-sky-400',
+	checked: 'border-l-emerald-500',
+	repeat: 'border-l-brand-yellow-700',
+	unknown: 'border-l-muted-foreground/40',
+	failed: 'border-l-red-500',
+}
+
+const FEED_FACET: StockFacet<FeedLine> = {
+	label: 'Results',
+	options: (['checked', 'repeat', 'unknown', 'queued', 'failed'] as const)
+		.map(state => ({ value: state, label: FEED_LABEL[state] })),
+	get: line => line.state,
+}
+
+function statusLabel(status: string): string {
+	return status.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())
+}
+
+function count(value: number | null | undefined): string {
+	return value === null || value === undefined ? '—' : value.toLocaleString('en-IN')
+}
+
+const SCAN_COLUMNS: StockColumn<RecentScan>[] = [
+	{
+		key: 'number',
+		header: 'Number',
+		cell: row => <span className="whitespace-nowrap font-mono text-sm font-medium">{row.accession_number}</span>,
+		sort: row => row.accession_number,
+		excel: row => row.accession_number,
+	},
+	{
+		key: 'title',
+		header: 'Title',
+		className: 'max-w-[140px] sm:max-w-[320px]',
+		cell: row => <OverflowText as="div" text={row.title ?? '—'} className="text-sm" />,
+		sort: row => row.title ?? '',
+		excel: row => row.title ?? '',
+	},
+	{
+		key: 'by',
+		header: 'Scanned by',
+		cell: row => (
+			<div className="whitespace-nowrap text-sm">
+				<span className="inline-flex items-center rounded-full bg-brand-green-50 px-2 py-0.5 text-xs font-medium text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-300">
+					{row.scanned_by_name ?? '—'}
+				</span>
+				<p className="mt-0.5 text-xs text-muted-foreground sm:hidden">{when(row.scanned_at)}</p>
+			</div>
+		),
+		sort: row => row.scanned_by_name ?? '',
+		excel: row => row.scanned_by_name ?? '',
+	},
+	{
+		key: 'at',
+		header: 'At',
+		hideOnMobile: true,
+		cell: row => <span className="whitespace-nowrap text-xs text-muted-foreground">{when(row.scanned_at)}</span>,
+		sort: row => row.scanned_at,
+		excel: row => when(row.scanned_at),
+	},
+]
+
+const PENDING_COLUMNS: StockColumn<PendingItem>[] = [
+	{
+		key: 'accession',
+		header: 'Accession No',
+		cell: item => <span className="whitespace-nowrap font-mono text-sm font-medium">{item.accession_number ?? '—'}</span>,
+		sort: item => item.accession_number ?? '',
+		excel: item => item.accession_number ?? '',
+	},
+	{
+		key: 'title',
+		header: 'Title',
+		className: 'max-w-[160px] sm:max-w-[320px]',
+		cell: item => item.catalogue?.id ? (
+			<Link href={`/registry/${item.catalogue.id}`} className="block min-w-0 hover:underline">
+				<OverflowText as="div" text={item.catalogue.title ?? 'Unknown title'} className="text-sm font-medium" />
+			</Link>
+		) : (
+			<OverflowText as="div" text={item.catalogue?.title ?? 'Unknown title'} className="text-sm font-medium" />
+		),
+		sort: item => item.catalogue?.title ?? '',
+		excel: item => item.catalogue?.title ?? '',
+	},
+	{
+		key: 'author',
+		header: 'Author',
+		hideOnMobile: true,
+		className: 'max-w-[200px]',
+		cell: item => <OverflowText as="div" text={item.catalogue?.author ?? '—'} className="text-sm text-muted-foreground" />,
+		sort: item => item.catalogue?.author ?? '',
+		excel: item => item.catalogue?.author ?? '',
+	},
+	{
+		key: 'status',
+		header: 'Status',
+		cell: item => <ResourceStatusBadge status={item.status} />,
+		sort: item => item.status,
+		excel: item => statusLabel(item.status),
+	},
+]
 
 export default function StockCheckPage() {
 	const { isReady, institutionId, appendToUrl } = useInstitutionFilter()
@@ -226,13 +387,18 @@ export default function StockCheckPage() {
 
 	const [tab, setTab] = useState('feed')
 	const [pending, setPending] = useState<PendingItem[]>([])
-	const [pendingPage, setPendingPage] = useState(0)
-	const [pendingTotal, setPendingTotal] = useState(0)
-	const [pendingMore, setPendingMore] = useState(false)
 	const [pendingLoading, setPendingLoading] = useState(false)
-	const [unknown, setUnknown] = useState<UnknownScan[]>([])
+	const [scans, setScans] = useState<RecentScan[]>([])
+	const [scansLoading, setScansLoading] = useState(false)
 
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+	// Scans the server has not got yet, kept on the phone
+	const outboxRef = useRef<OutboxEntry[]>([])
+	const flushingRef = useRef(false)
+	const [queued, setQueued] = useState(0)
+	const [flushing, setFlushing] = useState(false)
+	const [online, setOnline] = useState(true)
 
 	const session = useMemo(() => sessions.find(s => s.id === sessionId) ?? null, [sessions, sessionId])
 	const isOpen = session?.status === 'open'
@@ -270,11 +436,18 @@ export default function StockCheckPage() {
 
 	// Another college's round, feed and lists must not linger after switching
 	useEffect(() => {
-		setFeed([])
+		// …except this college's scans still waiting on the phone, from before a
+		// reload or a dropped signal, which come back as they were
+		outboxRef.current = loadOutbox()
+		const waiting = outboxRef.current.filter(entry => entry.institutionId === institutionId)
+		setQueued(waiting.length)
+		setFeed(waiting.slice(-FEED_LINES).reverse().map(entry => ({
+			key: entry.key, scanned: entry.scanned, state: 'queued' as const,
+			title: null, itemStatus: null, firstBy: null, error: null,
+		})))
 		setProgress(null)
 		setRecent([])
 		setPending([])
-		setUnknown([])
 	}, [institutionId])
 
 	// ── The counts ────────────────────────────────────────────────────────────
@@ -284,7 +457,19 @@ export default function StockCheckPage() {
 			const res = await fetch(`/api/lib/stock/sessions/${id}`)
 			const body = await res.json()
 			if (!res.ok) return
-			setProgress(body.progress ?? null)
+			const server: StockProgress | null = body.progress ?? null
+			// An open round only ever counts up. A recount that left before our
+			// latest scans landed would pull the number back for a moment, so the
+			// higher of the two is kept until the server catches up.
+			setProgress(prev => {
+				if (!server || !prev) return server
+				const checked = Math.max(server.checked, prev.checked)
+				return {
+					total: server.total,
+					checked,
+					pending: Math.max(0, server.total - checked),
+				}
+			})
 			setRecent(body.recent ?? [])
 		} catch {
 			// A missed refresh is nothing: the next one is seconds away, and the
@@ -294,6 +479,11 @@ export default function StockCheckPage() {
 
 	useEffect(() => {
 		if (!sessionId) return
+		// Another round's counts must not be kept as the "higher" ones, nor its lists
+		setProgress(null)
+		setScans([])
+		setPending([])
+		loadedFor.current = { scans: null, pending: null }
 		void loadProgress(sessionId)
 		const timer = setInterval(() => { void loadProgress(sessionId) }, REFRESH_MS)
 		return () => clearInterval(timer)
@@ -316,19 +506,72 @@ export default function StockCheckPage() {
 		}))
 	}, [])
 
+	// ── Saved on the phone while the internet is away ─────────────────────────
+
+	/** Puts scans in the outbox, kept across a reload, and says so on their lines. */
+	const queue = useCallback((numbers: string[], keys: string[], id: string) => {
+		if (!institutionId) return
+		const have = new Set(outboxRef.current.map(entry => entry.key))
+		const added = numbers
+			.map((scanned, i) => ({ key: keys[i], scanned, sessionId: id, institutionId }))
+			.filter(entry => !have.has(entry.key))
+		if (added.length > 0) {
+			outboxRef.current = [...outboxRef.current, ...added]
+			saveOutbox(outboxRef.current)
+			setQueued(outboxRef.current.filter(entry => entry.institutionId === institutionId).length)
+		}
+		settle(keys, () => ({ state: 'queued', error: null }))
+	}, [institutionId, settle])
+
+	/** Takes scans out of the outbox once the server has them, or has refused them. */
+	const unqueue = useCallback((keys: string[]) => {
+		if (!outboxRef.current.some(entry => keys.includes(entry.key))) return
+		outboxRef.current = outboxRef.current.filter(entry => !keys.includes(entry.key))
+		saveOutbox(outboxRef.current)
+		setQueued(outboxRef.current.filter(entry => entry.institutionId === institutionId).length)
+	}, [institutionId])
+
 	const send = useCallback(async (numbers: string[], keys: string[], id: string) => {
+		// No network at all: straight into the outbox, without waiting on a
+		// request that cannot leave — the next book is already in shot.
+		if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+			queue(numbers, keys, id)
+			return
+		}
+
+		let res: Response
+		let body: ScanReply
 		try {
-			const res = await deskFetch('/api/lib/stock/scan', {
+			res = await deskFetch('/api/lib/stock/scan', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ institution_id: institutionId, session_id: id, numbers }),
 				timeoutMs: SCAN_TIMEOUT_MS,
-				// Safe to repeat: a round counts a copy once, however many times it
-				// is sent. See the note at the top of the scan route.
-				retries: 2,
+				// Not retried here: a scan the network drops goes to the outbox at
+				// once and is sent again from there, which is safe — a round counts
+				// a copy once, however many times it is sent (see the scan route).
+				retries: 0,
 			})
-			const body: ScanReply = await res.json()
-			if (!res.ok) throw new Error(body.error ?? 'Could not save the scan')
+			body = await res.json()
+		} catch {
+			queue(numbers, keys, id)
+			return
+		}
+
+		// The server itself in trouble is waited out like the network
+		if (res.status >= 500) {
+			queue(numbers, keys, id)
+			return
+		}
+
+		try {
+			// A plain refusal — the round closed, say — is not going to change by
+			// sending it again, so it leaves the outbox and is shown
+			if (!res.ok) {
+				unqueue(keys)
+				throw new Error(body.error ?? 'Could not save the scan')
+			}
+			unqueue(keys)
 
 			const byNumber = new Map((body.results ?? []).map(r => [r.scanned, r]))
 			settle(keys, (_key, index) => {
@@ -344,14 +587,90 @@ export default function StockCheckPage() {
 			})
 
 			const results = body.results ?? []
-			if (results.some(r => r.outcome !== 'checked')) buzz([40, 60, 40])
+			// A number that is not a copy here is skipped quietly — no buzz, nothing
+			// kept — so the next book is simply read
+			if (results.some(r => r.outcome === 'repeat')) buzz([40, 60, 40])
+
+			// The counts move the moment the answer is in, not after a recount of
+			// the whole college: the person is already reaching for the next book.
+			const ticked = new Set(results
+				.filter(r => r.outcome === 'checked')
+				.map(r => r.accession_number ?? r.scanned))
+			if (ticked.size > 0) {
+				setProgress(prev => prev && {
+					...prev,
+					checked: prev.checked + ticked.size,
+					pending: Math.max(0, prev.pending - ticked.size),
+				})
+			}
+			if (ticked.size > 0) {
+				setPending(prev => prev.filter(item => !ticked.has(item.accession_number ?? '')))
+			}
+
 			refreshSoon(id)
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Could not save the scan'
 			settle(keys, () => ({ state: 'failed', error: message }))
 			buzz([40, 60, 40])
 		}
-	}, [institutionId, settle, refreshSoon])
+	}, [institutionId, settle, refreshSoon, queue, unqueue])
+
+	/**
+	 * Sends what the outbox holds for this college, a request per round and up
+	 * to 200 numbers each — the most the scan route takes at once.
+	 */
+	const flush = useCallback(async () => {
+		if (flushingRef.current || !institutionId) return
+		if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+		const waiting = outboxRef.current.filter(entry => entry.institutionId === institutionId)
+		if (waiting.length === 0) return
+
+		flushingRef.current = true
+		setFlushing(true)
+		try {
+			const bySession = new Map<string, OutboxEntry[]>()
+			for (const entry of waiting) {
+				bySession.set(entry.sessionId, [...(bySession.get(entry.sessionId) ?? []), entry])
+			}
+			for (const [id, entries] of bySession) {
+				for (let i = 0; i < entries.length; i += OUTBOX_BATCH) {
+					const batch = entries.slice(i, i + OUTBOX_BATCH)
+					settle(batch.map(e => e.key), () => ({ state: 'sending', error: null }))
+					await send(batch.map(e => e.scanned), batch.map(e => e.key), id)
+					// Still offline after all: the rest waits for the next go
+					if (outboxRef.current.some(entry => entry.key === batch[0].key)) return
+				}
+			}
+		} finally {
+			flushingRef.current = false
+			setFlushing(false)
+		}
+	}, [institutionId, send, settle])
+
+	// The internet coming back is the moment to send
+	useEffect(() => {
+		const onOnline = () => { setOnline(true); void flush() }
+		const onOffline = () => setOnline(false)
+		setOnline(typeof navigator === 'undefined' ? true : navigator.onLine !== false)
+		window.addEventListener('online', onOnline)
+		window.addEventListener('offline', onOffline)
+		return () => {
+			window.removeEventListener('online', onOnline)
+			window.removeEventListener('offline', onOffline)
+		}
+	}, [flush])
+
+	// The browser's "online" is not always told about a weak signal coming back,
+	// so a waiting outbox is tried again every few seconds as well. Keyed on
+	// there being any, not on how many, so a weak signal is not hit with the
+	// whole outbox again every time one more book is added to it.
+	const hasQueued = queued > 0
+	useEffect(() => {
+		if (!hasQueued) return
+		void flush()
+		const timer = setInterval(() => { void flush() }, OUTBOX_RETRY_MS)
+		return () => clearInterval(timer)
+	}, [hasQueued, flush])
 
 	/**
 	 * A copy is ticked by reading its barcode and no other way.
@@ -443,18 +762,20 @@ export default function StockCheckPage() {
 		}
 	}
 
-	// ── The two lists ─────────────────────────────────────────────────────────
+	// ── The lists ─────────────────────────────────────────────────────────────
 
-	const loadPending = useCallback(async (id: string, page: number) => {
+	// Which round each list was last read for, so opening a tab reads it once
+	const loadedFor = useRef<{ scans: string | null; pending: string | null }>({ scans: null, pending: null })
+
+	/** Every copy not yet seen, in one answer — the table sorts, filters and pages it. */
+	const loadPending = useCallback(async (id: string) => {
 		try {
 			setPendingLoading(true)
-			const res = await fetch(`/api/lib/stock/sessions/${id}?view=pending&page=${page}`)
+			const res = await fetch(`/api/lib/stock/sessions/${id}?view=pending&all=1`)
 			const body = await res.json()
 			if (!res.ok) throw new Error(body.error ?? 'Could not load the pending list')
-			setPending(prev => (page === 0 ? body.data ?? [] : [...prev, ...(body.data ?? [])]))
-			setPendingTotal(body.total ?? 0)
-			setPendingMore(Boolean(body.has_more))
-			setPendingPage(page)
+			setPending(body.data ?? [])
+			loadedFor.current.pending = id
 		} catch (error) {
 			toast({ title: error instanceof Error ? error.message : 'Could not load the pending list', variant: 'destructive' })
 		} finally {
@@ -462,30 +783,105 @@ export default function StockCheckPage() {
 		}
 	}, [toast])
 
-	const loadUnknown = useCallback(async (id: string) => {
+	/** Every scan in the round, not just the latest few. */
+	const loadScans = useCallback(async (id: string) => {
 		try {
-			const res = await fetch(`/api/lib/stock/sessions/${id}?view=unknown`)
+			setScansLoading(true)
+			const res = await fetch(`/api/lib/stock/sessions/${id}?view=scans`)
 			const body = await res.json()
-			if (res.ok) setUnknown(body.data ?? [])
-		} catch {
-			// The count beside the tab already says there are some
+			if (!res.ok) throw new Error(body.error ?? 'Could not load the scans')
+			setScans(body.data ?? [])
+			loadedFor.current.scans = id
+		} catch (error) {
+			toast({ title: error instanceof Error ? error.message : 'Could not load the scans', variant: 'destructive' })
+		} finally {
+			setScansLoading(false)
 		}
-	}, [])
+	}, [toast])
 
+	// Only when a tab is opened; the lists are not what the scanner waits on
 	useEffect(() => {
 		if (!sessionId) return
-		if (tab === 'pending' && pending.length === 0) void loadPending(sessionId, 0)
-		if (tab === 'unknown' && unknown.length === 0) void loadUnknown(sessionId)
-		// Only when the tab is opened; the lists are not what the scanner waits on
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tab, sessionId])
+		if (tab === 'pending' && loadedFor.current.pending !== sessionId) void loadPending(sessionId)
+		if (tab === 'all' && loadedFor.current.scans !== sessionId) void loadScans(sessionId)
+	}, [tab, sessionId, loadPending, loadScans])
+
+	// The latest scans arrive with every refresh of the counts, so they are laid
+	// over the full list — Everyone's stays live without reading the round again
+	const everyone = useMemo(() => {
+		const seen = new Set<string>()
+		return [...recent, ...scans].filter(row => {
+			if (seen.has(row.id)) return false
+			seen.add(row.id)
+			return true
+		})
+	}, [recent, scans])
+
+	const scannerFacet = useMemo<StockFacet<RecentScan>>(() => ({
+		label: 'Scanners',
+		options: [...new Set(everyone.map(row => row.scanned_by_name ?? '—'))]
+			.sort((a, b) => a.localeCompare(b))
+			.map(name => ({ value: name, label: name })),
+		get: row => row.scanned_by_name ?? '—',
+	}), [everyone])
+
+	const statusFacet = useMemo<StockFacet<PendingItem>>(() => ({
+		label: 'Statuses',
+		options: [...new Set(pending.map(item => item.status as string))]
+			.sort()
+			.map(status => ({ value: status, label: statusLabel(status) })),
+		get: item => item.status,
+	}), [pending])
+
+	const feedColumns = useMemo<StockColumn<FeedLine>[]>(() => [
+		{
+			key: 'number',
+			header: 'Number',
+			cell: line => <span className="whitespace-nowrap font-mono text-sm font-medium">{line.scanned}</span>,
+			sort: line => line.scanned,
+			excel: line => line.scanned,
+		},
+		{
+			key: 'title',
+			header: 'Title',
+			className: 'max-w-[140px] sm:max-w-[320px]',
+			cell: line => (
+				<>
+					<OverflowText as="div" text={line.title ?? '—'} className="text-sm" />
+					{line.firstBy && <p className="text-xs text-muted-foreground">already by {line.firstBy}</p>}
+					{line.error && <p className="text-xs text-destructive">{line.error}</p>}
+				</>
+			),
+			sort: line => line.title ?? '',
+			excel: line => line.title ?? '',
+		},
+		{
+			key: 'result',
+			header: 'Result',
+			cell: line => (
+				<div className="flex items-center gap-2 whitespace-nowrap">
+					<StateBadge line={line} />
+					{line.state === 'failed' && (
+						<Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => retry(line)}>
+							Try again
+						</Button>
+					)}
+				</div>
+			),
+			sort: line => FEED_LABEL[line.state],
+			excel: line => FEED_LABEL[line.state],
+		},
+	], [retry])
+
+	// The Excel report: the people who run the library, not a helper lent for the counting
+	const canExport = !helperOnly && (role === 'super_admin' || role === 'library_admin' || role === 'librarian')
 
 	const done = progress && progress.total > 0 ? Math.round((progress.checked / progress.total) * 100) : 0
 
 	// ── The screen ────────────────────────────────────────────────────────────
 
 	return (
-		<div className="flex flex-1 flex-col gap-4 p-4 pt-0 overflow-y-auto">
+		<div className="flex flex-1 flex-col gap-3 overflow-y-auto p-3 pt-0 sm:gap-4 sm:p-4 sm:pt-0">
 			{/* Header */}
 			<div className="flex-shrink-0">
 				<div className="flex flex-wrap items-center gap-3">
@@ -494,7 +890,10 @@ export default function StockCheckPage() {
 					</div>
 					<div className="min-w-0">
 						<h1 className="text-base font-semibold">Stock Check</h1>
-						<p className="text-xs text-muted-foreground">
+						<p className="text-xs text-muted-foreground sm:hidden">
+							Scan the shelves — each copy counts once
+						</p>
+						<p className="hidden text-xs text-muted-foreground sm:block">
 							Scan the shelves — everyone scanning into the same round counts together, and a copy already seen is never counted twice
 						</p>
 					</div>
@@ -502,11 +901,16 @@ export default function StockCheckPage() {
 			</div>
 
 			{isReady && !institutionId ? (
-				<Card>
-					<CardContent className="py-12 text-center text-sm text-muted-foreground">
-						Select an institution to run its stock check
-					</CardContent>
-				</Card>
+				<>
+					<Card>
+						<CardContent className="py-12 text-center text-sm text-muted-foreground">
+							Select an institution to run its stock check
+						</CardContent>
+					</Card>
+					{/* All Institutions: helpers can still be bulk assigned, each
+					    row of the sheet naming its own college */}
+					{role === 'super_admin' && <StockCheckHelpers institutionId="" />}
+				</>
 			) : setupError ? (
 				<Card>
 					<CardContent className="py-10">
@@ -602,36 +1006,52 @@ export default function StockCheckPage() {
 
 					{session && (
 						<>
-							{/* Where the round has got to */}
-							<Card className="flex-shrink-0">
-								<CardContent className="p-4 space-y-3">
-									<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-										{[
-											{ label: 'Copies in stock', value: progress?.total ?? null },
-											{ label: 'Checked', value: progress?.checked ?? null, tone: 'text-brand-green dark:text-brand-green-400' },
-											{ label: 'Still to find', value: progress?.pending ?? null, tone: 'text-amber-700 dark:text-amber-400' },
-											{ label: 'Unknown numbers', value: progress?.unknown ?? null },
-										].map(card => (
-											<div key={card.label} className="rounded-lg border p-3">
-												<p className="text-xs text-muted-foreground">{card.label}</p>
-												<p className={`text-xl font-semibold ${card.tone ?? ''}`}>
-													{card.value === null ? '—' : card.value.toLocaleString('en-IN')}
-												</p>
-											</div>
-										))}
+							{/* Where the round has got to. On a phone it sits under the
+							    scan button, which is what the person came for. */}
+							<Card className="flex-shrink-0 max-sm:order-1">
+								<CardContent className="space-y-3 p-3 sm:p-4">
+									<div className="grid grid-cols-3 gap-2 sm:gap-3">
+										{/* In stock: the whole college, in the brand's own green */}
+										<div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-brand-green-500 to-brand-green-700 p-2.5 text-white shadow-sm sm:p-4">
+											<BookCopy className="absolute -right-2 -top-2 h-12 w-12 opacity-20 sm:h-16 sm:w-16" />
+											<p className="text-xs font-medium text-white/85">
+												<span className="sm:hidden">In stock</span>
+												<span className="hidden sm:inline">Copies in stock</span>
+											</p>
+											<p className="text-lg font-bold tabular-nums sm:text-2xl">{count(progress?.total)}</p>
+										</div>
+										{/* Checked: what this round has seen */}
+										<div className="relative overflow-hidden rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-100 p-2.5 shadow-sm dark:border-emerald-800 dark:from-emerald-900/30 dark:to-emerald-900/10 sm:p-4">
+											<CheckCircle2 className="absolute -right-2 -top-2 h-12 w-12 text-emerald-500 opacity-20 sm:h-16 sm:w-16" />
+											<p className="text-xs font-medium text-emerald-700 dark:text-emerald-300">Checked</p>
+											<p className="text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-300 sm:text-2xl">{count(progress?.checked)}</p>
+										</div>
+										{/* Still to find: the shelves still to walk */}
+										<div className="relative overflow-hidden rounded-xl border border-brand-yellow-400 bg-gradient-to-br from-brand-yellow-50 to-brand-yellow-200 p-2.5 shadow-sm dark:border-brand-yellow-900 dark:from-brand-yellow-900/20 dark:to-brand-yellow-900/10 sm:p-4">
+											<ScanSearch className="absolute -right-2 -top-2 h-12 w-12 text-brand-yellow-900 opacity-20 sm:h-16 sm:w-16" />
+											<p className="text-xs font-medium text-brand-yellow-900 dark:text-brand-yellow-600">
+												<span className="sm:hidden">To find</span>
+												<span className="hidden sm:inline">Still to find</span>
+											</p>
+											<p className="text-lg font-bold tabular-nums text-brand-yellow-900 dark:text-brand-yellow-600 sm:text-2xl">{count(progress?.pending)}</p>
+										</div>
 									</div>
 									<div className="space-y-1">
-										<Progress value={done} className="h-2" />
-										<p className="text-xs text-muted-foreground">
-											{done}% of this college&apos;s copies seen in this round
-										</p>
+										<div className="flex items-center justify-between gap-2 text-xs">
+											<span className="text-muted-foreground">Of this college&apos;s copies seen in this round</span>
+											<span className="font-semibold tabular-nums text-brand-green dark:text-brand-green-400">{done}%</span>
+										</div>
+										<Progress
+											value={done}
+											className="h-2.5 bg-brand-yellow-100 dark:bg-brand-yellow-900/20 [&>div]:bg-gradient-to-r [&>div]:from-brand-green-400 [&>div]:to-brand-green-600"
+										/>
 									</div>
 								</CardContent>
 							</Card>
 
 							{/* The scan box */}
 							<Card className="flex-shrink-0">
-								<CardHeader className="border-b px-4 py-3">
+								<CardHeader className="hidden border-b px-4 py-3 sm:block">
 									<h2 className="text-base font-semibold">Scan</h2>
 									<p className="text-xs text-muted-foreground">
 										Open the camera and point it at each book&apos;s barcode — it keeps counting until you press Done
@@ -640,7 +1060,47 @@ export default function StockCheckPage() {
 								{/* The phone in the stacks, and the only way in. Opened once, it
 								    keeps reading until Done is pressed, and a book it has already
 								    read this time round is never sent twice. */}
-								<CardContent className="p-4">
+								<CardContent className="space-y-2 p-3 sm:p-4">
+									{/* On a phone the counts sit further down, so the one line
+									    that matters is kept beside the button */}
+									{progress && (
+										<div className="space-y-1 sm:hidden">
+											<div className="flex items-baseline justify-between text-xs">
+												<span className="text-muted-foreground">
+													<span className="font-semibold tabular-nums text-brand-green dark:text-brand-green-400">
+														{progress.checked.toLocaleString('en-IN')}
+													</span>
+													{' '}of {progress.total.toLocaleString('en-IN')} checked
+												</span>
+												<span className="font-medium tabular-nums">{done}%</span>
+											</div>
+											<Progress value={done} className="h-1.5" />
+										</div>
+									)}
+
+									{/* No internet, or scans still waiting for it */}
+									{(!online || queued > 0) && (
+										<div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300">
+											<span className="flex min-w-0 items-start gap-2">
+												{flushing
+													? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+													: <CloudOff className="mt-0.5 h-4 w-4 shrink-0" />}
+												<span>
+													{flushing
+														? `Sending ${queued.toLocaleString('en-IN')} saved ${queued === 1 ? 'scan' : 'scans'}…`
+														: queued > 0
+															? `${queued.toLocaleString('en-IN')} ${queued === 1 ? 'scan is' : 'scans are'} saved on this phone — ${online ? 'sending again shortly' : 'they will be sent when the internet is back'}. Keep scanning.`
+															: 'No internet — keep scanning, every book is saved on this phone and sent when it is back.'}
+												</span>
+											</span>
+											{queued > 0 && online && !flushing && (
+												<Button variant="outline" size="sm" className="h-8 shrink-0 bg-white text-xs dark:bg-transparent" onClick={() => { void flush() }}>
+													<UploadCloud className="mr-1.5 h-3.5 w-3.5" />
+													Send now
+												</Button>
+											)}
+										</div>
+									)}
 									{isOpen ? (
 										<CameraScanner
 											continuous
@@ -648,7 +1108,7 @@ export default function StockCheckPage() {
 											buttonText="Scan a book"
 											label="Point the camera at each book's barcode — it keeps counting until you press Done"
 											onScan={scan}
-											feed={<CameraFeed lines={feed} />}
+											feed={<CameraFeed lines={feed} queued={queued} />}
 										/>
 									) : (
 										<div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
@@ -662,19 +1122,26 @@ export default function StockCheckPage() {
 							</Card>
 
 							{/* What has been seen */}
-							<Card className="flex min-h-0 flex-1 flex-col">
-								<CardContent className="p-4">
+							<Card className="flex min-h-0 flex-1 flex-col max-sm:order-1">
+								<CardContent className="p-3 sm:p-4">
 									<div className="min-w-0">
 										<Tabs value={tab} onValueChange={setTab} className="w-full">
-											<div className="flex flex-wrap items-center justify-between gap-2">
-												<TabsList>
-													<TabsTrigger value="feed" className="text-xs sm:text-sm">My scans</TabsTrigger>
-													<TabsTrigger value="all" className="text-xs sm:text-sm">Everyone&apos;s</TabsTrigger>
-													<TabsTrigger value="pending" className="text-xs sm:text-sm">
-														Still to find{progress ? ` (${progress.pending.toLocaleString('en-IN')})` : ''}
+											<div className="flex items-center justify-between gap-2">
+												{/* Three even tabs on a phone, with the short names */}
+												<TabsList className="grid h-auto min-w-0 flex-1 grid-cols-3 bg-brand-green-50 dark:bg-brand-green-900/20 sm:inline-flex sm:h-10 sm:flex-none [&>button[data-state=active]]:bg-brand-green [&>button[data-state=active]]:text-white">
+													<TabsTrigger value="feed" className="px-1 text-xs sm:px-3 sm:text-sm">
+														<span className="sm:hidden">Mine</span>
+														<span className="hidden sm:inline">My scans</span>
 													</TabsTrigger>
-													<TabsTrigger value="unknown" className="text-xs sm:text-sm">
-														Unknown{progress && progress.unknown > 0 ? ` (${progress.unknown})` : ''}
+													<TabsTrigger value="all" className="px-1 text-xs sm:px-3 sm:text-sm">
+														<span className="sm:hidden">All</span>
+														<span className="hidden sm:inline">Everyone&apos;s</span>
+													</TabsTrigger>
+													<TabsTrigger value="pending" className="px-1 text-xs sm:px-3 sm:text-sm">
+														<span className="sm:hidden">To find</span>
+														<span className="hidden sm:inline">
+															Still to find{progress ? ` (${progress.pending.toLocaleString('en-IN')})` : ''}
+														</span>
 													</TabsTrigger>
 												</TabsList>
 												<Button
@@ -684,8 +1151,8 @@ export default function StockCheckPage() {
 													onClick={() => {
 														if (!sessionId) return
 														void loadProgress(sessionId)
-														if (tab === 'pending') void loadPending(sessionId, 0)
-														if (tab === 'unknown') void loadUnknown(sessionId)
+														if (tab === 'pending') void loadPending(sessionId)
+														if (tab === 'all') void loadScans(sessionId)
 													}}
 													aria-label="Refresh"
 												>
@@ -693,169 +1160,61 @@ export default function StockCheckPage() {
 												</Button>
 											</div>
 
-											{/* This tab's own scans, newest first */}
+											{/* This device's own scans, newest first */}
 											<TabsContent value="feed" className="mt-3">
-												<div className="max-h-[420px] overflow-y-auto rounded-md border">
-													<Table>
-														<TableHeader className="sticky top-0 z-10 bg-muted/50">
-															<TableRow>
-																<TableHead className="text-xs font-semibold">Number</TableHead>
-																<TableHead className="text-xs font-semibold">Title</TableHead>
-																<TableHead className="text-xs font-semibold">Result</TableHead>
-															</TableRow>
-														</TableHeader>
-														<TableBody>
-															{feed.length === 0 ? (
-																<TableRow>
-																	<TableCell colSpan={3} className="h-28 text-center text-sm text-muted-foreground">
-																		Nothing scanned on this device yet
-																	</TableCell>
-																</TableRow>
-															) : feed.map(line => (
-																<TableRow key={line.key} className="hover:bg-muted/50">
-																	<TableCell className="whitespace-nowrap font-mono text-sm">{line.scanned}</TableCell>
-																	<TableCell className="max-w-[260px]">
-																		<OverflowText as="div" text={line.title ?? '—'} className="text-sm" />
-																		{line.firstBy && (
-																			<p className="text-xs text-muted-foreground">already by {line.firstBy}</p>
-																		)}
-																		{line.error && <p className="text-xs text-destructive">{line.error}</p>}
-																	</TableCell>
-																	<TableCell className="whitespace-nowrap">
-																		<div className="flex items-center gap-2">
-																			<StateBadge line={line} />
-																			{line.state === 'failed' && (
-																				<Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => retry(line)}>
-																					Try again
-																				</Button>
-																			)}
-																		</div>
-																	</TableCell>
-																</TableRow>
-															))}
-														</TableBody>
-													</Table>
-												</div>
+												<StockCheckTable
+													rows={feed}
+													rowKey={line => line.key}
+													columns={feedColumns}
+													searchText={line => `${line.scanned} ${line.title ?? ''}`}
+													searchPlaceholder="Search number or title"
+													facet={FEED_FACET}
+													rowTone={line => FEED_TONE[line.state]}
+													empty="Nothing scanned on this device yet"
+													canExport={canExport}
+													exportName="stock-check-my-scans"
+													sheetName="My scans"
+												/>
 											</TabsContent>
 
-											{/* Everybody's, from the server */}
+											{/* Everybody's, the whole round */}
 											<TabsContent value="all" className="mt-3">
-												<div className="max-h-[420px] overflow-y-auto rounded-md border">
-													<Table>
-														<TableHeader className="sticky top-0 z-10 bg-muted/50">
-															<TableRow>
-																<TableHead className="text-xs font-semibold">Number</TableHead>
-																<TableHead className="text-xs font-semibold">Title</TableHead>
-																<TableHead className="text-xs font-semibold">Scanned by</TableHead>
-																<TableHead className="text-xs font-semibold">At</TableHead>
-															</TableRow>
-														</TableHeader>
-														<TableBody>
-															{recent.length === 0 ? (
-																<TableRow>
-																	<TableCell colSpan={4} className="h-28 text-center text-sm text-muted-foreground">
-																		No scans in this round yet
-																	</TableCell>
-																</TableRow>
-															) : recent.map(row => (
-																<TableRow key={row.id} className="hover:bg-muted/50">
-																	<TableCell className="whitespace-nowrap font-mono text-sm">{row.accession_number}</TableCell>
-																	<TableCell className="max-w-[260px]">
-																		<OverflowText as="div" text={row.title ?? (row.outcome === 'unknown' ? 'Not in this library' : '—')} className="text-sm" />
-																	</TableCell>
-																	<TableCell className="whitespace-nowrap text-sm">{row.scanned_by_name ?? '—'}</TableCell>
-																	<TableCell className="whitespace-nowrap text-xs text-muted-foreground">{when(row.scanned_at)}</TableCell>
-																</TableRow>
-															))}
-														</TableBody>
-													</Table>
-												</div>
+												<StockCheckTable
+													rows={everyone}
+													rowKey={row => row.id}
+													columns={SCAN_COLUMNS}
+													searchText={row => `${row.accession_number} ${row.title ?? ''} ${row.scanned_by_name ?? ''}`}
+													searchPlaceholder="Search number, title or name"
+													facet={scannerFacet}
+													rowTone={() => 'border-l-brand-green-400'}
+													empty="No scans in this round yet"
+													loading={scansLoading}
+													canExport={canExport}
+													exportName="stock-check-everyone"
+													sheetName="Everyone's scans"
+													defaultSort={{ key: 'at', dir: 'desc' }}
+												/>
 											</TabsContent>
 
 											{/* What the round has not seen */}
-											<TabsContent value="pending" className="mt-3 space-y-2">
-												<div className="max-h-[420px] overflow-y-auto rounded-md border">
-													<Table>
-														<TableHeader className="sticky top-0 z-10 bg-muted/50">
-															<TableRow>
-																<TableHead className="text-xs font-semibold">Accession No</TableHead>
-																<TableHead className="text-xs font-semibold">Title</TableHead>
-																<TableHead className="text-xs font-semibold">Status</TableHead>
-															</TableRow>
-														</TableHeader>
-														<TableBody>
-															{pending.length === 0 ? (
-																<TableRow>
-																	<TableCell colSpan={3} className="h-28 text-center text-sm text-muted-foreground">
-																		{pendingLoading ? 'Loading…' : 'Nothing left to find'}
-																	</TableCell>
-																</TableRow>
-															) : pending.map(item => (
-																<TableRow key={item.id} className="hover:bg-muted/50">
-																	<TableCell className="whitespace-nowrap font-mono text-sm">{item.accession_number}</TableCell>
-																	<TableCell className="max-w-[280px]">
-																		{item.catalogue?.id ? (
-																			<Link href={`/registry/${item.catalogue.id}`} className="block min-w-0 hover:underline">
-																				<OverflowText as="div" text={item.catalogue.title ?? 'Unknown title'} className="text-sm font-medium" />
-																			</Link>
-																		) : (
-																			<OverflowText as="div" text={item.catalogue?.title ?? 'Unknown title'} className="text-sm font-medium" />
-																		)}
-																	</TableCell>
-																	<TableCell><ResourceStatusBadge status={item.status} /></TableCell>
-																</TableRow>
-															))}
-														</TableBody>
-													</Table>
-												</div>
-												<div className="flex items-center justify-between gap-2">
-													<p className="text-xs text-muted-foreground">
-														Showing {pending.length.toLocaleString('en-IN')} of {pendingTotal.toLocaleString('en-IN')}
-													</p>
-													{pendingMore && (
-														<Button
-															variant="outline"
-															size="sm"
-															className="h-9 text-sm"
-															onClick={() => { if (sessionId) void loadPending(sessionId, pendingPage + 1) }}
-															disabled={pendingLoading}
-														>
-															{pendingLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-															Load more
-														</Button>
-													)}
-												</div>
+											<TabsContent value="pending" className="mt-3">
+												<StockCheckTable
+													rows={pending}
+													rowKey={item => item.id}
+													columns={PENDING_COLUMNS}
+													searchText={item => `${item.accession_number ?? ''} ${item.catalogue?.title ?? ''} ${item.catalogue?.author ?? ''}`}
+													searchPlaceholder="Search accession number, title or author"
+													facet={statusFacet}
+													rowTone={() => 'border-l-brand-yellow-600'}
+													empty="Nothing left to find"
+													loading={pendingLoading}
+													canExport={canExport}
+													exportName="stock-check-still-to-find"
+													sheetName="Still to find"
+													defaultSort={{ key: 'accession', dir: 'asc' }}
+												/>
 											</TabsContent>
 
-											{/* Numbers nobody can account for */}
-											<TabsContent value="unknown" className="mt-3">
-												<div className="max-h-[420px] overflow-y-auto rounded-md border">
-													<Table>
-														<TableHeader className="sticky top-0 z-10 bg-muted/50">
-															<TableRow>
-																<TableHead className="text-xs font-semibold">Number</TableHead>
-																<TableHead className="text-xs font-semibold">Scanned by</TableHead>
-																<TableHead className="text-xs font-semibold">At</TableHead>
-															</TableRow>
-														</TableHeader>
-														<TableBody>
-															{unknown.length === 0 ? (
-																<TableRow>
-																	<TableCell colSpan={3} className="h-28 text-center text-sm text-muted-foreground">
-																		Every number scanned is a copy in this library
-																	</TableCell>
-																</TableRow>
-															) : unknown.map(row => (
-																<TableRow key={row.id} className="hover:bg-muted/50">
-																	<TableCell className="whitespace-nowrap font-mono text-sm">{row.accession_number}</TableCell>
-																	<TableCell className="whitespace-nowrap text-sm">{row.scanned_by_name ?? '—'}</TableCell>
-																	<TableCell className="whitespace-nowrap text-xs text-muted-foreground">{when(row.scanned_at)}</TableCell>
-																</TableRow>
-															))}
-														</TableBody>
-													</Table>
-												</div>
-											</TabsContent>
 										</Tabs>
 									</div>
 								</CardContent>

@@ -1,8 +1,9 @@
 /**
  * Stock check helpers: /api/lib/stock/helpers
  *
- *   GET    ?institution_id=…        this college's helpers, soonest to lapse first
+ *   GET    ?institution_id=…        this college's helpers (every college's without one)
  *   POST   { institution_id, … }    let one more learner scan, until a date
+ *   PATCH  { id, institution_id?, expires_on? }  move them to another college, or change their date
  *   DELETE ?id=…                    take it back now
  *
  * A stock check is counted by a few learners for a week. Letting one in used to
@@ -87,17 +88,19 @@ export async function GET(request: Request) {
 		const guard = await requireSuperAdmin(request)
 		if (!guard.ok) return guard.response
 
+		// No college named is All Institutions: every college's helpers, which
+		// only a super admin can reach in the first place.
 		const institutionId = text(new URL(request.url).searchParams.get('institution_id'))
-		if (!institutionId) {
-			return NextResponse.json({ error: 'Select a college first' }, { status: 400 })
-		}
 
-		const { data, error } = await getSupabaseServer()
+		let query = getSupabaseServer()
 			.from('lib_stock_check_helpers')
 			.select(COLUMNS)
-			.eq('institution_id', institutionId)
+		if (institutionId) query = query.eq('institution_id', institutionId)
+
+		const { data, error } = await query
 			.order('expires_on', { ascending: false })
 			.order('email', { ascending: true })
+			.range(0, 9999)
 
 		if (error) {
 			if (NO_TABLE.has(error.code)) {
@@ -231,6 +234,115 @@ export async function POST(request: Request) {
 		return NextResponse.json(withState((data ?? {}) as Record<string, unknown>), { status: 201 })
 	} catch (error) {
 		console.error('Unexpected error adding a stock check helper:', error)
+		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+	}
+}
+
+export async function PATCH(request: Request) {
+	try {
+		const guard = await requireSuperAdmin(request)
+		if (!guard.ok) return guard.response
+
+		const body = await request.json().catch(() => null)
+		const id = text(body?.id)
+		if (!id) {
+			return NextResponse.json({ error: 'Which helper?' }, { status: 400 })
+		}
+
+		const supabase = getSupabaseServer()
+
+		const { data: before, error: readError } = await supabase
+			.from('lib_stock_check_helpers')
+			.select(COLUMNS)
+			.eq('id', id)
+			.maybeSingle()
+
+		if (readError) {
+			if (NO_TABLE.has(readError.code)) {
+				return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 503 })
+			}
+			console.error('Error reading a stock check helper:', readError)
+			return NextResponse.json({ error: 'Could not change this helper' }, { status: 500 })
+		}
+		if (!before) {
+			return NextResponse.json({ error: 'That helper was already removed' }, { status: 404 })
+		}
+
+		const changes: Record<string, unknown> = {}
+		let collegeCode: string | null = null
+
+		const institutionId = text(body.institution_id)
+		if (institutionId && institutionId !== before.institution_id) {
+			const { data: college } = await supabase
+				.from('institutions')
+				.select('id, institution_code')
+				.eq('id', institutionId)
+				.maybeSingle()
+			if (!college) {
+				return NextResponse.json({ error: 'That college was not found' }, { status: 400 })
+			}
+			changes.institution_id = institutionId
+			collegeCode = college.institution_code
+		}
+
+		const expiresOn = text(body.expires_on)
+		if (expiresOn && expiresOn !== before.expires_on) {
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(expiresOn)) {
+				return NextResponse.json({ error: 'Choose the last day this helper may scan' }, { status: 400 })
+			}
+			const today = istToday()
+			if (expiresOn < today) {
+				return NextResponse.json({ error: 'That date has already passed' }, { status: 400 })
+			}
+			const latest = new Date(Date.parse(today + 'T00:00:00.000Z') + MAX_DAYS * 86400000)
+				.toISOString()
+				.slice(0, 10)
+			if (expiresOn > latest) {
+				return NextResponse.json(
+					{ error: `A helper can be let in for at most ${MAX_DAYS} days — until ${latest}` },
+					{ status: 400 }
+				)
+			}
+			changes.expires_on = expiresOn
+		}
+
+		if (Object.keys(changes).length === 0) {
+			return NextResponse.json(withState(before as Record<string, unknown>))
+		}
+
+		const { data, error } = await supabase
+			.from('lib_stock_check_helpers')
+			.update(changes)
+			.eq('id', id)
+			.select(COLUMNS)
+			.maybeSingle()
+
+		if (error) {
+			// One row per person per college: they are already a helper there
+			if (error.code === '23505') {
+				return NextResponse.json(
+					{ error: `${before.display_name || before.email} is already a helper at ${collegeCode ?? 'that college'} — remove one of the two instead` },
+					{ status: 400 }
+				)
+			}
+			console.error('Error changing a stock check helper:', error)
+			return NextResponse.json({ error: 'Could not change this helper' }, { status: 500 })
+		}
+
+		forgetStockHelpers()
+
+		await logActivity(request, {
+			action: 'update',
+			resource_type: 'stock_check_helper',
+			resource_id: '/registry/stock-check',
+			institution_id: text(changes.institution_id ?? before.institution_id),
+			old_values: { email: before.email, institution_id: before.institution_id, expires_on: before.expires_on },
+			new_values: { ...changes, ...(collegeCode ? { college: collegeCode } : {}) },
+		})
+
+		return NextResponse.json(withState((data ?? {}) as Record<string, unknown>))
+	} catch (error) {
+		console.error('Unexpected error changing a stock check helper:', error)
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 	}
 }

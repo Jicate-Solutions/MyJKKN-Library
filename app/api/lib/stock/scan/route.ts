@@ -135,18 +135,22 @@ export async function POST(request: Request) {
 		const keyed = new Map<string, string>()
 		for (const scanned of numbers) {
 			const item = byNumber.get(scanned)
-			const key = item?.accession_number ?? scanned
+			// A number that is not a copy here is skipped, not kept: it is said
+			// back to the scanner and the next book is read. Nothing is written
+			// for it and it counts towards nothing.
+			if (!item) continue
+			const key = item.accession_number ?? scanned
 			keyed.set(scanned, key)
 			if (rows.some(r => r.accession_number === key)) continue
 
 			rows.push({
 				session_id: sessionId,
 				institution_id: institutionId,
-				item_id: item?.id ?? null,
+				item_id: item.id,
 				accession_number: key,
-				outcome: item ? 'checked' : 'unknown',
-				item_status: item?.status ?? null,
-				title: item?.catalogue?.title ?? null,
+				outcome: 'checked',
+				item_status: item.status ?? null,
+				title: item.catalogue?.title ?? null,
 				scanned_by: who,
 				scanned_by_name: whoName,
 				scanned_at: now,
@@ -158,10 +162,12 @@ export async function POST(request: Request) {
 		// Written together, because neither waits on the other. The stamp on the
 		// copy is what the progress counts read; the scan row is who saw it.
 		const [written, stamped] = await Promise.all([
-			supabase
-				.from('lib_stock_scans')
-				.upsert(rows, { onConflict: 'session_id,accession_number', ignoreDuplicates: true })
-				.select('accession_number'),
+			rows.length > 0
+				? supabase
+					.from('lib_stock_scans')
+					.upsert(rows, { onConflict: 'session_id,accession_number', ignoreDuplicates: true })
+					.select('accession_number')
+				: Promise.resolve({ data: [] as { accession_number: string }[], error: null }),
 			itemIds.length > 0
 				? supabase
 					.from('lib_items')
@@ -207,7 +213,7 @@ export async function POST(request: Request) {
 		const results: ScanResult[] = numbers.map(scanned => {
 			const item = byNumber.get(scanned)
 			const key = keyed.get(scanned) ?? scanned
-			const repeat = !fresh.has(key)
+			const repeat = !!item && !fresh.has(key)
 
 			return {
 				scanned,

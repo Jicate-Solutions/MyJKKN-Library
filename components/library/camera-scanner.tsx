@@ -200,13 +200,23 @@ export function CameraScanner({
 	// The camera never outlives the screen it was opened from
 	useEffect(() => release, [release])
 
-	// A tab switched away from is a camera nobody is looking at
+	// A tab switched away from is a camera nobody is looking at. Counting a
+	// shelf, the screen locking or a call coming in only puts it down for the
+	// moment: coming back picks it up again, still open and with the count
+	// kept, rather than making the person press Scan once more.
 	useEffect(() => {
 		if (!open) return
-		const onVisibility = () => { if (document.visibilityState === 'hidden') setOpen(false) }
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') {
+				if (continuous) release()
+				else setOpen(false)
+			} else if (continuous) {
+				setRestartNonce(n => n + 1)
+			}
+		}
 		document.addEventListener('visibilitychange', onVisibility)
 		return () => document.removeEventListener('visibilitychange', onVisibility)
-	}, [open])
+	}, [open, continuous, release])
 
 	const finish = useCallback((value: string) => {
 		// Counting a shelf: hand it over and keep the picture. The camera is put
@@ -332,7 +342,9 @@ export function CameraScanner({
 					} catch {
 						// A frame it could not read — the usual case, several times a second
 					}
-					if (!stopped) window.setTimeout(look, justRead ? 400 : 150)
+					// A book still in shot is dropped by `finish` as already read, so
+				// the pause after a read only has to be long enough to swap books
+				if (!stopped) window.setTimeout(look, justRead ? 250 : 120)
 				}
 				void look()
 			} else {
@@ -484,7 +496,15 @@ export function CameraScanner({
 			</TooltipProvider>
 
 			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="sm:max-w-[440px]">
+				<DialogContent
+					className="sm:max-w-[440px]"
+					// Counting a shelf, the camera stays open until Done. A thumb
+					// brushing the screen beside the picture, or Esc, used to close
+					// it between two books.
+					onPointerDownOutside={e => { if (continuous) e.preventDefault() }}
+					onInteractOutside={e => { if (continuous) e.preventDefault() }}
+					onEscapeKeyDown={e => { if (continuous) e.preventDefault() }}
+				>
 					<DialogHeader>
 						<DialogTitle>
 							{continuous ? 'Keep scanning' : 'Scan with the camera'}

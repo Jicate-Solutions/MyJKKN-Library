@@ -3,6 +3,8 @@
  *
  *   ?view=progress   (default)  the counts, and the last scans
  *   ?view=pending&page=0        the copies this round has not seen yet
+ *   ?view=pending&all=1         …all of them in one answer
+ *   ?view=scans                 every copy this round has seen, newest first
  *   ?view=unknown               numbers scanned that are not copies here
  *
  * The counts are the thing this route exists for, and they are asked for the
@@ -18,6 +20,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/lib/supabase-server'
 import { guardRecordRow } from '@/lib/auth/api-guard'
 import { MIGRATION_MESSAGE, SESSION_COLUMNS, needsMigration, stockFilter } from '@/lib/library/stock-check'
+import { fetchAllRows } from '@/lib/library/fetch-all'
 
 /** The live list under the scan box. Long enough to see, short enough to be free. */
 const RECENT_SCANS = 40
@@ -57,6 +60,48 @@ export async function GET(
 		}
 
 		const supabase = getSupabaseServer()
+
+		// The whole list in one answer — for the screen's sort, filter and "All",
+		// and for the Excel report, which must be the round and not a page of it.
+		// Read in slices, because a single request stops at 1,000 rows.
+		if (view === 'pending' && searchParams.get('all') === '1') {
+			const { data, error } = await fetchAllRows(range =>
+				supabase
+					.from('lib_items')
+					.select('id, accession_number, status, catalogue:lib_catalogue_records(id, title, author)')
+					.match(stockFilter(institutionId))
+					.or(`stock_session_id.is.null,stock_session_id.neq.${id}`)
+					.order('accession_number')
+					.order('id')
+					.range(range.from, range.to)
+			)
+			if (error) {
+				const code = (error as { code?: string }).code ?? ''
+				if (needsMigration(code)) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
+				throw error
+			}
+			return NextResponse.json({ data, total: data.length })
+		}
+
+		if (view === 'scans') {
+			const { data, error } = await fetchAllRows(range =>
+				supabase
+					.from('lib_stock_scans')
+					.select('id, accession_number, outcome, title, item_status, scanned_by_name, scanned_at')
+					.eq('session_id', id)
+					// Rows kept from before unknown numbers were skipped stay out of sight
+					.eq('outcome', 'checked')
+					.order('scanned_at', { ascending: false })
+					.order('id')
+					.range(range.from, range.to)
+			)
+			if (error) {
+				const code = (error as { code?: string }).code ?? ''
+				if (needsMigration(code)) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
+				throw error
+			}
+			return NextResponse.json({ data, total: data.length })
+		}
 
 		if (view === 'pending') {
 			const page = Math.max(0, Number(searchParams.get('page') ?? 0) || 0)
@@ -105,7 +150,9 @@ export async function GET(
 		}
 
 		// The default: the numbers everybody is watching, all asked for together
-		const [total, checked, unknown, recent] = await Promise.all([
+		// Unknown numbers are not counted: a scan that is not a copy here is
+		// skipped at the shelf, and keeps nothing to count.
+		const [total, checked, recent] = await Promise.all([
 			supabase
 				.from('lib_items')
 				.select('id', { count: 'exact', head: true })
@@ -117,18 +164,15 @@ export async function GET(
 				.eq('stock_session_id', id),
 			supabase
 				.from('lib_stock_scans')
-				.select('id', { count: 'exact', head: true })
-				.eq('session_id', id)
-				.eq('outcome', 'unknown'),
-			supabase
-				.from('lib_stock_scans')
 				.select('id, accession_number, outcome, title, item_status, scanned_by_name, scanned_at')
 				.eq('session_id', id)
+				// Rows kept from before unknown numbers were skipped stay out of sight
+				.eq('outcome', 'checked')
 				.order('scanned_at', { ascending: false })
 				.limit(RECENT_SCANS),
 		])
 
-		const failed = total.error ?? checked.error ?? unknown.error ?? recent.error
+		const failed = total.error ?? checked.error ?? recent.error
 		if (failed) {
 			if (needsMigration(failed.code)) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
 			throw failed
@@ -143,7 +187,6 @@ export async function GET(
 				total: totalCount,
 				checked: checkedCount,
 				pending: Math.max(0, totalCount - checkedCount),
-				unknown: unknown.count ?? 0,
 			},
 			recent: recent.data ?? [],
 		})

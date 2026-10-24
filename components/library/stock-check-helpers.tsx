@@ -28,10 +28,13 @@ import {
 	AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
 	AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { UserPlus, Search, X, Loader2, ShieldCheck, Trash2, AlertTriangle } from 'lucide-react'
+import { UserPlus, Search, X, Loader2, ShieldCheck, Trash2, AlertTriangle, Pencil, Check } from 'lucide-react'
+import { StockCheckHelpersBulk } from '@/components/library/stock-check-helpers-bulk'
 
 interface Helper {
 	id: string
+	/** The college whose shelves they may scan. */
+	institution_id: string
 	email: string
 	display_name: string | null
 	member_number: string | null
@@ -87,14 +90,19 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 	const [until, setUntil] = useState(dayAfter(7))
 	const [saving, setSaving] = useState(false)
 	const [removing, setRemoving] = useState<Helper | null>(null)
+	// One helper at a time is changed in place: their college, or their date
+	const [editing, setEditing] = useState<{ id: string; institutionId: string; until: string } | null>(null)
+	const [updating, setUpdating] = useState(false)
 
 	const searchRef = useRef<HTMLInputElement>(null)
 
 	const load = useCallback(async () => {
-		if (!institutionId) return
 		try {
 			setLoading(true)
-			const res = await fetch(`/api/lib/stock/helpers?institution_id=${institutionId}`)
+			// No college is All Institutions — every college's helpers
+			const res = await fetch(institutionId
+				? `/api/lib/stock/helpers?institution_id=${institutionId}`
+				: '/api/lib/stock/helpers')
 			const body = await res.json()
 			if (!res.ok) {
 				// 503 is the migration not having been run. It is said once, in
@@ -222,6 +230,37 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 		}
 	}
 
+	const change = async () => {
+		if (!editing) return
+		try {
+			setUpdating(true)
+			const res = await fetch('/api/lib/stock/helpers', {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					id: editing.id,
+					institution_id: editing.institutionId,
+					expires_on: editing.until,
+				}),
+			})
+			const body = await res.json()
+			if (!res.ok) throw new Error(body.error || 'Could not change this helper')
+			toast({
+				title: `✅ ${body.display_name || body.email} can scan ${codeOf(editing.institutionId)} until ${readable(editing.until)}`,
+				className: 'bg-green-50 border-green-200 text-green-800',
+			})
+			setEditing(null)
+			await load()
+		} catch (err) {
+			toast({
+				title: err instanceof Error ? err.message : 'Could not change this helper',
+				variant: 'destructive',
+			})
+		} finally {
+			setUpdating(false)
+		}
+	}
+
 	const live = helpers.filter(h => !h.is_expired)
 
 	return (
@@ -236,14 +275,26 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 								{loading && helpers.length === 0
 									? 'Reading the list…'
 									: live.length === 0
-										? 'Nobody outside the library can scan this college right now'
-										: `${live.length} ${live.length === 1 ? 'person' : 'people'} can scan this college until their date runs out`}
+										? institutionId
+											? 'Nobody outside the library can scan this college right now'
+											: 'All Institutions — nobody is assigned to any college right now'
+										: institutionId
+											? `${live.length} ${live.length === 1 ? 'person' : 'people'} can scan this college until their date runs out`
+											: `All Institutions — ${live.length} ${live.length === 1 ? 'assignment' : 'assignments'} across the colleges`}
 							</p>
 						</div>
 					</div>
-					<Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(v => !v)}>
-						{open ? 'Done' : 'Manage'}
-					</Button>
+					<div className="flex items-center gap-2">
+						<StockCheckHelpersBulk
+							institutionId={institutionId}
+							institutionCode={codeOf(institutionId)}
+							colleges={colleges.map(college => college.institution_code)}
+							onDone={load}
+						/>
+						<Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(v => !v)}>
+							{open ? 'Done' : 'Manage'}
+						</Button>
+					</div>
 				</div>
 
 				{open && (
@@ -262,7 +313,55 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 									</p>
 								) : (
 									<div className="space-y-2">
-										{helpers.map(helper => (
+										{helpers.map(helper => editing?.id === helper.id ? (
+											<div
+												key={helper.id}
+												className="space-y-2 rounded-md border border-brand-green/40 bg-muted/30 px-3 py-2"
+											>
+												<p className="truncate text-sm font-medium">
+													{helper.display_name || helper.email}
+													<span className="ml-2 text-xs font-normal text-muted-foreground">{helper.email}</span>
+												</p>
+												<div className="flex flex-wrap items-end gap-2">
+													<div className="space-y-1">
+														<label className="text-xs text-muted-foreground">Scans at</label>
+														<Select
+															value={editing.institutionId}
+															onValueChange={value => setEditing({ ...editing, institutionId: value })}
+														>
+															<SelectTrigger className="h-8 w-32 text-sm">
+																<SelectValue />
+															</SelectTrigger>
+															<SelectContent>
+																{colleges.map(college => (
+																	<SelectItem key={college.id} value={college.id}>
+																		{college.institution_code}
+																	</SelectItem>
+																))}
+															</SelectContent>
+														</Select>
+													</div>
+													<div className="space-y-1">
+														<label className="text-xs text-muted-foreground">Can scan until</label>
+														<Input
+															type="date"
+															value={editing.until}
+															min={dayAfter(0)}
+															max={dayAfter(MAX_DAYS)}
+															onChange={e => setEditing({ ...editing, until: e.target.value })}
+															className="h-8 w-40 text-sm"
+														/>
+													</div>
+													<Button size="sm" className="h-8" disabled={!editing.until || updating} onClick={change}>
+														{updating ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+														Save
+													</Button>
+													<Button variant="ghost" size="sm" className="h-8" disabled={updating} onClick={() => setEditing(null)}>
+														Cancel
+													</Button>
+												</div>
+											</div>
+										) : (
 											<div
 												key={helper.id}
 												className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2"
@@ -281,6 +380,12 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 												</p>
 												</div>
 												<div className="flex items-center gap-2">
+													{/* On All Institutions the list mixes colleges, so each says where */}
+													{!institutionId && (
+														<Badge variant="secondary" className="text-xs font-normal">
+															Scans at {codeOf(helper.institution_id) || '—'}
+														</Badge>
+													)}
 													{helper.is_expired ? (
 														<Badge variant="outline" className="text-xs font-normal text-muted-foreground">
 															Ended {readable(helper.expires_on)}
@@ -296,6 +401,20 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 													<Button
 														variant="ghost"
 														size="icon"
+														className="h-7 w-7 text-muted-foreground hover:text-brand-green"
+														title="Change college or date"
+														onClick={() => setEditing({
+															id: helper.id,
+															institutionId: helper.institution_id,
+															// An ended grant is given a fresh week rather than a past date
+															until: helper.is_expired ? dayAfter(7) : helper.expires_on,
+														})}
+													>
+														<Pencil className="h-3.5 w-3.5" />
+													</Button>
+													<Button
+														variant="ghost"
+														size="icon"
 														className="h-7 w-7 text-muted-foreground hover:text-red-600"
 														title="Remove this helper"
 														onClick={() => setRemoving(helper)}
@@ -308,7 +427,12 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 									</div>
 								)}
 
-								{/* Add one more */}
+								{/* Add one more — to a college, so not on All Institutions */}
+								{!institutionId ? (
+									<p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+										To add one helper, choose a college at the top. To add many across colleges, use Bulk assign.
+									</p>
+								) : (
 								<div className="space-y-2 rounded-md border border-dashed p-3">
 									<p className="text-xs font-medium">Add a helper</p>
 
@@ -435,6 +559,7 @@ export function StockCheckHelpers({ institutionId }: { institutionId: string }) 
 										They sign in with Google through MyJKKN exactly as everyone else does. This college&apos;s Stock Check page opens for them and nothing else — they can scan into a round somebody else started, and that is all. Somebody who runs their own college&apos;s library keeps it: this is added to what they already have, not put in its place.
 									</p>
 								</div>
+								)}
 							</>
 						)}
 					</div>
