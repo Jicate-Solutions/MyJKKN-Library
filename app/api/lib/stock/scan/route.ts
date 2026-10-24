@@ -135,22 +135,21 @@ export async function POST(request: Request) {
 		const keyed = new Map<string, string>()
 		for (const scanned of numbers) {
 			const item = byNumber.get(scanned)
-			// A number that is not a copy here is skipped, not kept: it is said
-			// back to the scanner and the next book is read. Nothing is written
-			// for it and it counts towards nothing.
-			if (!item) continue
-			const key = item.accession_number ?? scanned
+			// A number that is not a copy here is still a book on the shelf, so it
+			// is kept as `unknown` — once per round — for the library to look into
+			// afterwards. It counts towards nothing.
+			const key = item?.accession_number ?? scanned
 			keyed.set(scanned, key)
 			if (rows.some(r => r.accession_number === key)) continue
 
 			rows.push({
 				session_id: sessionId,
 				institution_id: institutionId,
-				item_id: item.id,
+				item_id: item?.id ?? null,
 				accession_number: key,
-				outcome: 'checked',
-				item_status: item.status ?? null,
-				title: item.catalogue?.title ?? null,
+				outcome: item ? 'checked' : 'unknown',
+				item_status: item?.status ?? null,
+				title: item?.catalogue?.title ?? null,
 				scanned_by: who,
 				scanned_by_name: whoName,
 				scanned_at: now,

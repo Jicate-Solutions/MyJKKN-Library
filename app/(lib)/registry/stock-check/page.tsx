@@ -66,6 +66,8 @@ interface StockProgress {
 	total: number
 	checked: number
 	pending: number
+	/** Numbers scanned that are not copies here — books the catalogue does not know */
+	unknown?: number
 }
 
 interface RecentScan {
@@ -247,7 +249,7 @@ interface Banner {
 const BANNER_STYLE: Partial<Record<FeedLine['state'], string>> = {
 	checked: 'bg-emerald-600 text-white',
 	repeat: 'bg-brand-yellow-600 text-brand-yellow-900',
-	unknown: 'bg-slate-600 text-white',
+	unknown: 'bg-orange-600 text-white',
 	queued: 'bg-sky-600 text-white',
 	sending: 'bg-muted text-foreground',
 	failed: 'bg-red-600 text-white',
@@ -257,7 +259,7 @@ function bannerWords(banner: Banner): string {
 	if (banner.again) return 'Already scanned'
 	if (banner.state === 'checked') return 'Counted'
 	if (banner.state === 'repeat') return banner.firstBy ? `Already checked by ${banner.firstBy}` : 'Already checked'
-	if (banner.state === 'unknown') return 'Not in this library — skipped'
+	if (banner.state === 'unknown') return 'Not in catalogue — kept for review'
 	if (banner.state === 'queued') return 'Counted — saved offline'
 	if (banner.state === 'failed') return 'Not sent'
 	return 'Checking…'
@@ -277,7 +279,7 @@ function StateBadge({ line }: { line: FeedLine }) {
 		return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400"><Copy className="h-3.5 w-3.5" /> Already checked</span>
 	}
 	if (line.state === 'unknown') {
-		return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><HelpCircle className="h-3.5 w-3.5" /> Skipped — not in this library</span>
+		return <span className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 dark:text-orange-400"><HelpCircle className="h-3.5 w-3.5" /> Not in catalogue — kept</span>
 	}
 	return <span className="inline-flex items-center gap-1 text-xs font-medium text-destructive"><AlertTriangle className="h-3.5 w-3.5" /> Not sent</span>
 }
@@ -347,7 +349,7 @@ const FEED_LABEL: Record<FeedLine['state'], string> = {
 	queued: 'Saved offline',
 	checked: 'Checked',
 	repeat: 'Already checked',
-	unknown: 'Skipped — not in this library',
+	unknown: 'Not in catalogue — kept',
 	failed: 'Not sent',
 }
 
@@ -357,7 +359,7 @@ const FEED_TONE: Record<FeedLine['state'], string> = {
 	queued: 'border-l-sky-400',
 	checked: 'border-l-emerald-500',
 	repeat: 'border-l-brand-yellow-700',
-	unknown: 'border-l-muted-foreground/40',
+	unknown: 'border-l-orange-500',
 	failed: 'border-l-red-500',
 }
 
@@ -388,9 +390,24 @@ const SCAN_COLUMNS: StockColumn<RecentScan>[] = [
 		key: 'title',
 		header: 'Title',
 		className: 'max-w-[140px] sm:max-w-[320px]',
-		cell: row => <OverflowText as="div" text={row.title ?? '—'} className="text-sm" />,
+		cell: row => <OverflowText as="div" text={row.title ?? (row.outcome === 'unknown' ? 'Not in catalogue' : '—')} className="text-sm" />,
 		sort: row => row.title ?? '',
 		excel: row => row.title ?? '',
+	},
+	{
+		key: 'result',
+		header: 'Result',
+		cell: row => row.outcome === 'unknown' ? (
+			<span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-orange-700 dark:text-orange-400">
+				<HelpCircle className="h-3.5 w-3.5" /> Not in catalogue
+			</span>
+		) : (
+			<span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-brand-green dark:text-brand-green-400">
+				<CheckCircle2 className="h-3.5 w-3.5" /> Checked
+			</span>
+		),
+		sort: row => row.outcome,
+		excel: row => row.outcome === 'unknown' ? 'Not in catalogue' : 'Checked',
 	},
 	{
 		key: 'by',
@@ -586,6 +603,7 @@ export default function StockCheckPage() {
 					total: server.total,
 					checked,
 					pending: Math.max(0, server.total - checked),
+					unknown: Math.max(server.unknown ?? 0, prev.unknown ?? 0),
 				}
 			})
 			if (Array.isArray(body.recent)) setRecent(body.recent)
@@ -1282,6 +1300,14 @@ export default function StockCheckPage() {
 											value={done}
 											className="h-2.5 bg-brand-yellow-100 dark:bg-brand-yellow-900/20 [&>div]:bg-gradient-to-r [&>div]:from-brand-green-400 [&>div]:to-brand-green-600"
 										/>
+										{/* Books on the shelf the catalogue does not know — kept, and
+										    listed under Everyone's with their own result */}
+										{(progress?.unknown ?? 0) > 0 && (
+											<p className="flex items-center gap-1.5 text-xs text-orange-700 dark:text-orange-400">
+												<HelpCircle className="h-3.5 w-3.5" />
+												{progress!.unknown!.toLocaleString('en-IN')} scanned {progress!.unknown === 1 ? 'number is' : 'numbers are'} not in the catalogue — kept for review (Everyone&apos;s tab)
+											</p>
+										)}
 									</div>
 								</CardContent>
 							</Card>
@@ -1441,7 +1467,7 @@ export default function StockCheckPage() {
 													searchText={row => `${row.accession_number} ${row.title ?? ''} ${row.scanned_by_name ?? ''}`}
 													searchPlaceholder="Search number, title or name"
 													facet={scannerFacet}
-													rowTone={() => 'border-l-brand-green-400'}
+													rowTone={row => row.outcome === 'unknown' ? 'border-l-orange-500' : 'border-l-brand-green-400'}
 													empty="No scans in this round yet"
 													loading={scansLoading}
 													canExport={canExport}

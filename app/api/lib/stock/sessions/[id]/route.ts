@@ -174,8 +174,6 @@ export async function GET(
 							.from('lib_stock_scans')
 							.select('id, accession_number, outcome, title, item_status, scanned_by_name, scanned_at')
 							.eq('session_id', id)
-							// Rows kept from before unknown numbers were skipped stay out of sight
-							.eq('outcome', 'checked')
 							.order('scanned_at', { ascending: false })
 							.order('id')
 							.range(range.from, range.to)
@@ -237,8 +235,6 @@ export async function GET(
 		}
 
 		// The default: the numbers everybody is watching, all asked for together
-		// Unknown numbers are not counted: a scan that is not a copy here is
-		// skipped at the shelf, and keeps nothing to count.
 		// The latest scans only when the screen shows them (Everyone's tab)
 		const wantRecent = searchParams.get('recent') === '1'
 
@@ -265,19 +261,24 @@ export async function GET(
 						.from('lib_stock_scans')
 						.select('id, accession_number, outcome, title, item_status, scanned_by_name, scanned_at')
 						.eq('session_id', id)
-						// Rows kept from before unknown numbers were skipped stay out of sight
-						.eq('outcome', 'checked')
 						.order('scanned_at', { ascending: false })
 						.limit(RECENT_SCANS)
 					: Promise.resolve({ data: null, error: null }),
+				// Numbers scanned that are not copies here: books on the shelf the
+				// catalogue does not know, kept for the library to look into
+				supabase
+					.from('lib_stock_scans')
+					.select('id', { count: 'exact', head: true })
+					.eq('session_id', id)
+					.eq('outcome', 'unknown'),
 			])
 		} catch (error) {
 			if (needsMigration(codeOf(error))) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
 			throw error
 		}
-		const [totalCount, checked, recent] = reads
+		const [totalCount, checked, recent, unknown] = reads
 
-		const failed = checked.error ?? recent.error
+		const failed = checked.error ?? recent.error ?? unknown.error
 		if (failed) {
 			if (needsMigration(codeOf(failed))) return NextResponse.json({ error: MIGRATION_MESSAGE }, { status: 400 })
 			throw failed
@@ -291,6 +292,7 @@ export async function GET(
 				total: totalCount,
 				checked: checkedCount,
 				pending: Math.max(0, totalCount - checkedCount),
+				unknown: unknown.count ?? 0,
 			},
 			...(wantRecent ? { recent: recent.data ?? [] } : {}),
 		})
