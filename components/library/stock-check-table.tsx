@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
-	ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download, Loader2, Search, X,
+	ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download, FilterX, Loader2, Search, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -31,6 +31,8 @@ export interface StockColumn<T> {
 	className?: string
 	/** Not shown on a phone — the cell beside it carries what matters. */
 	hideOnMobile?: boolean
+	/** In the Excel report only, never on screen. */
+	excelOnly?: boolean
 }
 
 export interface StockFacet<T> {
@@ -39,7 +41,8 @@ export interface StockFacet<T> {
 	get: (row: T) => string
 }
 
-const PAGE_SIZES = ['25', '50', '100', '250', '500', 'all'] as const
+/** Rows per page, unless the list asks for its own. 'all' is every row. */
+const PAGE_SIZES = ['25', '50', '100', '250', '500', 'all']
 
 const istDate = () =>
 	new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date())
@@ -58,6 +61,8 @@ export function StockCheckTable<T>({
 	exportName,
 	sheetName,
 	defaultSort,
+	pageSizes = PAGE_SIZES,
+	toolbar,
 }: {
 	rows: T[]
 	rowKey: (row: T) => string
@@ -74,11 +79,14 @@ export function StockCheckTable<T>({
 	exportName: string
 	sheetName: string
 	defaultSort?: { key: string; dir: 'asc' | 'desc' }
+	pageSizes?: string[]
+	/** More buttons beside the search, from the list that owns them. */
+	toolbar?: ReactNode
 }) {
 	const [search, setSearch] = useState('')
 	const [facetValue, setFacetValue] = useState('all')
 	const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(defaultSort ?? null)
-	const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>('25')
+	const [pageSize, setPageSize] = useState(pageSizes[0] ?? '25')
 	const [page, setPage] = useState(0)
 	const [exporting, setExporting] = useState(false)
 
@@ -137,6 +145,7 @@ export function StockCheckTable<T>({
 	}
 
 	const filtered = search.trim() !== '' || facetValue !== 'all'
+	const visible = columns.filter(column => !column.excelOnly)
 
 	return (
 		<div className="space-y-2">
@@ -174,6 +183,18 @@ export function StockCheckTable<T>({
 						</SelectContent>
 					</Select>
 				)}
+				{filtered && (
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-9 text-muted-foreground"
+						onClick={() => { setSearch(''); setFacetValue('all') }}
+					>
+						<FilterX className="mr-1.5 h-3.5 w-3.5" />
+						Clear
+					</Button>
+				)}
+				{toolbar}
 				{canExport && (
 					<Button
 						variant="outline"
@@ -192,7 +213,7 @@ export function StockCheckTable<T>({
 				<Table>
 					<TableHeader className="sticky top-0 z-10">
 						<TableRow className="border-b-0 bg-brand-green hover:bg-brand-green dark:bg-brand-green-700 dark:hover:bg-brand-green-700">
-							{columns.map(column => (
+							{visible.map(column => (
 								<TableHead
 									key={column.key}
 									className={cn(
@@ -222,7 +243,7 @@ export function StockCheckTable<T>({
 					<TableBody>
 						{slice.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={columns.length} className="h-28 text-center text-sm text-muted-foreground">
+								<TableCell colSpan={visible.length} className="h-28 text-center text-sm text-muted-foreground">
 									{loading
 										? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</span>
 										: filtered ? 'Nothing matches this search' : empty}
@@ -236,7 +257,7 @@ export function StockCheckTable<T>({
 									rowTone?.(row)
 								)}
 							>
-								{columns.map(column => (
+								{visible.map(column => (
 									<TableCell
 										key={column.key}
 										className={cn('py-2', column.hideOnMobile && 'hidden sm:table-cell', column.className)}
@@ -256,12 +277,12 @@ export function StockCheckTable<T>({
 			<div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-brand-green-50/60 px-3 py-2 text-xs text-muted-foreground dark:bg-brand-green-900/10 sm:pr-16">
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="hidden sm:inline">Rows per page</span>
-					<Select value={pageSize} onValueChange={v => setPageSize(v as (typeof PAGE_SIZES)[number])}>
+					<Select value={pageSize} onValueChange={setPageSize}>
 						<SelectTrigger className="h-8 w-[80px] bg-background text-sm" aria-label="Rows per page">
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							{PAGE_SIZES.map(option => (
+							{pageSizes.map(option => (
 								<SelectItem key={option} value={option}>{option === 'all' ? 'All' : option}</SelectItem>
 							))}
 						</SelectContent>

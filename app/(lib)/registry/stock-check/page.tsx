@@ -47,7 +47,7 @@ import { StockCheckHelpers } from '@/components/library/stock-check-helpers'
 import { StockCheckTable, type StockColumn, type StockFacet } from '@/components/library/stock-check-table'
 import {
 	ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle2, Copy, HelpCircle,
-	Play, Lock, LockOpen, Loader2, CloudOff, UploadCloud, BookCopy, ScanSearch,
+	Play, Lock, LockOpen, Loader2, CloudOff, UploadCloud, BookCopy, ScanSearch, Eraser,
 } from 'lucide-react'
 import type { LibItemStatus } from '@/types/lib'
 
@@ -194,6 +194,75 @@ function buzz(pattern: number | number[]) {
 	}
 }
 
+let audio: AudioContext | null = null
+
+/**
+ * A short tone for what a scan came to, so the person hears it without looking
+ * down: one high beep counted, two low ones already counted, one low one not a
+ * copy here. The page has been tapped by then (the Scan button), so the browser
+ * lets it play.
+ */
+function tone(kind: 'checked' | 'repeat' | 'unknown') {
+	try {
+		const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+		if (!Context) return
+		audio = audio ?? new Context()
+		if (audio.state === 'suspended') void audio.resume()
+		const beeps = kind === 'checked' ? [[1320, 0]] : kind === 'repeat' ? [[440, 0], [440, 0.16]] : [[260, 0]]
+		for (const [frequency, delay] of beeps) {
+			const oscillator = audio.createOscillator()
+			const gain = audio.createGain()
+			oscillator.frequency.value = frequency
+			gain.gain.value = 0.12
+			oscillator.connect(gain)
+			gain.connect(audio.destination)
+			const at = audio.currentTime + delay
+			oscillator.start(at)
+			oscillator.stop(at + (kind === 'checked' ? 0.08 : 0.12))
+		}
+	} catch {
+		// No sound is no loss — the screen and the buzz still say it
+	}
+}
+
+/** What the phone says the moment a book is read — heard, felt and seen. */
+function signal(kind: 'checked' | 'repeat' | 'unknown') {
+	tone(kind)
+	if (kind === 'repeat') buzz([40, 60, 40])
+	else if (kind === 'unknown') buzz(120)
+}
+
+/** The big line in the camera view: the book just read, and what it came to. */
+interface Banner {
+	/** The feed line it belongs to, so a correction from the server shows here too */
+	key: string | null
+	scanned: string
+	state: FeedLine['state']
+	title: string | null
+	firstBy: string | null
+	/** Read again while the camera was still open on this phone */
+	again?: boolean
+}
+
+const BANNER_STYLE: Partial<Record<FeedLine['state'], string>> = {
+	checked: 'bg-emerald-600 text-white',
+	repeat: 'bg-brand-yellow-600 text-brand-yellow-900',
+	unknown: 'bg-slate-600 text-white',
+	queued: 'bg-sky-600 text-white',
+	sending: 'bg-muted text-foreground',
+	failed: 'bg-red-600 text-white',
+}
+
+function bannerWords(banner: Banner): string {
+	if (banner.again) return 'Already scanned'
+	if (banner.state === 'checked') return 'Counted'
+	if (banner.state === 'repeat') return banner.firstBy ? `Already checked by ${banner.firstBy}` : 'Already checked'
+	if (banner.state === 'unknown') return 'Not in this library — skipped'
+	if (banner.state === 'queued') return 'Counted — saved offline'
+	if (banner.state === 'failed') return 'Not sent'
+	return 'Checking…'
+}
+
 function StateBadge({ line }: { line: FeedLine }) {
 	if (line.state === 'sending') {
 		return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Sending</span>
@@ -220,13 +289,41 @@ function StateBadge({ line }: { line: FeedLine }) {
  * counting a shelf cannot see whether the book they just pointed at was
  * counted, already counted, or not in this library at all.
  */
-function CameraFeed({ lines, queued }: { lines: FeedLine[]; queued: number }) {
-	if (lines.length === 0) {
+function CameraFeed({ lines, queued, banner }: { lines: FeedLine[]; queued: number; banner: Banner | null }) {
+	if (lines.length === 0 && !banner) {
 		return <p className="text-xs text-muted-foreground">Point the camera at a book to start</p>
 	}
 
+	// The banner follows its line, so "Counted" turns into "Already checked by
+	// …" here too if somebody else got to the book a moment earlier
+	const live = banner?.key ? lines.find(line => line.key === banner.key) : null
+	const shown: Banner | null = banner && live
+		? { ...banner, state: live.state, title: live.title ?? banner.title, firstBy: live.firstBy }
+		: banner
+
 	return (
 		<ul className="space-y-1">
+			{shown && (
+				<li
+					key={`${shown.key ?? shown.scanned}-${shown.state}-${shown.again ? 1 : 0}`}
+					className={`-mx-2 -mt-2 mb-1 flex items-center gap-2 rounded-t-md px-3 py-2 animate-in fade-in zoom-in-95 duration-150 ${BANNER_STYLE[shown.again ? 'repeat' : shown.state] ?? ''}`}
+				>
+					{shown.state === 'sending' && !shown.again
+						? <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+						: shown.state === 'checked' || shown.state === 'queued'
+							? <CheckCircle2 className="h-5 w-5 shrink-0" />
+							: shown.state === 'unknown'
+								? <HelpCircle className="h-5 w-5 shrink-0" />
+								: <Copy className="h-5 w-5 shrink-0" />}
+					<span className="min-w-0 flex-1">
+						<span className="block text-sm font-bold leading-tight">{bannerWords(shown)}</span>
+						<span className="block truncate text-xs opacity-90">
+							<span className="font-mono">{shown.scanned}</span>
+							{shown.title ? ` · ${shown.title}` : ''}
+						</span>
+					</span>
+				</li>
+			)}
 			{queued > 0 && (
 				<li className="flex items-center gap-1 text-xs font-medium text-sky-700 dark:text-sky-400">
 					<CloudOff className="h-3.5 w-3.5" />
@@ -400,6 +497,20 @@ export default function StockCheckPage() {
 	const [flushing, setFlushing] = useState(false)
 	const [online, setOnline] = useState(true)
 
+	// Every copy of the college, held on the phone, so a scan is answered the
+	// moment the camera reads it rather than when the server replies
+	const indexRef = useRef<{
+		sessionId: string
+		at: number
+		/** accession number and barcode → the copy */
+		byNumber: Map<string, { accession: string; title: string | null }>
+		/** accession numbers this round has seen, as far as this phone knows */
+		seen: Set<string>
+	} | null>(null)
+	/** Lines already added to the counts on the phone's own answer */
+	const countedRef = useRef<Set<string>>(new Set())
+	const [banner, setBanner] = useState<Banner | null>(null)
+
 	const session = useMemo(() => sessions.find(s => s.id === sessionId) ?? null, [sessions, sessionId])
 	const isOpen = session?.status === 'open'
 
@@ -452,9 +563,16 @@ export default function StockCheckPage() {
 
 	// ── The counts ────────────────────────────────────────────────────────────
 
+	// With a hundred and more phones on one round, every request a phone does
+	// not need to make is load the scanners do not have to queue behind
+	const cameraOpenRef = useRef(false)
+	const tabRef = useRef(tab)
+	useEffect(() => { tabRef.current = tab }, [tab])
+
 	const loadProgress = useCallback(async (id: string) => {
 		try {
-			const res = await fetch(`/api/lib/stock/sessions/${id}`)
+			// The latest scans are only asked for when Everyone's is on screen
+			const res = await fetch(`/api/lib/stock/sessions/${id}${tabRef.current === 'all' ? '?recent=1' : ''}`)
 			const body = await res.json()
 			if (!res.ok) return
 			const server: StockProgress | null = body.progress ?? null
@@ -470,7 +588,7 @@ export default function StockCheckPage() {
 					pending: Math.max(0, server.total - checked),
 				}
 			})
-			setRecent(body.recent ?? [])
+			if (Array.isArray(body.recent)) setRecent(body.recent)
 		} catch {
 			// A missed refresh is nothing: the next one is seconds away, and the
 			// scan box has never depended on it.
@@ -485,15 +603,66 @@ export default function StockCheckPage() {
 		setPending([])
 		loadedFor.current = { scans: null, pending: null }
 		void loadProgress(sessionId)
-		const timer = setInterval(() => { void loadProgress(sessionId) }, REFRESH_MS)
+		// Not while the camera fills the screen, nor with the phone locked:
+		// nobody can see the counts then, and the scans are what must get through
+		const timer = setInterval(() => {
+			if (cameraOpenRef.current || document.visibilityState === 'hidden') return
+			void loadProgress(sessionId)
+		}, REFRESH_MS)
 		return () => clearInterval(timer)
 	}, [sessionId, loadProgress])
 
 	/** Asked again shortly after our own scan, without stacking up requests. */
 	const refreshSoon = useCallback((id: string) => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current)
+		// Under the camera the counts already moved on the answer itself; the
+		// recount waits for the camera to be put down
+		if (cameraOpenRef.current) return
 		refreshTimer.current = setTimeout(() => { void loadProgress(id) }, AFTER_SCAN_MS)
 	}, [loadProgress])
+
+	/**
+	 * The college's copies, onto the phone. What it already knows to be seen is
+	 * kept: the list from the server can be a few seconds behind this phone.
+	 */
+	const loadIndex = useCallback(async (id: string) => {
+		try {
+			const res = await fetch(`/api/lib/stock/sessions/${id}?view=index`)
+			if (!res.ok) return
+			const body: { items?: [string, string | null, string | null, number][] } = await res.json()
+			const byNumber = new Map<string, { accession: string; title: string | null }>()
+			const seen = new Set<string>(indexRef.current?.sessionId === id ? indexRef.current.seen : [])
+			for (const [accession, barcode, title, checked] of body.items ?? []) {
+				const copy = { accession, title }
+				byNumber.set(accession, copy)
+				if (barcode && !byNumber.has(barcode)) byNumber.set(barcode, copy)
+				if (checked) seen.add(accession)
+			}
+			indexRef.current = { sessionId: id, at: Date.now(), byNumber, seen }
+		} catch {
+			// Without it each scan simply waits for the server, as it always did
+		}
+	}, [])
+
+	useEffect(() => {
+		indexRef.current = null
+		countedRef.current = new Set()
+		setBanner(null)
+		if (sessionId && isOpen) void loadIndex(sessionId)
+	}, [sessionId, isOpen, loadIndex])
+
+	/** The camera put down is the moment the whole round's counts are worth reading. */
+	const onCameraOpenChange = useCallback((open: boolean) => {
+		const wasOpen = cameraOpenRef.current
+		cameraOpenRef.current = open
+		if (wasOpen && !open && sessionId) void loadProgress(sessionId)
+		// Picking the camera up again after a while: catch up on what the others
+		// have counted, so "already checked" is known on the phone
+		if (open && sessionId && (!indexRef.current || Date.now() - indexRef.current.at > 5 * 60_000)) {
+			void loadIndex(sessionId)
+		}
+		if (!open) setBanner(null)
+	}, [sessionId, loadProgress, loadIndex])
 
 	useEffect(() => () => { if (refreshTimer.current) clearTimeout(refreshTimer.current) }, [])
 
@@ -520,8 +689,12 @@ export default function StockCheckPage() {
 			saveOutbox(outboxRef.current)
 			setQueued(outboxRef.current.filter(entry => entry.institutionId === institutionId).length)
 		}
-		settle(keys, () => ({ state: 'queued', error: null }))
-	}, [institutionId, settle])
+		// A number the phone already knows is not a copy here keeps saying so;
+		// it waits in the outbox only in case the phone's list is behind
+		setFeed(prev => prev.map(line =>
+			keys.includes(line.key) && line.state !== 'unknown' ? { ...line, state: 'queued', error: null } : line
+		))
+	}, [institutionId])
 
 	/** Takes scans out of the outbox once the server has them, or has refused them. */
 	const unqueue = useCallback((keys: string[]) => {
@@ -531,7 +704,11 @@ export default function StockCheckPage() {
 		setQueued(outboxRef.current.filter(entry => entry.institutionId === institutionId).length)
 	}, [institutionId])
 
-	const send = useCallback(async (numbers: string[], keys: string[], id: string) => {
+	/**
+	 * `announce`: the phone could not answer this scan itself (its list of
+	 * copies was not in yet), so the server's answer is the one to be heard.
+	 */
+	const send = useCallback(async (numbers: string[], keys: string[], id: string, announce = false) => {
 		// No network at all: straight into the outbox, without waiting on a
 		// request that cannot leave — the next book is already in shot.
 		if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -586,21 +763,43 @@ export default function StockCheckPage() {
 				}
 			})
 
-			const results = body.results ?? []
-			// A number that is not a copy here is skipped quietly — no buzz, nothing
-			// kept — so the next book is simply read
-			if (results.some(r => r.outcome === 'repeat')) buzz([40, 60, 40])
+			// The phone usually answered already (see `scan`); this is where its
+			// answer is confirmed, or put right — somebody else may have counted
+			// the same book a moment earlier, and the server is the one who knows
+			const ticked = new Set<string>()
+			let change = 0
+			let overtaken = false
+			keys.forEach((key, index) => {
+				const result = byNumber.get(numbers[index])
+				if (!result) return
+				const accession = result.accession_number ?? result.scanned
+				const counted = countedRef.current.has(key)
+				if (result.outcome === 'checked' && !counted) {
+					countedRef.current.add(key)
+					change++
+				}
+				if (result.outcome !== 'checked' && counted) {
+					countedRef.current.delete(key)
+					change--
+					if (result.outcome === 'repeat') overtaken = true
+				}
+				if (result.outcome === 'checked') ticked.add(accession)
+				if (result.outcome !== 'unknown') indexRef.current?.seen.add(accession)
+			})
+			// Heard only when it changes what the phone already said — or when the
+			// phone had nothing to say yet
+			if (announce) {
+				const last = byNumber.get(numbers[numbers.length - 1])
+				if (last) signal(last.outcome)
+			} else if (overtaken) {
+				signal('repeat')
+			}
 
-			// The counts move the moment the answer is in, not after a recount of
-			// the whole college: the person is already reaching for the next book.
-			const ticked = new Set(results
-				.filter(r => r.outcome === 'checked')
-				.map(r => r.accession_number ?? r.scanned))
-			if (ticked.size > 0) {
+			if (change !== 0) {
 				setProgress(prev => prev && {
 					...prev,
-					checked: prev.checked + ticked.size,
-					pending: Math.max(0, prev.pending - ticked.size),
+					checked: Math.max(0, prev.checked + change),
+					pending: Math.max(0, prev.pending - change),
 				})
 			}
 			if (ticked.size > 0) {
@@ -614,6 +813,9 @@ export default function StockCheckPage() {
 			buzz([40, 60, 40])
 		}
 	}, [institutionId, settle, refreshSoon, queue, unqueue])
+
+	// The scan box's own answer is above; a scan the phone could not answer
+	// itself goes out with `announce` (see `scan`)
 
 	/**
 	 * Sends what the outbox holds for this college, a request per round and up
@@ -687,17 +889,52 @@ export default function StockCheckPage() {
 		const batch = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 		const keys = numbers.map((n, i) => `${batch}-${i}-${n}`)
 
-		// On screen before the request leaves, so the next book can be picked up
-		setFeed(prev => [
-			...numbers.map((scanned, i) => ({
-				key: keys[i], scanned, state: 'sending' as const,
-				title: null, itemStatus: null, firstBy: null, error: null,
-			})),
-			...prev,
-		].slice(0, FEED_LINES))
+		// Answered on the phone, now, from the copies it holds: counted, already
+		// counted, or not a copy here. Without the list (still loading) the line
+		// waits for the server as it always did.
+		const index = indexRef.current?.sessionId === sessionId ? indexRef.current : null
+		const lines: FeedLine[] = numbers.map((scanned, i) => {
+			const copy = index?.byNumber.get(scanned)
+			const base = { key: keys[i], scanned, itemStatus: null, firstBy: null, error: null }
+			if (!index) return { ...base, state: 'sending', title: null }
+			if (!copy) return { ...base, state: 'unknown', title: null }
+			if (index.seen.has(copy.accession)) return { ...base, state: 'repeat', title: copy.title }
+			index.seen.add(copy.accession)
+			countedRef.current.add(keys[i])
+			return { ...base, state: 'checked', title: copy.title }
+		})
 
-		void send(numbers, keys, sessionId)
+		setFeed(prev => [...lines, ...prev].slice(0, FEED_LINES))
+
+		const newly = lines.filter(line => line.state === 'checked')
+		if (newly.length > 0) {
+			setProgress(prev => prev && {
+				...prev,
+				checked: prev.checked + newly.length,
+				pending: Math.max(0, prev.pending - newly.length),
+			})
+			const accessions = new Set(newly.map(line => index?.byNumber.get(line.scanned)?.accession ?? line.scanned))
+			setPending(prev => prev.filter(item => !accessions.has(item.accession_number ?? '')))
+		}
+
+		const latest = lines[lines.length - 1]
+		setBanner({ key: latest.key, scanned: latest.scanned, state: latest.state, title: latest.title, firstBy: null })
+		if (latest.state !== 'sending') signal(latest.state === 'checked' ? 'checked' : latest.state === 'repeat' ? 'repeat' : 'unknown')
+
+		// Already counted, by this phone or by the list it was given: nothing to
+		// send — the server would only say the same, and a hundred phones' worth
+		// of those is load the scans themselves do not need
+		const toSend = lines.filter(line => line.state !== 'repeat')
+		if (toSend.length > 0) void send(toSend.map(line => line.scanned), toSend.map(line => line.key), sessionId, !index)
 	}, [sessionId, isOpen, send])
+
+	/** A book the camera already read is in front of it again: say so, loudly. */
+	const onCameraRepeat = useCallback((value: string) => {
+		const scanned = numbersIn(value)[0] ?? value
+		const copy = indexRef.current?.byNumber.get(scanned)
+		setBanner({ key: null, scanned, state: 'repeat', title: copy?.title ?? null, firstBy: null, again: true })
+		signal('repeat')
+	}, [])
 
 	/** One line sent again by hand, after the network let it down. */
 	const retry = useCallback((line: FeedLine) => {
@@ -1108,7 +1345,9 @@ export default function StockCheckPage() {
 											buttonText="Scan a book"
 											label="Point the camera at each book's barcode — it keeps counting until you press Done"
 											onScan={scan}
-											feed={<CameraFeed lines={feed} queued={queued} />}
+											onOpenChange={onCameraOpenChange}
+											onRepeat={onCameraRepeat}
+											feed={<CameraFeed lines={feed} queued={queued} banner={banner} />}
 										/>
 									) : (
 										<div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
@@ -1171,6 +1410,22 @@ export default function StockCheckPage() {
 													facet={FEED_FACET}
 													rowTone={line => FEED_TONE[line.state]}
 													empty="Nothing scanned on this device yet"
+													toolbar={feed.length > 0 && (
+														// Only what is done with: a scan still on its way, or
+														// saved offline, stays until it has reached the server
+														<Button
+															variant="outline"
+															size="sm"
+															className="h-9"
+															onClick={() => {
+																setFeed(prev => prev.filter(line => line.state === 'sending' || line.state === 'queued'))
+																setBanner(null)
+															}}
+														>
+															<Eraser className="mr-1.5 h-3.5 w-3.5" />
+															Clear list
+														</Button>
+													)}
 													canExport={canExport}
 													exportName="stock-check-my-scans"
 													sheetName="My scans"

@@ -52,7 +52,7 @@ import {
 	Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Camera, Loader2, Lightbulb, SwitchCamera, AlertTriangle, ZoomIn } from 'lucide-react'
+import { Camera, Loader2, Lightbulb, SwitchCamera, AlertTriangle, ZoomIn, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /** Stops the camera and releases it. What every code path here ends with. */
@@ -120,6 +120,17 @@ interface CameraScannerProps {
 	 * has to be shown in here instead, or the person is counting blind.
 	 */
 	feed?: ReactNode
+	/**
+	 * Told when the camera opens and closes. The stock check uses it to stop
+	 * asking for counts nobody can see while the camera fills the screen.
+	 */
+	onOpenChange?: (open: boolean) => void
+	/**
+	 * Told when a code already read since the camera opened is in front of it
+	 * again — once per book, not on every frame it stays in shot — so the page
+	 * can say "already scanned" as loudly as it says "counted".
+	 */
+	onRepeat?: (value: string) => void
 }
 
 export function CameraScanner({
@@ -130,8 +141,19 @@ export function CameraScanner({
 	buttonText,
 	continuous = false,
 	feed,
+	onOpenChange,
+	onRepeat,
 }: CameraScannerProps) {
 	const [open, setOpen] = useState(false)
+
+	const onRepeatRef = useRef(onRepeat)
+	useEffect(() => { onRepeatRef.current = onRepeat }, [onRepeat])
+	/** The last repeat told, so a book held still is told about once. */
+	const lastRepeatRef = useRef<{ value: string; at: number } | null>(null)
+
+	const onOpenChangeRef = useRef(onOpenChange)
+	useEffect(() => { onOpenChangeRef.current = onOpenChange }, [onOpenChange])
+	useEffect(() => { onOpenChangeRef.current?.(open) }, [open])
 	const [starting, setStarting] = useState(false)
 	const [problem, setProblem] = useState<string | null>(null)
 	const [cameraCount, setCameraCount] = useState(0)
@@ -145,7 +167,7 @@ export function CameraScanner({
 	const controlsRef = useRef<ReaderControls | null>(null)
 	/** Which camera of the ones found is in use. A ref, so choosing another
 	 *  restarts the picture deliberately rather than as a side effect. */
-	const cameraIndex = useRef(0)
+	const cameraIndex = useRef(-1)
 	const devicesRef = useRef<MediaDeviceInfo[]>([])
 	/**
 	 * Bumped to take the picture down and set it up again — the only thing that
@@ -224,6 +246,11 @@ export function CameraScanner({
 		if (continuous) {
 			if (seenRef.current.has(value)) {
 				setRepeated(value)
+				const last = lastRepeatRef.current
+				if (!last || last.value !== value || Date.now() - last.at > 2_500) {
+					lastRepeatRef.current = { value, at: Date.now() }
+					onRepeatRef.current?.(value)
+				}
 				return
 			}
 			seenRef.current.add(value)
@@ -278,8 +305,11 @@ export function CameraScanner({
 			setCameraCount(devices.length)
 
 			// Start on the camera the browser just gave us — the back one, asked
-			// for above — and let "switch" step on from there.
-			if (!devices[cameraIndex.current]) {
+			// for above — and let "switch" step on from there. Nothing chosen yet
+			// is -1, not 0: the first camera in the list is often not the one the
+			// browser opened, and starting on it made the first Switch look like
+			// it did nothing.
+			if (cameraIndex.current < 0 || !devices[cameraIndex.current]) {
 				cameraIndex.current = Math.max(0, devices.findIndex(d => d.deviceId === liveId))
 			}
 			const chosen = devices[cameraIndex.current] ?? devices[0]
@@ -428,9 +458,35 @@ export function CameraScanner({
 		return release
 	}, [open, restartNonce, start, release])
 
+	/**
+	 * To the camera on the other side of the phone.
+	 *
+	 * A phone lists several back lenses — main, wide, macro — so stepping to
+	 * the next one in the list often changed nothing anybody could see, and it
+	 * took a second press to reach the front. Where the cameras are named, the
+	 * step goes to the next one that faces the other way; where they are not,
+	 * it steps through the list as before.
+	 */
 	const switchCamera = () => {
-		if (devicesRef.current.length < 2) return
-		cameraIndex.current = (cameraIndex.current + 1) % devicesRef.current.length
+		const devices = devicesRef.current
+		if (devices.length < 2) return
+		const facing = (device?: MediaDeviceInfo) => {
+			const label = (device?.label ?? '').toLowerCase()
+			if (/front|user|facing front|selfie/.test(label)) return 'front'
+			if (/back|rear|environment|facing back/.test(label)) return 'back'
+			return null
+		}
+		const current = Math.max(0, cameraIndex.current)
+		const here = facing(devices[current])
+		let next = (current + 1) % devices.length
+		if (here) {
+			for (let step = 1; step < devices.length; step++) {
+				const candidate = (current + step) % devices.length
+				const there = facing(devices[candidate])
+				if (there && there !== here) { next = candidate; break }
+			}
+		}
+		cameraIndex.current = next
 		setRestartNonce(n => n + 1)
 	}
 
@@ -579,7 +635,7 @@ export function CameraScanner({
 						</label>
 					)}
 
-					<div className="flex items-center gap-2">
+					<div className="flex flex-wrap items-center gap-2">
 						{hasTorch && !problem && (
 							<Button type="button" variant="outline" size="sm" onClick={toggleTorch}>
 								<Lightbulb className={cn('mr-1.5 h-4 w-4', torchOn && 'text-brand-yellow-700')} />
@@ -590,6 +646,24 @@ export function CameraScanner({
 							<Button type="button" variant="outline" size="sm" onClick={switchCamera}>
 								<SwitchCamera className="mr-1.5 h-4 w-4" />
 								Switch camera
+							</Button>
+						)}
+						{continuous && readCount > 0 && !problem && (
+							// Forget what this camera has read, so a book can be read
+							// again and answered afresh instead of "already scanned"
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									seenRef.current = new Set()
+									lastRepeatRef.current = null
+									setReadCount(0)
+									setRepeated(null)
+								}}
+							>
+								<RotateCcw className="mr-1.5 h-4 w-4" />
+								Clear
 							</Button>
 						)}
 						{continuous ? (
