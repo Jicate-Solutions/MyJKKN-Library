@@ -91,6 +91,15 @@ interface PendingItem {
 interface FeedLine {
 	key: string
 	scanned: string
+	/**
+	 * The copy the number turned out to be, once anything knows which — the
+	 * phone's own list, or the server's answer. A sticker can be read by its
+	 * barcode or by its accession number, so this is what a line is matched on
+	 * rather than the digits as they came off the scanner.
+	 */
+	accession?: string | null
+	/** When it was read, so a line that outlives this tab still says when. */
+	at?: string | null
 	/** `queued`: saved on this phone, to be sent when the internet is back */
 	state: 'sending' | 'queued' | 'checked' | 'repeat' | 'unknown' | 'failed'
 	title: string | null
@@ -522,6 +531,10 @@ export default function StockCheckPage() {
 	const [pendingLoading, setPendingLoading] = useState(false)
 	const [scans, setScans] = useState<RecentScan[]>([])
 	const [scansLoading, setScansLoading] = useState(false)
+	const [mine, setMine] = useState<RecentScan[]>([])
+	const [mineLoading, setMineLoading] = useState(false)
+	/** Counts up every time the camera is put down — see the effect by loadMine. */
+	const [cameraClosed, setCameraClosed] = useState(0)
 
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -593,6 +606,7 @@ export default function StockCheckPage() {
 		})))
 		setProgress(null)
 		setRecent([])
+		setMine([])
 		setPending([])
 	}, [institutionId])
 
@@ -636,8 +650,9 @@ export default function StockCheckPage() {
 		// Another round's counts must not be kept as the "higher" ones, nor its lists
 		setProgress(null)
 		setScans([])
+		setMine([])
 		setPending([])
-		loadedFor.current = { scans: null, pending: null }
+		loadedFor.current = { scans: null, pending: null, mine: null }
 		void loadProgress(sessionId)
 		// Not while the camera fills the screen, nor with the phone locked:
 		// nobody can see the counts then, and the scans are what must get through
@@ -691,7 +706,10 @@ export default function StockCheckPage() {
 	const onCameraOpenChange = useCallback((open: boolean) => {
 		const wasOpen = cameraOpenRef.current
 		cameraOpenRef.current = open
-		if (wasOpen && !open && sessionId) void loadProgress(sessionId)
+		if (wasOpen && !open && sessionId) {
+			void loadProgress(sessionId)
+			setCameraClosed(n => n + 1)
+		}
 		// Picking the camera up again after a while: catch up on what the others
 		// have counted, so "already checked" is known on the phone
 		if (open && sessionId && (!indexRef.current || Date.now() - indexRef.current.at > 5 * 60_000)) {
@@ -792,6 +810,7 @@ export default function StockCheckPage() {
 				if (!result) return { state: 'failed', error: 'No answer for this number' }
 				return {
 					state: result.outcome,
+					accession: result.accession_number,
 					title: result.title,
 					itemStatus: result.item_status,
 					firstBy: result.first_by,
@@ -931,7 +950,11 @@ export default function StockCheckPage() {
 		const index = indexRef.current?.sessionId === sessionId ? indexRef.current : null
 		const lines: FeedLine[] = numbers.map((scanned, i) => {
 			const copy = findCopy(index?.byNumber, scanned)
-			const base = { key: keys[i], scanned, itemStatus: null, firstBy: null, error: null, format: format ? format.toUpperCase() : undefined }
+			const base = {
+				key: keys[i], scanned, itemStatus: null, firstBy: null, error: null,
+				format: format ? format.toUpperCase() : undefined,
+				accession: copy?.accession ?? null, at: new Date().toISOString(),
+			}
 			if (!index) return { ...base, state: 'sending', title: null }
 			if (!copy) return { ...base, state: 'unknown', title: null }
 			if (index.seen.has(copy.accession)) return { ...base, state: 'repeat', title: copy.title }
@@ -1055,7 +1078,9 @@ export default function StockCheckPage() {
 	// ── The lists ─────────────────────────────────────────────────────────────
 
 	// Which round each list was last read for, so opening a tab reads it once
-	const loadedFor = useRef<{ scans: string | null; pending: string | null }>({ scans: null, pending: null })
+	const loadedFor = useRef<{ scans: string | null; pending: string | null; mine: string | null }>(
+		{ scans: null, pending: null, mine: null }
+	)
 
 	/** Every copy not yet seen, in one answer — the table sorts, filters and pages it. */
 	const loadPending = useCallback(async (id: string) => {
@@ -1089,12 +1114,49 @@ export default function StockCheckPage() {
 		}
 	}, [toast])
 
-	// Only when a tab is opened; the lists are not what the scanner waits on
+	/**
+	 * What this person has already counted in this round.
+	 *
+	 * The feed below it is only what this tab has read since it was opened, so a
+	 * reload, a flat battery or carrying on from another phone used to leave
+	 * somebody looking at an empty list with no way of telling how far they had
+	 * got. This is the round's own record of their scans, and it is what My
+	 * scans is built on.
+	 */
+	const loadMine = useCallback(async (id: string) => {
+		try {
+			setMineLoading(true)
+			const res = await fetch(`/api/lib/stock/sessions/${id}?view=mine`)
+			const body = await res.json()
+			if (!res.ok) throw new Error(body.error ?? 'Could not load your scans')
+			setMine(body.data ?? [])
+			loadedFor.current.mine = id
+		} catch (error) {
+			toast({ title: error instanceof Error ? error.message : 'Could not load your scans', variant: 'destructive' })
+		} finally {
+			setMineLoading(false)
+		}
+	}, [toast])
+
+	/**
+	 * The camera put down is also the moment to read this person's own count
+	 * again. The feed keeps the last 150 lines, and a shelf is longer than that
+	 * — past it their earlier books would quietly leave the screen and leave the
+	 * count short, which is the one number they are watching.
+	 */
+	useEffect(() => {
+		if (cameraClosed === 0 || !sessionId) return
+		if (loadedFor.current.mine === sessionId) void loadMine(sessionId)
+	}, [cameraClosed, sessionId, loadMine])
+
+	// Only when a tab is opened; the lists are not what the scanner waits on.
+	// My scans is the tab the page opens on, so that one is read straight away.
 	useEffect(() => {
 		if (!sessionId) return
+		if (tab === 'feed' && loadedFor.current.mine !== sessionId) void loadMine(sessionId)
 		if (tab === 'pending' && loadedFor.current.pending !== sessionId) void loadPending(sessionId)
 		if (tab === 'all' && loadedFor.current.scans !== sessionId) void loadScans(sessionId)
-	}, [tab, sessionId, loadPending, loadScans])
+	}, [tab, sessionId, loadMine, loadPending, loadScans])
 
 	// The latest scans arrive with every refresh of the counts, so they are laid
 	// over the full list — Everyone's stays live without reading the round again
@@ -1106,6 +1168,55 @@ export default function StockCheckPage() {
 			return true
 		})
 	}, [recent, scans])
+
+	/**
+	 * My scans, whole: what this tab has read since it was opened, and under it
+	 * everything else the round has recorded of this person's.
+	 *
+	 * A line is matched on the copy, not on the digits as they were scanned —
+	 * the barcode and the accession number are two ways of reading one book, and
+	 * a book this person counted ten minutes ago must not be listed again
+	 * because it was read by its other number this time.
+	 */
+	const myScans = useMemo<FeedLine[]>(() => {
+		// Only the ticks, for the matching below: a number that is not a copy
+		// here was never counted and can never make a line a repeat.
+		const counted = new Set(mine.filter(row => row.outcome === 'checked').map(row => row.accession_number))
+		// A book this person ticked earlier, put in front of the camera again:
+		// the round rightly calls that a repeat, but the tick was theirs. The
+		// line from the round below says so, and keeping this one as well would
+		// list the book twice and take it off their count.
+		const lines = feed.filter(line =>
+			!(line.state === 'repeat' && line.accession && counted.has(line.accession))
+		)
+		const live = new Set<string>()
+		for (const line of lines) {
+			live.add(line.scanned)
+			if (line.accession) live.add(line.accession)
+		}
+		const earlier: FeedLine[] = mine
+			.filter(row => !live.has(row.accession_number))
+			.map(row => ({
+				key: `counted-${row.id}`,
+				scanned: row.accession_number,
+				accession: row.accession_number,
+				at: row.scanned_at,
+				state: row.outcome === 'unknown' ? 'unknown' : 'checked',
+				title: row.title,
+				itemStatus: row.item_status,
+				firstBy: null,
+				error: null,
+			}))
+		return [...lines, ...earlier]
+	}, [feed, mine])
+
+	/**
+	 * How many copies this person has counted — the number they came for.
+	 *
+	 * Only the ticks. A book somebody else had already counted belongs to them,
+	 * and a number that is not a copy of this library counted towards nothing.
+	 */
+	const myCount = useMemo(() => myScans.filter(line => line.state === 'checked').length, [myScans])
 
 	const scannerFacet = useMemo<StockFacet<RecentScan>>(() => ({
 		label: 'Scanners',
@@ -1174,6 +1285,14 @@ export default function StockCheckPage() {
 			),
 			sort: line => FEED_LABEL[line.state],
 			excel: line => FEED_LABEL[line.state],
+		},
+		{
+			key: 'at',
+			header: 'At',
+			hideOnMobile: true,
+			cell: line => <span className="whitespace-nowrap text-xs text-muted-foreground">{line.at ? when(line.at) : '—'}</span>,
+			sort: line => line.at ?? '',
+			excel: line => (line.at ? when(line.at) : ''),
 		},
 	], [retry])
 
@@ -1445,8 +1564,8 @@ export default function StockCheckPage() {
 												{/* Three even tabs on a phone, with the short names */}
 												<TabsList className="grid h-auto min-w-0 flex-1 grid-cols-3 bg-brand-green-50 dark:bg-brand-green-900/20 sm:inline-flex sm:h-10 sm:flex-none [&>button[data-state=active]]:bg-brand-green [&>button[data-state=active]]:text-white">
 													<TabsTrigger value="feed" className="px-1 text-xs sm:px-3 sm:text-sm">
-														<span className="sm:hidden">Mine</span>
-														<span className="hidden sm:inline">My scans</span>
+														<span className="sm:hidden">Mine{myCount > 0 ? ` (${count(myCount)})` : ''}</span>
+														<span className="hidden sm:inline">My scans{myCount > 0 ? ` (${count(myCount)})` : ''}</span>
 													</TabsTrigger>
 													<TabsTrigger value="all" className="px-1 text-xs sm:px-3 sm:text-sm">
 														<span className="sm:hidden">All</span>
@@ -1466,6 +1585,7 @@ export default function StockCheckPage() {
 													onClick={() => {
 														if (!sessionId) return
 														void loadProgress(sessionId)
+														if (tab === 'feed') void loadMine(sessionId)
 														if (tab === 'pending') void loadPending(sessionId)
 														if (tab === 'all') void loadScans(sessionId)
 													}}
@@ -1475,32 +1595,43 @@ export default function StockCheckPage() {
 												</Button>
 											</div>
 
-											{/* This device's own scans, newest first */}
+											{/* This person's own count: this tab's lines, then the rest of theirs from the round */}
 											<TabsContent value="feed" className="mt-3">
 												<StockCheckTable
-													rows={feed}
+													rows={myScans}
 													rowKey={line => line.key}
 													columns={feedColumns}
 													searchText={line => `${line.scanned} ${line.title ?? ''}`}
 													searchPlaceholder="Search number or title"
 													facet={FEED_FACET}
 													rowTone={line => FEED_TONE[line.state]}
-													empty="Nothing scanned on this device yet"
-													toolbar={feed.length > 0 && (
-														// Only what is done with: a scan still on its way, or
-														// saved offline, stays until it has reached the server
-														<Button
-															variant="outline"
-															size="sm"
-															className="h-9"
-															onClick={() => {
-																setFeed(prev => prev.filter(line => line.state === 'sending' || line.state === 'queued'))
-																setBanner(null)
-															}}
-														>
-															<Eraser className="mr-1.5 h-3.5 w-3.5" />
-															Clear list
-														</Button>
+													loading={mineLoading}
+													empty="You have not counted anything in this round yet"
+													toolbar={(
+														<>
+															<span className="inline-flex h-9 shrink-0 items-center rounded-md bg-brand-green-50 px-3 text-xs font-medium text-brand-green-700 dark:bg-brand-green-900/30 dark:text-brand-green-300">
+																{count(myCount)} counted by you
+															</span>
+															{myScans.length > 0 && (
+																// Clears what is on screen, not what was counted: a scan
+																// still on its way, or saved offline, stays until it has
+																// reached the server, and Refresh brings the round's
+																// record of the rest back.
+																<Button
+																	variant="outline"
+																	size="sm"
+																	className="h-9"
+																	onClick={() => {
+																		setFeed(prev => prev.filter(line => line.state === 'sending' || line.state === 'queued'))
+																		setMine([])
+																		setBanner(null)
+																	}}
+																>
+																	<Eraser className="mr-1.5 h-3.5 w-3.5" />
+																	Clear list
+																</Button>
+															)}
+														</>
 													)}
 													canExport={canExport}
 													exportName="stock-check-my-scans"
